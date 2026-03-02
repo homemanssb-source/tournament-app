@@ -4,12 +4,15 @@ import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 
-const NAV = [
+const NAV_MAIN = [
   { href: '/dashboard', label: '홈', emoji: '🏠' },
   { href: '/dashboard/teams', label: '팀 관리', emoji: '👥' },
   { href: '/dashboard/groups', label: '조편성', emoji: '🔢' },
   { href: '/dashboard/tournament', label: '본선 토너먼트', emoji: '🏆' },
   { href: '/dashboard/courts', label: '코트 배정', emoji: '🏟' },
+]
+
+const NAV_TEAM = [
   { href: '/dashboard/teams/clubs', label: '단체전 클럽', emoji: '🏟️' },
   { href: '/dashboard/teams/groups', label: '단체전 조편성', emoji: '⚔️' },
   { href: '/dashboard/teams/ties', label: '단체전 대전', emoji: '🎾' },
@@ -17,7 +20,6 @@ const NAV = [
   { href: '/dashboard/teams/bracket', label: '단체전 토너먼트', emoji: '🏆' },
   { href: '/dashboard/sync', label: '앱A 연동', emoji: '🔄' },
 ]
-
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -72,8 +74,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <h2 className="font-bold mt-1">⚙️ 운영 대시보드</h2>
           <p className="text-xs text-stone-400 mt-0.5 truncate">{user?.email}</p>
         </div>
-        <nav className="p-2">
-          {NAV.map(n => (
+        {NAV_MAIN.map(n => (
             <Link key={n.href} href={n.href} onClick={() => setMenuOpen(false)}
               className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-all ${
                 pathname === n.href
@@ -83,6 +84,22 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span>{n.emoji}</span> {n.label}
             </Link>
           ))}
+          <hr className="my-2" />
+          <p className="px-3 py-1 text-xs text-stone-400 font-medium">단체전</p>
+          {NAV_TEAM.map(n => {
+            const eventId = typeof window !== 'undefined' ? sessionStorage.getItem('dashboard_event_id') || '' : '';
+            const fullHref = n.href === '/dashboard/sync' ? n.href : `${n.href}?event_id=${eventId}`;
+            return (
+              <Link key={n.href} href={fullHref} onClick={() => setMenuOpen(false)}
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-all ${
+                  pathname.startsWith(n.href)
+                    ? 'bg-tennis-50 text-tennis-700 font-bold'
+                    : 'text-stone-600 hover:bg-stone-50'
+                }`}>
+                <span>{n.emoji}</span> {n.label}
+              </Link>
+            );
+          })}
           <hr className="my-2" />
           <button onClick={handleLogout}
             className="hidden md:flex w-full items-center gap-2 px-3 py-2.5 rounded-lg text-sm text-stone-400 hover:text-red-500 hover:bg-red-50">
