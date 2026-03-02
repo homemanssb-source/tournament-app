@@ -20,7 +20,7 @@ export default function CourtsPage() {
   const [msg, setMsg] = useState('')
 
   // 코트 설정
-  const [courtCount, setCourtCount] = useState(8)
+  const [courtCount, setCourtCount] = useState(20)
   const courtNames = Array.from({ length: courtCount }, (_, i) => `코트 ${i + 1}`)
 
   // 부서별 자동배정 설정
