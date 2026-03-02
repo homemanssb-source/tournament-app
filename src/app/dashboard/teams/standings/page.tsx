@@ -1,16 +1,13 @@
 // ============================================================
 // 순위표 + 수동 순위 지정
-// src/app/dashboard/team/standings/page.tsx
+// src/app/dashboard/teams/standings/page.tsx
 // ============================================================
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import {
-  fetchStandings, fetchEventTeamConfig, calculateStandings, setManualRank,
-} from '@/lib/team-api';
-import { getFormatLabel } from '@/lib/team-utils';
+import { fetchStandings, fetchEventTeamConfig, calculateStandings, setManualRank } from '@/lib/team-api';
 import type { StandingWithClub, EventTeamConfig } from '@/types/team';
 
 export default function StandingsPage() {
@@ -23,7 +20,6 @@ export default function StandingsPage() {
   const [loading, setLoading] = useState(true);
   const [recalculating, setRecalculating] = useState(false);
 
-  // 수동 순위 모달
   const [manualModal, setManualModal] = useState<{ club: StandingWithClub; tiedWith: StandingWithClub[] } | null>(null);
   const [manualRanks, setManualRanks] = useState<Record<string, string>>({});
   const [manualNotes, setManualNotes] = useState('');
@@ -32,20 +28,19 @@ export default function StandingsPage() {
   const loadData = useCallback(async () => {
     if (!eventId) return;
     setLoading(true);
-
     const cfg = await fetchEventTeamConfig(eventId);
     setConfig(cfg);
-
     const map: Record<string, StandingWithClub[]> = {};
 
     if (cfg?.team_format === 'full_league') {
       map['full'] = await fetchStandings(eventId, null);
     } else {
+      // group_num으로 정렬 (group_index 아님)
       const { data: grps } = await supabase
         .from('groups')
         .select('*')
         .eq('event_id', eventId)
-        .order('group_index');
+        .order('group_num');
       setGroups(grps || []);
 
       for (const g of (grps || [])) {
@@ -69,110 +64,67 @@ export default function StandingsPage() {
         }
       }
       await loadData();
-    } catch (err: any) {
-      alert(err.message || '순위 재계산 실패');
-    } finally {
-      setRecalculating(false);
-    }
+    } catch (err: any) { alert(err.message || '순위 재계산 실패'); }
+    finally { setRecalculating(false); }
   }
 
-  // 동률 클럽 찾기
   function findTiedClubs(standing: StandingWithClub, allStandings: StandingWithClub[]): StandingWithClub[] {
-    return allStandings.filter(
-      s => s.id !== standing.id
-        && s.won === standing.won
-        && s.rubber_diff === standing.rubber_diff
-        && !s.rank_locked
-        && s.played > 0
-    );
+    return allStandings.filter(s => s.id !== standing.id && s.won === standing.won && s.rubber_diff === standing.rubber_diff && !s.rank_locked && s.played > 0);
   }
 
   function openManualRank(standing: StandingWithClub, allStandings: StandingWithClub[]) {
     const tied = findTiedClubs(standing, allStandings);
     const all = [standing, ...tied];
     const ranks: Record<string, string> = {};
-    all.forEach((s, i) => { ranks[s.club_id] = ''; });
-    setManualRanks(ranks);
-    setManualNotes('');
+    all.forEach(s => { ranks[s.club_id] = ''; });
+    setManualRanks(ranks); setManualNotes('');
     setManualModal({ club: standing, tiedWith: tied });
   }
 
   async function handleSaveManualRanks() {
     if (!manualModal) return;
     const all = [manualModal.club, ...manualModal.tiedWith];
-
-    // 모든 순위 입력 확인
     for (const s of all) {
-      if (!manualRanks[s.club_id] || isNaN(parseInt(manualRanks[s.club_id]))) {
-        alert('모든 클럽의 순위를 입력해주세요.');
-        return;
-      }
+      if (!manualRanks[s.club_id] || isNaN(parseInt(manualRanks[s.club_id]))) { alert('모든 클럽의 순위를 입력해주세요.'); return; }
     }
-
-    // 중복 순위 확인
-    const rankValues = Object.values(manualRanks).map(Number);
-    if (new Set(rankValues).size !== rankValues.length) {
-      alert('동일한 순위가 있습니다. 각 클럽에 다른 순위를 지정하세요.');
-      return;
-    }
-
+    const rv = Object.values(manualRanks).map(Number);
+    if (new Set(rv).size !== rv.length) { alert('동일한 순위가 있습니다.'); return; }
     setSavingManual(true);
     try {
-      for (const s of all) {
-        await setManualRank(
-          eventId,
-          s.club_id,
-          parseInt(manualRanks[s.club_id]),
-          manualNotes || '본부 판단'
-        );
-      }
-      setManualModal(null);
-      await loadData();
-    } catch (err: any) {
-      alert(err.message || '순위 저장 실패');
-    } finally {
-      setSavingManual(false);
-    }
+      for (const s of all) { await setManualRank(eventId, s.club_id, parseInt(manualRanks[s.club_id]), manualNotes || '본부 판단'); }
+      setManualModal(null); await loadData();
+    } catch (err: any) { alert(err.message || '순위 저장 실패'); }
+    finally { setSavingManual(false); }
   }
 
   if (loading) return <div className="p-8 text-center text-gray-500">로딩중...</div>;
 
-  const allStandingsEntries = Object.entries(standingsMap);
-  const hasTiedRanks = allStandingsEntries.some(([, list]) => list.some(s => s.is_tied));
+  const allEntries = Object.entries(standingsMap);
+  const hasTied = allEntries.some(([, list]) => list.some(s => s.is_tied));
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">📊 순위표</h1>
-        <button
-          onClick={handleRecalculate}
-          disabled={recalculating}
-          className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded text-sm disabled:opacity-50"
-        >
-          {recalculating ? '계산중...' : '🔄 순위 재계산'}
-        </button>
+        <button onClick={handleRecalculate} disabled={recalculating}
+          className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded text-sm disabled:opacity-50">
+          {recalculating ? '계산중...' : '🔄 순위 재계산'}</button>
       </div>
 
-      {/* 동률 경고 */}
-      {hasTiedRanks && (
+      {hasTied && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
           <span className="text-yellow-500 text-xl">⚠️</span>
           <div>
             <p className="font-medium text-yellow-800">동률 클럽이 있습니다</p>
-            <p className="text-sm text-yellow-700 mt-1">
-              승수와 득실차가 동일한 클럽이 있어 순위를 확정할 수 없습니다.
-              해당 클럽을 클릭하여 본부 판단으로 순위를 수동 지정해주세요.
-            </p>
+            <p className="text-sm text-yellow-700 mt-1">해당 클럽을 클릭하여 본부 판단으로 순위를 수동 지정해주세요.</p>
           </div>
         </div>
       )}
 
-      {/* 순위표 */}
-      {allStandingsEntries.map(([key, standings]) => {
-        const groupName = key === 'full'
-          ? '풀리그 순위표'
-          : groups.find(g => g.id === key)?.group_name || key;
-
+      {allEntries.map(([key, standings]) => {
+        // group_label 사용 (group_name 아님)
+        const groupName = key === 'full' ? '풀리그 순위표'
+          : groups.find(g => g.id === key)?.group_label || groups.find(g => g.id === key)?.group_name || key;
         return (
           <div key={key} className="bg-white rounded-lg border overflow-hidden">
             <div className="bg-gray-50 px-4 py-3 font-semibold">{groupName}</div>
@@ -192,30 +144,18 @@ export default function StandingsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
+                  {standings.length === 0 && (
+                    <tr><td colSpan={9} className="px-4 py-6 text-center text-gray-400">데이터 없음</td></tr>
+                  )}
                   {standings.map(s => {
-                    const tiedWith = findTiedClubs(s, standings);
                     const isTied = s.is_tied;
-
                     return (
-                      <tr
-                        key={s.id}
-                        className={`${isTied ? 'bg-yellow-50 cursor-pointer hover:bg-yellow-100' : ''}`}
-                        onClick={isTied ? () => openManualRank(s, standings) : undefined}
-                      >
-                        <td className="px-4 py-3">
-                          {s.rank !== null ? (
-                            <span className="font-bold text-lg">{s.rank}</span>
-                          ) : (
-                            <span className="text-yellow-600 font-medium">—</span>
-                          )}
-                        </td>
+                      <tr key={s.id} className={`${isTied ? 'bg-yellow-50 cursor-pointer hover:bg-yellow-100' : ''}`}
+                        onClick={isTied ? () => openManualRank(s, standings) : undefined}>
+                        <td className="px-4 py-3">{s.rank !== null ? <span className="font-bold text-lg">{s.rank}</span> : <span className="text-yellow-600 font-medium">—</span>}</td>
                         <td className="px-4 py-3">
                           <span className="font-medium">{s.club?.name || '-'}</span>
-                          {s.club?.seed_number && (
-                            <span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">
-                              {s.club.seed_number}시드
-                            </span>
-                          )}
+                          {s.club?.seed_number && <span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">{s.club.seed_number}시드</span>}
                         </td>
                         <td className="px-4 py-3 text-center">{s.played}</td>
                         <td className="px-4 py-3 text-center font-medium">{s.won}</td>
@@ -224,23 +164,13 @@ export default function StandingsPage() {
                         <td className="px-4 py-3 text-center">{s.rubbers_against}</td>
                         <td className="px-4 py-3 text-center font-bold">
                           <span className={s.rubber_diff > 0 ? 'text-green-600' : s.rubber_diff < 0 ? 'text-red-600' : ''}>
-                            {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}
-                          </span>
+                            {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}</span>
                         </td>
                         <td className="px-4 py-3 text-center">
-                          {s.rank_locked ? (
-                            <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">
-                              확정 ✓
-                            </span>
-                          ) : isTied ? (
-                            <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded">
-                              동률 ⚠️
-                            </span>
-                          ) : s.played > 0 ? (
-                            <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">자동</span>
-                          ) : (
-                            <span className="text-xs text-gray-400">대기</span>
-                          )}
+                          {s.rank_locked ? <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">확정 ✓</span>
+                          : isTied ? <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded">동률 ⚠️</span>
+                          : s.played > 0 ? <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">자동</span>
+                          : <span className="text-xs text-gray-400">대기</span>}
                         </td>
                       </tr>
                     );
@@ -252,65 +182,40 @@ export default function StandingsPage() {
         );
       })}
 
-      {allStandingsEntries.length === 0 && (
+      {allEntries.length === 0 && (
         <div className="text-center text-gray-400 py-8">순위 데이터가 없습니다. 조편성을 먼저 진행하세요.</div>
       )}
 
-      {/* ── 수동 순위 지정 모달 ── */}
+      {/* 수동 순위 모달 */}
       {manualModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setManualModal(null)}>
           <div className="bg-white rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-bold">동률 순위 지정</h3>
-
             <div className="bg-yellow-50 rounded p-3 text-sm">
-              <p className="text-yellow-800">
-                승수: {manualModal.club.won}승 · 득실차: {manualModal.club.rubber_diff > 0 ? '+' : ''}{manualModal.club.rubber_diff}
-              </p>
+              <p className="text-yellow-800">승수: {manualModal.club.won}승 · 득실차: {manualModal.club.rubber_diff > 0 ? '+' : ''}{manualModal.club.rubber_diff}</p>
             </div>
-
             <div className="space-y-3">
               {[manualModal.club, ...manualModal.tiedWith].map(s => (
                 <div key={s.club_id} className="flex items-center gap-3">
                   <span className="font-medium flex-1">{s.club?.name}</span>
                   <div className="flex items-center gap-1">
-                    <input
-                      type="number"
-                      min={1}
-                      value={manualRanks[s.club_id] || ''}
+                    <input type="number" min={1} value={manualRanks[s.club_id] || ''}
                       onChange={e => setManualRanks(prev => ({ ...prev, [s.club_id]: e.target.value }))}
-                      placeholder="순위"
-                      className="border rounded px-3 py-2 w-20 text-center"
-                    />
+                      placeholder="순위" className="border rounded px-3 py-2 w-20 text-center" />
                     <span className="text-sm text-gray-400">위</span>
                   </div>
                 </div>
               ))}
             </div>
-
             <div>
               <label className="block text-sm text-gray-600 mb-1">사유 (선택)</label>
-              <input
-                value={manualNotes}
-                onChange={e => setManualNotes(e.target.value)}
-                placeholder="본부 협의 결과"
-                className="w-full border rounded px-3 py-2 text-sm"
-              />
+              <input value={manualNotes} onChange={e => setManualNotes(e.target.value)} placeholder="본부 협의 결과" className="w-full border rounded px-3 py-2 text-sm" />
             </div>
-
             <div className="flex gap-3 pt-2">
-              <button
-                onClick={handleSaveManualRanks}
-                disabled={savingManual}
-                className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50"
-              >
-                {savingManual ? '저장중...' : '순위 확정'}
-              </button>
-              <button
-                onClick={() => setManualModal(null)}
-                className="flex-1 bg-gray-100 py-3 rounded-lg font-medium hover:bg-gray-200"
-              >
-                취소
-              </button>
+              <button onClick={handleSaveManualRanks} disabled={savingManual}
+                className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50">
+                {savingManual ? '저장중...' : '순위 확정'}</button>
+              <button onClick={() => setManualModal(null)} className="flex-1 bg-gray-100 py-3 rounded-lg font-medium hover:bg-gray-200">취소</button>
             </div>
           </div>
         </div>
