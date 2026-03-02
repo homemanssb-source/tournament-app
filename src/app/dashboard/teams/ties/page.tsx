@@ -1,382 +1,433 @@
 // ============================================================
-// 대전 관리/스코어보드
-// src/app/dashboard/team/ties/page.tsx
+// 대전 관리 페이지
+// src/app/dashboard/teams/ties/page.tsx
 // ============================================================
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
-  fetchTies, fetchRubbers, fetchClubMembers,
-  recordRubberScore, advanceTournamentWinner, fetchEventTeamConfig,
+  fetchTies, fetchRubbers, fetchEventTeamConfig,
+  recordRubberScore, calculateStandings,
 } from '@/lib/team-api';
-import { getTieStatusLabel, getTieStatusColor, getRoundLabel, formatSetScore, getMajority } from '@/lib/team-utils';
-import type { TieWithClubs, TieRubber, ClubMember, EventTeamConfig } from '@/types/team';
+import { supabase } from '@/lib/supabase';
+import {
+  getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority,
+} from '@/lib/team-utils';
+import type { TieWithClubs, TieRubber, EventTeamConfig } from '@/types/team';
 
 export default function TiesPage() {
   const searchParams = useSearchParams();
   const eventId = searchParams.get('event_id') || '';
 
-  const [ties, setTies] = useState<TieWithClubs[]>([]);
   const [config, setConfig] = useState<EventTeamConfig | null>(null);
+  const [ties, setTies] = useState<TieWithClubs[]>([]);
+  const [groups, setGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // 선택된 대전
   const [selectedTie, setSelectedTie] = useState<TieWithClubs | null>(null);
   const [rubbers, setRubbers] = useState<TieRubber[]>([]);
-  const [membersA, setMembersA] = useState<ClubMember[]>([]);
-  const [membersB, setMembersB] = useState<ClubMember[]>([]);
+  const [rubbersLoading, setRubbersLoading] = useState(false);
 
-  // 점수입력 모달
-  const [scoringRubber, setScoringRubber] = useState<TieRubber | null>(null);
-  const [scoreForm, setScoreForm] = useState({ set1_a: '', set1_b: '', set2_a: '', set2_b: '', set3_a: '', set3_b: '' });
-  const [submitting, setSubmitting] = useState(false);
+  // 점수 입력
+  const [editingRubber, setEditingRubber] = useState<string | null>(null);
+  const [scoreInput, setScoreInput] = useState({
+    set1a: '', set1b: '', set2a: '', set2b: '', set3a: '', set3b: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
-  // 필터
-  const [roundFilter, setRoundFilter] = useState<string>('all');
+  // 복사 피드백
+  const [copiedTieId, setCopiedTieId] = useState<string | null>(null);
 
-  const loadTies = useCallback(async () => {
+  const loadData = useCallback(async () => {
     if (!eventId) return;
     setLoading(true);
-    const [tieList, cfg] = await Promise.all([
-      fetchTies(eventId),
+
+    const [cfg, tieList] = await Promise.all([
       fetchEventTeamConfig(eventId),
+      fetchTies(eventId),
     ]);
-    setTies(tieList);
     setConfig(cfg);
+    setTies(tieList);
+
+    const { data: grps } = await supabase
+      .from('groups')
+      .select('*')
+      .eq('event_id', eventId)
+      .order('group_num');
+    setGroups(grps || []);
+
     setLoading(false);
   }, [eventId]);
 
-  useEffect(() => { loadTies(); }, [loadTies]);
+  useEffect(() => { loadData(); }, [loadData]);
 
-  async function openTie(tie: TieWithClubs) {
+  // 대전 선택 → 러버 로드
+  async function handleSelectTie(tie: TieWithClubs) {
+    if (selectedTie?.id === tie.id) {
+      setSelectedTie(null);
+      setRubbers([]);
+      return;
+    }
     setSelectedTie(tie);
-    const r = await fetchRubbers(tie.id);
-    setRubbers(r);
-    if (tie.club_a_id) {
-      const ma = await fetchClubMembers(tie.club_a_id);
-      setMembersA(ma);
-    }
-    if (tie.club_b_id) {
-      const mb = await fetchClubMembers(tie.club_b_id);
-      setMembersB(mb);
-    }
+    setRubbersLoading(true);
+    setEditingRubber(null);
+    const data = await fetchRubbers(tie.id);
+    setRubbers(data);
+    setRubbersLoading(false);
   }
 
-  function openScoring(rubber: TieRubber) {
-    setScoringRubber(rubber);
-    setScoreForm({
-      set1_a: rubber.set1_a?.toString() || '',
-      set1_b: rubber.set1_b?.toString() || '',
-      set2_a: rubber.set2_a?.toString() || '',
-      set2_b: rubber.set2_b?.toString() || '',
-      set3_a: rubber.set3_a?.toString() || '',
-      set3_b: rubber.set3_b?.toString() || '',
+  // 점수 입력 시작
+  function startScoreEdit(rubber: TieRubber) {
+    setEditingRubber(rubber.id);
+    setSaveError('');
+    setScoreInput({
+      set1a: rubber.set1_a?.toString() || '',
+      set1b: rubber.set1_b?.toString() || '',
+      set2a: rubber.set2_a?.toString() || '',
+      set2b: rubber.set2_b?.toString() || '',
+      set3a: rubber.set3_a?.toString() || '',
+      set3b: rubber.set3_b?.toString() || '',
     });
   }
 
-  async function handleScoreSubmit() {
-    if (!scoringRubber) return;
-    const s1a = parseInt(scoreForm.set1_a);
-    const s1b = parseInt(scoreForm.set1_b);
-    if (isNaN(s1a) || isNaN(s1b)) return alert('1세트 점수를 입력하세요.');
+  // 점수 저장
+  async function handleSaveScore(rubberId: string) {
+    const { set1a, set1b, set2a, set2b, set3a, set3b } = scoreInput;
+    if (!set1a || !set1b) { setSaveError('1세트 점수를 입력하세요.'); return; }
 
-    setSubmitting(true);
+    setSaving(true);
+    setSaveError('');
+
     try {
       const result = await recordRubberScore(
-        scoringRubber.id,
-        s1a, s1b,
-        scoreForm.set2_a ? parseInt(scoreForm.set2_a) : null,
-        scoreForm.set2_b ? parseInt(scoreForm.set2_b) : null,
-        scoreForm.set3_a ? parseInt(scoreForm.set3_a) : null,
-        scoreForm.set3_b ? parseInt(scoreForm.set3_b) : null,
+        rubberId,
+        parseInt(set1a), parseInt(set1b),
+        set2a ? parseInt(set2a) : null,
+        set2b ? parseInt(set2b) : null,
+        set3a ? parseInt(set3a) : null,
+        set3b ? parseInt(set3b) : null,
       );
-      if (!result.success) { alert(result.error); return; }
+      if (!result.success) { setSaveError(result.error || '저장 실패'); return; }
 
-      // 토너먼트 대전이면 승자 진출 처리
-      if (selectedTie && ['quarter', 'semi', 'final', 'round_of_16'].includes(selectedTie.round || '')) {
-        // 대전 결과 확인 후 진출
-        const updatedRubbers = await fetchRubbers(selectedTie.id);
-        const completedCount = updatedRubbers.filter(r => r.status === 'completed').length;
-        const aWins = updatedRubbers.filter(r => r.winning_club_id === selectedTie.club_a_id).length;
-        const bWins = updatedRubbers.filter(r => r.winning_club_id === selectedTie.club_b_id).length;
-        const majority = getMajority(selectedTie.rubber_count);
+      // 러버 & 대전 목록 갱신
+      const updated = await fetchRubbers(selectedTie!.id);
+      setRubbers(updated);
+      setEditingRubber(null);
+      await loadData();
 
-        if (aWins >= majority || bWins >= majority) {
-          await advanceTournamentWinner(selectedTie.id);
-        }
-      }
-
-      setScoringRubber(null);
-      if (selectedTie) await openTie(selectedTie);
-      await loadTies();
+      // 순위 재계산
+      try { await calculateStandings(eventId, selectedTie?.group_id || null); } catch {}
     } catch (err: any) {
-      alert(err.message || '점수 입력 실패');
+      setSaveError(err.message || '저장 실패');
     } finally {
-      setSubmitting(false);
+      setSaving(false);
     }
   }
 
-  // 라운드 목록 추출
-  const rounds = [...new Set(ties.map(t => t.round).filter(Boolean))] as string[];
-  const filteredTies = roundFilter === 'all' ? ties : ties.filter(t => t.round === roundFilter);
+  // 라인업 URL 복사
+  function copyLineupUrl(tieId: string) {
+    const url = `${window.location.origin}/lineup/${tieId}`;
+    navigator.clipboard.writeText(url);
+    setCopiedTieId(tieId);
+    setTimeout(() => setCopiedTieId(null), 2000);
+  }
 
-  // 선수 이름 찾기
-  function getPlayerName(id: string | null, side: 'a' | 'b'): string {
-    if (!id) return '-';
-    const list = side === 'a' ? membersA : membersB;
-    return list.find(m => m.id === id)?.name || '-';
+  // 조별로 대전 그룹핑
+  function getTiesByGroup() {
+    if (groups.length === 0) {
+      const roundGroups: Record<string, TieWithClubs[]> = {};
+      ties.forEach(t => {
+        const key = t.round || 'etc';
+        if (!roundGroups[key]) roundGroups[key] = [];
+        roundGroups[key].push(t);
+      });
+      return Object.entries(roundGroups).map(([round, tList]) => ({
+        groupName: getRoundName(round),
+        groupId: null,
+        ties: tList,
+      }));
+    }
+
+    const result: { groupName: string; groupId: string | null; ties: TieWithClubs[] }[] = [];
+    for (const g of groups) {
+      const groupTies = ties.filter(t => t.group_id === g.id);
+      if (groupTies.length > 0) {
+        result.push({
+          groupName: g.group_label || `${g.group_num}조`,
+          groupId: g.id,
+          ties: groupTies,
+        });
+      }
+    }
+    const ungrouped = ties.filter(t => !t.group_id);
+    if (ungrouped.length > 0) {
+      result.push({ groupName: '토너먼트', groupId: null, ties: ungrouped });
+    }
+    return result;
+  }
+
+  function getRoundName(round: string): string {
+    const names: Record<string, string> = {
+      full_league: '풀리그', group: '조별리그',
+      round_of_16: '16강', quarter: '8강', semi: '4강', final: '결승', etc: '기타',
+    };
+    return names[round] || round;
   }
 
   if (loading) return <div className="p-8 text-center text-gray-500">로딩중...</div>;
 
+  if (ties.length === 0) {
+    return (
+      <div className="max-w-5xl mx-auto p-6">
+        <h1 className="text-2xl font-bold mb-4">🎾 대전 관리</h1>
+        <div className="bg-gray-50 rounded-lg border border-dashed p-8 text-center text-gray-400">
+          대전이 없습니다. 먼저 조편성에서 대전을 생성해주세요.
+        </div>
+      </div>
+    );
+  }
+
+  const tieGroups = getTiesByGroup();
+  const setsPerRubber = config?.team_sets_per_rubber || 1;
+
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
-      <h1 className="text-2xl font-bold">⚔️ 대전 관리</h1>
+    <div className="max-w-5xl mx-auto p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">🎾 대전 관리</h1>
+        <span className="text-sm text-gray-500">
+          총 {ties.length}대전 · 완료 {ties.filter(t => t.status === 'completed').length}
+        </span>
+      </div>
 
-      {/* 라운드 필터 */}
-      {rounds.length > 1 && (
-        <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={() => setRoundFilter('all')}
-            className={`px-3 py-1.5 rounded text-sm ${roundFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}
-          >
-            전체 ({ties.length})
-          </button>
-          {rounds.map(r => (
-            <button
-              key={r}
-              onClick={() => setRoundFilter(r)}
-              className={`px-3 py-1.5 rounded text-sm ${roundFilter === r ? 'bg-blue-600 text-white' : 'bg-gray-100'}`}
-            >
-              {getRoundLabel(r)} ({ties.filter(t => t.round === r).length})
-            </button>
-          ))}
-        </div>
-      )}
+      {/* 대전 목록 */}
+      {tieGroups.map((group) => (
+        <div key={group.groupName} className="space-y-3">
+          <h2 className="font-semibold text-lg">{group.groupName}</h2>
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* ── 왼쪽: 대전 목록 ── */}
-        <div className="lg:col-span-2 space-y-2">
-          {filteredTies.length === 0 ? (
-            <div className="text-center text-gray-400 py-8">대전이 없습니다.</div>
-          ) : (
-            filteredTies.map(tie => (
-              <div
-                key={tie.id}
-                onClick={() => !tie.is_bye && openTie(tie)}
-                className={`bg-white rounded-lg border p-4 transition ${
-                  tie.is_bye ? 'opacity-50' : 'cursor-pointer hover:border-blue-300'
-                } ${selectedTie?.id === tie.id ? 'border-blue-500 ring-2 ring-blue-100' : ''}`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-gray-400">
-                    {getRoundLabel(tie.round || '')} #{tie.tie_order}
-                  </span>
-                  <span className={`text-xs px-2 py-0.5 rounded ${getTieStatusColor(tie.status)}`}>
-                    {getTieStatusLabel(tie.status)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div className="font-medium">
-                    {tie.club_a?.name || 'TBD'}
-                    <span className="text-gray-400 mx-2 text-sm">vs</span>
-                    {tie.club_b?.name || 'TBD'}
-                  </div>
-                  {tie.status === 'completed' && (
-                    <span className="font-bold text-lg">
-                      {tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}
-                    </span>
-                  )}
-                  {tie.status === 'in_progress' && (
-                    <span className="text-sm text-green-600">
-                      {tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}
-                    </span>
-                  )}
-                </div>
-                {/* 라인업 상태 */}
-                {tie.status === 'lineup_phase' && (
-                  <div className="text-xs text-yellow-600 mt-1">
-                    {tie.club_a_lineup_submitted ? '✅' : '⏳'} {tie.club_a?.name}
-                    {' / '}
-                    {tie.club_b_lineup_submitted ? '✅' : '⏳'} {tie.club_b?.name}
-                  </div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
+          {group.ties.map((tie) => {
+            const isSelected = selectedTie?.id === tie.id;
+            const majority = getMajority(tie.rubber_count);
+            const aWin = tie.club_a_rubbers_won >= majority;
+            const bWin = tie.club_b_rubbers_won >= majority;
 
-        {/* ── 오른쪽: 대전 상세 ── */}
-        <div className="lg:col-span-3">
-          {selectedTie ? (
-            <div className="bg-white rounded-lg border p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-bold">
-                  {selectedTie.club_a?.name} vs {selectedTie.club_b?.name}
-                </h2>
-                <span className={`text-sm px-3 py-1 rounded ${getTieStatusColor(selectedTie.status)}`}>
-                  {getTieStatusLabel(selectedTie.status)}
-                </span>
-              </div>
-
-              {selectedTie.status === 'completed' && (
-                <div className="text-center py-2">
-                  <span className="text-3xl font-bold">
-                    {selectedTie.club_a_rubbers_won} - {selectedTie.club_b_rubbers_won}
-                  </span>
-                  <p className="text-sm text-gray-500 mt-1">
-                    과반수 {getMajority(selectedTie.rubber_count)}승
-                  </p>
-                </div>
-              )}
-
-              {/* 러버 목록 */}
-              <div className="space-y-3">
-                {rubbers.map(rubber => (
-                  <div
-                    key={rubber.id}
-                    className={`border rounded-lg p-3 ${rubber.status === 'completed' ? 'bg-gray-50' : ''}`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-sm">복식 {rubber.rubber_number}</span>
-                      <div className="flex items-center gap-2">
-                        {rubber.status === 'completed' ? (
-                          <span className="text-green-600 text-sm font-bold">
-                            {formatSetScore(rubber.set1_a, rubber.set1_b)}
-                            {rubber.set2_a !== null && ` / ${formatSetScore(rubber.set2_a, rubber.set2_b)}`}
-                            {rubber.set3_a !== null && ` / ${formatSetScore(rubber.set3_a, rubber.set3_b)}`}
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => openScoring(rubber)}
-                            className="bg-blue-600 text-white text-xs px-3 py-1.5 rounded hover:bg-blue-700"
-                          >
-                            점수입력
-                          </button>
-                        )}
-                        {rubber.pin_code && (
-                          <span className="text-xs text-gray-400" title="PIN">
-                            PIN: {rubber.pin_code}
-                          </span>
-                        )}
-                      </div>
+            return (
+              <div key={tie.id} className="bg-white rounded-lg border overflow-hidden">
+                {/* 대전 헤더 */}
+                <div
+                  onClick={() => handleSelectTie(tie)}
+                  className="p-4 cursor-pointer hover:bg-gray-50 transition"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className="text-xs text-gray-400 w-6">#{tie.tie_order}</span>
+                      <span className={`font-semibold ${aWin ? 'text-blue-600' : ''}`}>
+                        {tie.club_a?.name || 'TBD'}
+                      </span>
+                      <span className="text-gray-400 text-sm">vs</span>
+                      <span className={`font-semibold ${bWin ? 'text-blue-600' : ''}`}>
+                        {tie.club_b?.name || 'TBD'}
+                      </span>
                     </div>
-                    {/* 선수 표시 (라인업 공개 후) */}
-                    {(rubber.club_a_player1_id || rubber.club_b_player1_id) && (
-                      <div className="text-xs text-gray-600 grid grid-cols-2 gap-2">
-                        <div>
-                          {getPlayerName(rubber.club_a_player1_id, 'a')} / {getPlayerName(rubber.club_a_player2_id, 'a')}
-                        </div>
-                        <div className="text-right">
-                          {getPlayerName(rubber.club_b_player1_id, 'b')} / {getPlayerName(rubber.club_b_player2_id, 'b')}
-                        </div>
+                    <div className="flex items-center gap-2">
+                      {(tie.status === 'completed' || tie.status === 'in_progress') && (
+                        <span className="text-lg font-bold">{tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}</span>
+                      )}
+                      <span className={`text-xs px-2 py-1 rounded-full ${getTieStatusColor(tie.status)}`}>
+                        {getTieStatusLabel(tie.status)}
+                      </span>
+                      <span className="text-gray-400 text-sm">{isSelected ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {/* 라인업 상태 */}
+                  <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
+                    <span>
+                      {tie.club_a?.name?.slice(0, 6)}:
+                      {tie.club_a_lineup_submitted
+                        ? <span className="text-green-600 ml-1">✅제출</span>
+                        : <span className="text-orange-500 ml-1">⏳대기</span>}
+                    </span>
+                    <span>
+                      {tie.club_b?.name?.slice(0, 6)}:
+                      {tie.club_b_lineup_submitted
+                        ? <span className="text-green-600 ml-1">✅제출</span>
+                        : <span className="text-orange-500 ml-1">⏳대기</span>}
+                    </span>
+                    {tie.lineup_revealed && <span className="text-blue-600">🔓공개됨</span>}
+                  </div>
+                </div>
+
+                {/* 펼침: 러버 + 점수 + 액션 */}
+                {isSelected && (
+                  <div className="border-t bg-gray-50 p-4 space-y-4">
+                    {/* 액션 버튼 */}
+                    <div className="flex gap-2 flex-wrap">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); copyLineupUrl(tie.id); }}
+                        className="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-200"
+                      >
+                        {copiedTieId === tie.id ? '✅ 복사됨!' : '📋 라인업 URL 복사'}
+                      </button>
+                    </div>
+
+                    {/* 러버 목록 */}
+                    {rubbersLoading ? (
+                      <div className="text-center text-gray-400 py-4">로딩중...</div>
+                    ) : rubbers.length === 0 ? (
+                      <div className="text-center text-gray-400 py-4">러버가 없습니다.</div>
+                    ) : (
+                      <div className="space-y-3">
+                        {rubbers.map((r) => {
+                          const isEditing = editingRubber === r.id;
+                          const hasScore = r.set1_a !== null;
+
+                          return (
+                            <div key={r.id} className="bg-white rounded-lg border p-4">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="font-medium text-sm">복식 {r.rubber_number}</span>
+                                <div className="flex items-center gap-2">
+                                  {r.status === 'completed' && (
+                                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">완료</span>
+                                  )}
+                                  {r.pin_code && (
+                                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono">
+                                      PIN: {r.pin_code}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* 기존 스코어 표시 */}
+                              {hasScore && !isEditing && (
+                                <div className="flex items-center justify-between">
+                                  <div className="text-center flex-1">
+                                    <div className="text-lg font-bold">
+                                      {formatSetScore(r.set1_a, r.set1_b)}
+                                      {r.set2_a !== null && ` / ${formatSetScore(r.set2_a, r.set2_b)}`}
+                                      {r.set3_a !== null && ` / ${formatSetScore(r.set3_a, r.set3_b)}`}
+                                    </div>
+                                    {r.winning_club_id && (
+                                      <div className="text-xs text-blue-600 mt-1">
+                                        승: {r.winning_club_id === tie.club_a_id ? tie.club_a?.name : tie.club_b?.name}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <button
+                                    onClick={() => startScoreEdit(r)}
+                                    className="text-xs text-gray-400 hover:text-blue-600 px-2"
+                                  >
+                                    수정
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* 점수 미입력 + 편집 아닐 때 */}
+                              {!hasScore && !isEditing && (
+                                <button
+                                  onClick={() => startScoreEdit(r)}
+                                  className="w-full bg-blue-50 text-blue-700 py-2 rounded-lg text-sm hover:bg-blue-100"
+                                >
+                                  점수 입력
+                                </button>
+                              )}
+
+                              {/* 점수 편집 모드 */}
+                              {isEditing && (
+                                <div className="space-y-3 mt-2">
+                                  <SetScoreRow
+                                    label="1세트"
+                                    aVal={scoreInput.set1a} bVal={scoreInput.set1b}
+                                    setA={(v) => setScoreInput(p => ({ ...p, set1a: v }))}
+                                    setB={(v) => setScoreInput(p => ({ ...p, set1b: v }))}
+                                    clubA={tie.club_a?.name} clubB={tie.club_b?.name}
+                                  />
+                                  {setsPerRubber === 3 && (
+                                    <>
+                                      <SetScoreRow
+                                        label="2세트"
+                                        aVal={scoreInput.set2a} bVal={scoreInput.set2b}
+                                        setA={(v) => setScoreInput(p => ({ ...p, set2a: v }))}
+                                        setB={(v) => setScoreInput(p => ({ ...p, set2b: v }))}
+                                        clubA={tie.club_a?.name} clubB={tie.club_b?.name}
+                                      />
+                                      <SetScoreRow
+                                        label="3세트"
+                                        aVal={scoreInput.set3a} bVal={scoreInput.set3b}
+                                        setA={(v) => setScoreInput(p => ({ ...p, set3a: v }))}
+                                        setB={(v) => setScoreInput(p => ({ ...p, set3b: v }))}
+                                        clubA={tie.club_a?.name} clubB={tie.club_b?.name}
+                                      />
+                                    </>
+                                  )}
+
+                                  {saveError && <p className="text-red-500 text-xs">{saveError}</p>}
+
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => { setEditingRubber(null); setSaveError(''); }}
+                                      className="flex-1 bg-gray-100 py-2 rounded-lg text-sm"
+                                    >
+                                      취소
+                                    </button>
+                                    <button
+                                      onClick={() => handleSaveScore(r.id)}
+                                      disabled={saving}
+                                      className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50"
+                                    >
+                                      {saving ? '저장중...' : '점수 저장'}
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
-                ))}
+                )}
               </div>
-            </div>
-          ) : (
-            <div className="bg-gray-50 rounded-lg border border-dashed p-8 text-center text-gray-400">
-              왼쪽에서 대전을 선택하세요.
-            </div>
-          )}
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── 세트 스코어 입력 행 ──
+function SetScoreRow({
+  label, aVal, bVal, setA, setB, clubA, clubB,
+}: {
+  label: string; aVal: string; bVal: string;
+  setA: (v: string) => void; setB: (v: string) => void;
+  clubA?: string; clubB?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-gray-500 w-12">{label}</span>
+      <div className="flex items-center gap-1 flex-1">
+        <div className="flex-1">
+          <input
+            type="number" min="0" max="7" value={aVal}
+            onChange={e => setA(e.target.value)}
+            placeholder={clubA?.slice(0, 4)}
+            className="w-full border rounded px-2 py-1.5 text-center text-sm"
+          />
+        </div>
+        <span className="text-gray-400 text-xs">:</span>
+        <div className="flex-1">
+          <input
+            type="number" min="0" max="7" value={bVal}
+            onChange={e => setB(e.target.value)}
+            placeholder={clubB?.slice(0, 4)}
+            className="w-full border rounded px-2 py-1.5 text-center text-sm"
+          />
         </div>
       </div>
-
-      {/* ── 점수입력 모달 ── */}
-      {scoringRubber && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setScoringRubber(null)}>
-          <div className="bg-white rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-bold">
-              복식 {scoringRubber.rubber_number} 점수입력
-            </h3>
-
-            <div className="space-y-3">
-              {/* 1세트 (필수) */}
-              <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">1세트 *</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number" min="0" max="7"
-                    value={scoreForm.set1_a}
-                    onChange={e => setScoreForm(p => ({ ...p, set1_a: e.target.value }))}
-                    className="border rounded px-3 py-2 w-20 text-center text-lg"
-                    placeholder={selectedTie?.club_a?.name?.slice(0, 4)}
-                  />
-                  <span className="text-gray-400">:</span>
-                  <input
-                    type="number" min="0" max="7"
-                    value={scoreForm.set1_b}
-                    onChange={e => setScoreForm(p => ({ ...p, set1_b: e.target.value }))}
-                    className="border rounded px-3 py-2 w-20 text-center text-lg"
-                    placeholder={selectedTie?.club_b?.name?.slice(0, 4)}
-                  />
-                </div>
-              </div>
-
-              {/* 2세트 (3세트 매치일 때) */}
-              {config?.team_sets_per_rubber === 3 && (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">2세트</label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number" min="0" max="7"
-                        value={scoreForm.set2_a}
-                        onChange={e => setScoreForm(p => ({ ...p, set2_a: e.target.value }))}
-                        className="border rounded px-3 py-2 w-20 text-center text-lg"
-                      />
-                      <span className="text-gray-400">:</span>
-                      <input
-                        type="number" min="0" max="7"
-                        value={scoreForm.set2_b}
-                        onChange={e => setScoreForm(p => ({ ...p, set2_b: e.target.value }))}
-                        className="border rounded px-3 py-2 w-20 text-center text-lg"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">3세트 (동률 시)</label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="number" min="0" max="7"
-                        value={scoreForm.set3_a}
-                        onChange={e => setScoreForm(p => ({ ...p, set3_a: e.target.value }))}
-                        className="border rounded px-3 py-2 w-20 text-center text-lg"
-                      />
-                      <span className="text-gray-400">:</span>
-                      <input
-                        type="number" min="0" max="7"
-                        value={scoreForm.set3_b}
-                        onChange={e => setScoreForm(p => ({ ...p, set3_b: e.target.value }))}
-                        className="border rounded px-3 py-2 w-20 text-center text-lg"
-                      />
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="flex gap-3 pt-2">
-              <button
-                onClick={handleScoreSubmit}
-                disabled={submitting}
-                className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50"
-              >
-                {submitting ? '저장중...' : '점수 저장'}
-              </button>
-              <button
-                onClick={() => setScoringRubber(null)}
-                className="flex-1 bg-gray-100 py-3 rounded-lg font-medium hover:bg-gray-200"
-              >
-                취소
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
