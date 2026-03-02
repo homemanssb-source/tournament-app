@@ -1,18 +1,43 @@
 // ============================================================
 // 조편성 페이지
-// src/app/dashboard/team/groups/page.tsx
+// src/app/dashboard/teams/groups/page.tsx
 // ============================================================
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   fetchClubs, fetchEventTeamConfig, fetchStandings, fetchTies,
   generateFullLeague, createTeamGroups,
 } from '@/lib/team-api';
 import { supabase } from '@/lib/supabase';
-import { getFormatLabel, getFullLeagueTieCount, getSeedBadge } from '@/lib/team-utils';
+import { getFormatLabel, getFullLeagueTieCount } from '@/lib/team-utils';
 import type { Club, EventTeamConfig, StandingWithClub, TieWithClubs } from '@/types/team';
+
+// ── 조편성 자동 계산 함수 ──
+// 조당 팀 수를 기준으로, 마지막 조가 1팀이 되지 않도록 자동 배분
+function calcGroupDistribution(totalTeams: number, groupSize: number): number[] {
+  if (totalTeams < 2) return [];
+  if (groupSize < 2) groupSize = 2;
+
+  const groupCount = Math.ceil(totalTeams / groupSize);
+  const distribution: number[] = [];
+
+  let remaining = totalTeams;
+  for (let i = 0; i < groupCount; i++) {
+    const teamsInThisGroup = Math.min(groupSize, remaining);
+    distribution.push(teamsInThisGroup);
+    remaining -= teamsInThisGroup;
+  }
+
+  // 마지막 조가 1팀이면 → 이전 조에서 1팀 빼서 마지막 조로 이동
+  if (distribution.length >= 2 && distribution[distribution.length - 1] === 1) {
+    distribution[distribution.length - 2] -= 1;
+    distribution[distribution.length - 1] += 1;
+  }
+
+  return distribution;
+}
 
 export default function GroupsPage() {
   const searchParams = useSearchParams();
@@ -26,9 +51,15 @@ export default function GroupsPage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
 
-  // 조편성 설정
-  const [groupCount, setGroupCount] = useState(2);
+  // 조편성 설정: 조당 팀 수만 입력
   const [groupSize, setGroupSize] = useState(3);
+
+  // 자동 계산된 배분
+  const distribution = useMemo(
+    () => calcGroupDistribution(clubs.length, groupSize),
+    [clubs.length, groupSize]
+  );
+  const groupCount = distribution.length;
 
   const loadData = useCallback(async () => {
     if (!eventId) return;
@@ -90,12 +121,13 @@ export default function GroupsPage() {
 
   // ── 조별리그 / 예선 조편성 ──
   async function handleCreateGroups() {
-    const total = groupCount * groupSize;
-    if (total < clubs.length) {
-      alert(`${groupCount}개 조 × ${groupSize}팀 = ${total}팀. 현재 ${clubs.length}팀이 등록되어 있습니다. 조 수 또는 조 크기를 늘려주세요.`);
+    if (distribution.length === 0) {
+      alert('조편성할 수 없습니다.');
       return;
     }
-    if (!confirm(`${groupCount}개 조 × ${groupSize}팀으로 조편성합니다.`)) return;
+
+    const desc = distribution.map((size, i) => `${String.fromCharCode(65 + i)}조: ${size}팀`).join(', ');
+    if (!confirm(`${groupCount}개 조로 편성합니다.\n${desc}`)) return;
 
     setGenerating(true);
     try {
@@ -131,7 +163,7 @@ export default function GroupsPage() {
 
       {clubs.length >= 2 && (
         <>
-          {/* ── 포맷별 생성 버튼 ── */}
+          {/* ── 풀리그 ── */}
           {config?.team_format === 'full_league' && (
             <div className="bg-white rounded-lg border p-6 space-y-4">
               <h2 className="font-semibold">풀리그 생성</h2>
@@ -151,6 +183,7 @@ export default function GroupsPage() {
             </div>
           )}
 
+          {/* ── 조별리그 / 예선 ── */}
           {(config?.team_format === 'group_tournament' || config?.team_format === 'prelim_tournament') && (
             <div className="bg-white rounded-lg border p-6 space-y-4">
               <h2 className="font-semibold">
@@ -159,38 +192,47 @@ export default function GroupsPage() {
 
               <div className="flex gap-4 items-end">
                 <div>
-                  <label className="block text-sm text-gray-600 mb-1">조 수</label>
-                  <select
-                    value={groupCount}
-                    onChange={(e) => setGroupCount(Number(e.target.value))}
-                    className="border rounded px-3 py-2"
-                  >
-                    {[2, 3, 4, 5, 6, 7, 8].map((n) => (
-                      <option key={n} value={n}>{n}개 조</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
                   <label className="block text-sm text-gray-600 mb-1">조당 팀 수</label>
                   <select
                     value={groupSize}
                     onChange={(e) => setGroupSize(Number(e.target.value))}
                     className="border rounded px-3 py-2"
                   >
-                    {config.team_format === 'prelim_tournament'
-                      ? [2, 3].map((n) => <option key={n} value={n}>{n}팀</option>)
-                      : [3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}팀</option>)
-                    }
+                    {[2, 3, 4, 5, 6].map((n) => (
+                      <option key={n} value={n}>{n}팀</option>
+                    ))}
                   </select>
-                </div>
-                <div className="text-sm text-gray-500">
-                  = {groupCount * groupSize}팀 수용 (현재 {clubs.length}팀)
                 </div>
               </div>
 
+              {/* 자동 계산 결과 미리보기 */}
+              {distribution.length > 0 && (
+                <div className="bg-blue-50 rounded-lg p-4 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-blue-800">
+                      자동 편성 결과: {groupCount}개 조
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {distribution.map((size, i) => (
+                      <span key={i} className={`px-3 py-1 rounded text-sm ${
+                        size < groupSize
+                          ? 'bg-yellow-100 text-yellow-800'
+                          : 'bg-blue-100 text-blue-800'
+                      }`}>
+                        {String.fromCharCode(65 + i)}조: {size}팀
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-xs text-blue-600">
+                    총 {distribution.reduce((a, b) => a + b, 0)}팀 배정 (등록: {clubs.length}팀)
+                  </p>
+                </div>
+              )}
+
               <button
                 onClick={handleCreateGroups}
-                disabled={generating}
+                disabled={generating || distribution.length === 0}
                 className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50"
               >
                 {generating ? '생성중...' : hasGroups ? '조편성 재생성' : '조편성 생성'}
