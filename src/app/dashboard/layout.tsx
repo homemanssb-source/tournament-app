@@ -4,23 +4,6 @@ import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 
-const NAV_MAIN = [
-  { href: '/dashboard', label: '홈', emoji: '🏠' },
-  { href: '/dashboard/teams', label: '팀 관리', emoji: '👥' },
-  { href: '/dashboard/groups', label: '조편성', emoji: '🔢' },
-  { href: '/dashboard/tournament', label: '본선 토너먼트', emoji: '🏆' },
-  { href: '/dashboard/courts', label: '코트 배정', emoji: '🏟' },
-]
-
-const NAV_TEAM = [
-  { href: '/dashboard/teams/clubs', label: '단체전 클럽', emoji: '🏟️' },
-  { href: '/dashboard/teams/groups', label: '단체전 조편성', emoji: '⚔️' },
-  { href: '/dashboard/teams/ties', label: '단체전 대전', emoji: '🎾' },
-  { href: '/dashboard/teams/standings', label: '단체전 순위', emoji: '📊' },
-  { href: '/dashboard/teams/bracket', label: '단체전 토너먼트', emoji: '🏆' },
-  { href: '/dashboard/sync', label: '앱A 연동', emoji: '🔄' },
-]
-
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -28,19 +11,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [checking, setChecking] = useState(true)
   const [menuOpen, setMenuOpen] = useState(false)
   const [eventId, setEventId] = useState('')
+  const [openIndiv, setOpenIndiv] = useState(false)
+  const [openTeam, setOpenTeam] = useState(false)
 
   const isLoginPage = pathname === '/dashboard/login'
 
+  // 개인전 하위 경로면 자동 펼침
   useEffect(() => {
-    if (isLoginPage) {
-      setChecking(false)
-      return
-    }
+    const indivPaths = ['/dashboard/teams', '/dashboard/groups', '/dashboard/tournament']
+    const teamPaths = ['/dashboard/teams/clubs', '/dashboard/teams/groups', '/dashboard/teams/ties', '/dashboard/teams/standings', '/dashboard/teams/bracket']
+    if (teamPaths.some(p => pathname.startsWith(p))) { setOpenTeam(true); setOpenIndiv(false) }
+    else if (indivPaths.some(p => pathname === p || pathname.startsWith(p + '/'))) { setOpenIndiv(true); setOpenTeam(false) }
+  }, [pathname])
 
+  useEffect(() => {
+    if (isLoginPage) { setChecking(false); return }
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) { router.push('/dashboard/login'); return }
-      setUser(session.user)
-      setChecking(false)
+      setUser(session.user); setChecking(false)
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session && !isLoginPage) router.push('/dashboard/login')
@@ -49,30 +37,34 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => subscription.unsubscribe()
   }, [router, isLoginPage])
 
-  // event_id 가져오기: sessionStorage 우선, 없으면 DB에서 조회
   useEffect(() => {
     const stored = sessionStorage.getItem('dashboard_event_id')
-    if (stored) {
-      setEventId(stored)
-    } else {
+    if (stored) { setEventId(stored) }
+    else {
       supabase.from('events').select('id').order('date', { ascending: false }).limit(1)
         .then(({ data }) => {
-          if (data && data.length > 0) {
-            setEventId(data[0].id)
-            sessionStorage.setItem('dashboard_event_id', data[0].id)
-          }
+          if (data && data.length > 0) { setEventId(data[0].id); sessionStorage.setItem('dashboard_event_id', data[0].id) }
         })
     }
   }, [])
 
-  async function handleLogout() {
-    await supabase.auth.signOut()
-    router.push('/')
-  }
+  async function handleLogout() { await supabase.auth.signOut(); router.push('/') }
 
   if (isLoginPage) return <>{children}</>
-
   if (checking) return <div className="min-h-screen flex items-center justify-center text-stone-400">인증 확인 중...</div>
+
+  function navLink(href: string, label: string, emoji: string, indent = false) {
+    const fullHref = href.includes('event_id') ? href : (href.startsWith('/dashboard/teams/') && href !== '/dashboard/teams' ? `${href}?event_id=${eventId}` : href)
+    const isActive = pathname === href || pathname.startsWith(href + '/') || pathname.startsWith(href + '?')
+    return (
+      <Link key={href} href={fullHref} onClick={() => setMenuOpen(false)}
+        className={`flex items-center gap-2 ${indent ? 'pl-8' : 'px-3'} pr-3 py-2 rounded-lg text-sm transition-all ${
+          isActive ? 'bg-tennis-50 text-tennis-700 font-bold' : 'text-stone-600 hover:bg-stone-50'
+        }`}>
+        <span className="text-sm">{emoji}</span> {label}
+      </Link>
+    )
+  }
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row">
@@ -90,32 +82,53 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <h2 className="font-bold mt-1">⚙️ 운영 대시보드</h2>
           <p className="text-xs text-stone-400 mt-0.5 truncate">{user?.email}</p>
         </div>
+
         <nav className="p-2 space-y-0.5">
-          {NAV_MAIN.map(n => (
-            <Link key={n.href} href={n.href} onClick={() => setMenuOpen(false)}
-              className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-all ${
-                pathname === n.href
-                  ? 'bg-tennis-50 text-tennis-700 font-bold'
-                  : 'text-stone-600 hover:bg-stone-50'
-              }`}>
-              <span>{n.emoji}</span> {n.label}
-            </Link>
-          ))}
+          {/* 홈 */}
+          {navLink('/dashboard', '홈', '🏠')}
+
+          {/* ── 개인전 (펼침) ── */}
+          <button onClick={() => setOpenIndiv(!openIndiv)}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-all ${
+              openIndiv ? 'bg-stone-100 text-stone-800 font-bold' : 'text-stone-600 hover:bg-stone-50'
+            }`}>
+            <span>🎾 개인전</span>
+            <span className="text-xs text-stone-400">{openIndiv ? '▲' : '▼'}</span>
+          </button>
+          {openIndiv && (
+            <div className="space-y-0.5">
+              {navLink('/dashboard/teams', '팀 관리', '👥', true)}
+              {navLink('/dashboard/groups', '조편성', '🔢', true)}
+              {navLink('/dashboard/tournament', '본선 토너먼트', '🏆', true)}
+            </div>
+          )}
+
+          {/* ── 단체전 (펼침) ── */}
+          <button onClick={() => setOpenTeam(!openTeam)}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-all ${
+              openTeam ? 'bg-stone-100 text-stone-800 font-bold' : 'text-stone-600 hover:bg-stone-50'
+            }`}>
+            <span>📋 단체전</span>
+            <span className="text-xs text-stone-400">{openTeam ? '▲' : '▼'}</span>
+          </button>
+          {openTeam && (
+            <div className="space-y-0.5">
+              {navLink('/dashboard/teams/clubs', '클럽 관리', '🏟️', true)}
+              {navLink('/dashboard/teams/groups', '조편성', '⚔️', true)}
+              {navLink('/dashboard/teams/ties', '대전 관리', '🎾', true)}
+              {navLink('/dashboard/teams/standings', '순위', '📊', true)}
+              {navLink('/dashboard/teams/bracket', '토너먼트', '🏆', true)}
+            </div>
+          )}
+
           <hr className="my-2" />
-          <p className="px-3 py-1 text-xs text-stone-400 font-medium">단체전</p>
-          {NAV_TEAM.map(n => {
-            const fullHref = n.href === '/dashboard/sync' ? n.href : `${n.href}?event_id=${eventId}`;
-            return (
-              <Link key={n.href} href={fullHref} onClick={() => setMenuOpen(false)}
-                className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-all ${
-                  pathname.startsWith(n.href)
-                    ? 'bg-tennis-50 text-tennis-700 font-bold'
-                    : 'text-stone-600 hover:bg-stone-50'
-                }`}>
-                <span>{n.emoji}</span> {n.label}
-              </Link>
-            );
-          })}
+
+          {/* ── 코트 배정 (개인+단체 통합) ── */}
+          {navLink('/dashboard/courts', '코트 배정', '🏟')}
+
+          {/* ── 앱A 연동 ── */}
+          {navLink('/dashboard/sync', '앱A 연동', '🔄')}
+
           <hr className="my-2" />
           <button onClick={handleLogout}
             className="hidden md:flex w-full items-center gap-2 px-3 py-2.5 rounded-lg text-sm text-stone-400 hover:text-red-500 hover:bg-red-50">
