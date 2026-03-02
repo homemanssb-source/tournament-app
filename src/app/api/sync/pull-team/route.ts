@@ -31,6 +31,13 @@ export async function POST(request: NextRequest) {
     if (!event_id || !app_a_event_id) {
       return NextResponse.json({ success: false, error: 'event_id와 app_a_event_id가 필요합니다.' }, { status: 400, headers: corsHeaders });
     }
+const debugInfo = {
+      hasAppAKey: !!process.env.APP_A_ANON_KEY,
+      hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      hasUrl: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+      url: process.env.NEXT_PUBLIC_SUPABASE_URL,
+    };
+    console.log('DEBUG:', JSON.stringify(debugInfo));
     const appA = getAppAClient();
     const appB = getAppBServiceClient();
     const { data: entries, error: entriesErr } = await appA.from('team_event_entries').select('*').eq('event_id', app_a_event_id).in('status', ['pending', 'confirmed']);
