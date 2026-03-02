@@ -74,6 +74,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <h2 className="font-bold mt-1">⚙️ 운영 대시보드</h2>
           <p className="text-xs text-stone-400 mt-0.5 truncate">{user?.email}</p>
         </div>
+        <nav className="p-2 space-y-0.5">
         {NAV_MAIN.map(n => (
             <Link key={n.href} href={n.href} onClick={() => setMenuOpen(false)}
               className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-all ${

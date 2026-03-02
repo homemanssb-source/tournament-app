@@ -69,7 +69,13 @@ const debugInfo = {
         if (membersErr) { errors.push(`${entry.club_name} members: ${membersErr.message}`); }
         await appB.from('club_members').delete().eq('club_id', clubId);
         if (members && members.length > 0) {
-          const rows = members.map((m: any, idx: number) => ({ club_id: clubId, name: m.member_name, gender: m.gender || null, grade: m.grade || null, is_captain: m.member_name === entry.captain_name, member_order: m.member_order || idx + 1 }));
+          const toGender = (g: string | null | undefined): string | null => {
+            if (!g) return null;
+            if (g === '남' || g.toUpperCase() === 'M' || g.toLowerCase() === 'male') return 'M';
+            if (g === '여' || g.toUpperCase() === 'F' || g.toLowerCase() === 'female') return 'F';
+            return null;
+          };
+          const rows = members.map((m: any, idx: number) => ({ club_id: clubId, name: m.member_name, gender: toGender(m.gender), grade: m.grade || null, is_captain: m.member_name === entry.captain_name, member_order: m.member_order || idx + 1 }));
           const { error: insertErr } = await appB.from('club_members').insert(rows);
           if (insertErr) { errors.push(`${entry.club_name} insert: ${insertErr.message}`); }
           console.log('INSERTED', rows.length, 'members for', entry.club_name, 'err:', insertErr?.message);
