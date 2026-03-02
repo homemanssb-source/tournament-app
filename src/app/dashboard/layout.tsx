@@ -20,14 +20,15 @@ const NAV_TEAM = [
   { href: '/dashboard/teams/bracket', label: '단체전 토너먼트', emoji: '🏆' },
   { href: '/dashboard/sync', label: '앱A 연동', emoji: '🔄' },
 ]
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
   const [user, setUser] = useState<any>(null)
   const [checking, setChecking] = useState(true)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [eventId, setEventId] = useState('')
 
-  // 로그인 페이지는 인증 체크 건너뛰기
   const isLoginPage = pathname === '/dashboard/login'
 
   useEffect(() => {
@@ -48,12 +49,27 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => subscription.unsubscribe()
   }, [router, isLoginPage])
 
+  // event_id 가져오기: sessionStorage 우선, 없으면 DB에서 조회
+  useEffect(() => {
+    const stored = sessionStorage.getItem('dashboard_event_id')
+    if (stored) {
+      setEventId(stored)
+    } else {
+      supabase.from('events').select('id').order('date', { ascending: false }).limit(1)
+        .then(({ data }) => {
+          if (data && data.length > 0) {
+            setEventId(data[0].id)
+            sessionStorage.setItem('dashboard_event_id', data[0].id)
+          }
+        })
+    }
+  }, [])
+
   async function handleLogout() {
     await supabase.auth.signOut()
     router.push('/')
   }
 
-  // 로그인 페이지는 레이아웃 없이 바로 렌더링
   if (isLoginPage) return <>{children}</>
 
   if (checking) return <div className="min-h-screen flex items-center justify-center text-stone-400">인증 확인 중...</div>
@@ -75,7 +91,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <p className="text-xs text-stone-400 mt-0.5 truncate">{user?.email}</p>
         </div>
         <nav className="p-2 space-y-0.5">
-        {NAV_MAIN.map(n => (
+          {NAV_MAIN.map(n => (
             <Link key={n.href} href={n.href} onClick={() => setMenuOpen(false)}
               className={`flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-all ${
                 pathname === n.href
@@ -88,7 +104,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <hr className="my-2" />
           <p className="px-3 py-1 text-xs text-stone-400 font-medium">단체전</p>
           {NAV_TEAM.map(n => {
-            const eventId = typeof window !== 'undefined' ? sessionStorage.getItem('dashboard_event_id') || '' : '';
             const fullHref = n.href === '/dashboard/sync' ? n.href : `${n.href}?event_id=${eventId}`;
             return (
               <Link key={n.href} href={fullHref} onClick={() => setMenuOpen(false)}
