@@ -1,11 +1,7 @@
 // ============================================================
 // 대전 관리 페이지 (운영자 대시보드)
 // src/app/dashboard/teams/ties/page.tsx
-//
-// - 대전 목록 (조별 그룹핑)
-// - 라인업 상태 + 선수 이름 표시
-// - 운영자 점수 입력
-// - 라인업 URL 복사
+// + 코트 배정, 선수 표시
 // ============================================================
 'use client';
 
@@ -26,15 +22,18 @@ export default function TiesPage() {
   const [selectedTie, setSelectedTie] = useState<TieWithClubs | null>(null);
   const [rubbers, setRubbers] = useState<TieRubber[]>([]);
   const [rubbersLoading, setRubbersLoading] = useState(false);
-  // 라인업 + 선수 정보
   const [tieLineups, setTieLineups] = useState<TeamLineup[]>([]);
   const [memberMap, setMemberMap] = useState<Record<string, ClubMember>>({});
-  // 점수 입력
   const [editingRubber, setEditingRubber] = useState<string | null>(null);
   const [scoreInput, setScoreInput] = useState({ set1a:'',set1b:'',set2a:'',set2b:'',set3a:'',set3b:'' });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [copiedTieId, setCopiedTieId] = useState<string | null>(null);
+
+  // 코트 배정
+  const [courtCount, setCourtCount] = useState(8);
+  const [editingCourt, setEditingCourt] = useState<string | null>(null);
+  const [courtInput, setCourtInput] = useState('');
 
   const loadData = useCallback(async () => {
     if (!eventId) return;
@@ -51,24 +50,15 @@ export default function TiesPage() {
   async function handleSelectTie(tie: TieWithClubs) {
     if (selectedTie?.id === tie.id) { setSelectedTie(null); setRubbers([]); setTieLineups([]); return; }
     setSelectedTie(tie); setRubbersLoading(true); setEditingRubber(null);
-    const [rubberData, lineupData] = await Promise.all([
-      fetchRubbers(tie.id),
-      fetchRevealedLineups(tie.id),
-    ]);
-    setRubbers(rubberData);
-    setTieLineups(lineupData);
-    // 선수 맵 로드
+    const [rubberData, lineupData] = await Promise.all([fetchRubbers(tie.id), fetchRevealedLineups(tie.id)]);
+    setRubbers(rubberData); setTieLineups(lineupData);
     const mm: Record<string, ClubMember> = {};
     if (tie.club_a_id) { (await fetchClubMembers(tie.club_a_id)).forEach(m => { mm[m.id] = m; }); }
     if (tie.club_b_id) { (await fetchClubMembers(tie.club_b_id)).forEach(m => { mm[m.id] = m; }); }
-    setMemberMap(mm);
-    setRubbersLoading(false);
+    setMemberMap(mm); setRubbersLoading(false);
   }
 
-  function getMemberName(id: string | null | undefined): string {
-    if (!id) return '-';
-    return memberMap[id]?.name || '-';
-  }
+  function getMemberName(id: string|null|undefined): string { return id && memberMap[id] ? memberMap[id].name : '-'; }
 
   function startScoreEdit(rubber: TieRubber) {
     setEditingRubber(rubber.id); setSaveError('');
@@ -87,11 +77,17 @@ export default function TiesPage() {
       const result = await recordRubberScore(rubberId, parseInt(set1a), parseInt(set1b),
         set2a?parseInt(set2a):null, set2b?parseInt(set2b):null, set3a?parseInt(set3a):null, set3b?parseInt(set3b):null);
       if (!result.success) { setSaveError(result.error||'저장 실패'); return; }
-      const updated = await fetchRubbers(selectedTie!.id); setRubbers(updated);
-      setEditingRubber(null); await loadData();
+      setRubbers(await fetchRubbers(selectedTie!.id)); setEditingRubber(null); await loadData();
       try { await calculateStandings(eventId, selectedTie?.group_id||null); } catch {}
     } catch (err: any) { setSaveError(err.message||'저장 실패'); }
     finally { setSaving(false); }
+  }
+
+  // 코트 배정
+  async function handleCourtAssign(tieId: string, courtNum: number | null) {
+    await supabase.from('ties').update({ court_number: courtNum }).eq('id', tieId);
+    setEditingCourt(null); setCourtInput('');
+    await loadData();
   }
 
   function copyLineupUrl(tieId: string) {
@@ -103,10 +99,10 @@ export default function TiesPage() {
     if (groups.length === 0) {
       const rg: Record<string, TieWithClubs[]> = {};
       ties.forEach(t => { const k=t.round||'etc'; if(!rg[k])rg[k]=[]; rg[k].push(t); });
-      return Object.entries(rg).map(([r,tl]) => ({ groupName: {full_league:'풀리그',group:'조별리그',round_of_16:'16강',quarter:'8강',semi:'4강',final:'결승',etc:'기타'}[r]||r, groupId:null, ties:tl }));
+      return Object.entries(rg).map(([r,tl]) => ({ groupName:{full_league:'풀리그',group:'조별리그',round_of_16:'16강',quarter:'8강',semi:'4강',final:'결승',etc:'기타'}[r]||r, groupId:null, ties:tl }));
     }
     const result: {groupName:string;groupId:string|null;ties:TieWithClubs[]}[] = [];
-    for (const g of groups) { const gt=ties.filter(t=>t.group_id===g.id); if(gt.length>0) result.push({groupName:g.group_label||g.group_num+'조',groupId:g.id,ties:gt}); }
+    for (const g of groups) { const gt=ties.filter(t=>t.group_id===g.id); if(gt.length>0) result.push({groupName:g.group_label||(g.group_num+'조'),groupId:g.id,ties:gt}); }
     const ug=ties.filter(t=>!t.group_id); if(ug.length>0) result.push({groupName:'토너먼트',groupId:null,ties:ug});
     return result;
   }
@@ -136,15 +132,18 @@ export default function TiesPage() {
             const isSelected = selectedTie?.id===tie.id;
             const maj = getMajority(tie.rubber_count);
             const aWin = tie.club_a_rubbers_won>=maj, bWin = tie.club_b_rubbers_won>=maj;
+            const isEditingThisCourt = editingCourt === tie.id;
             return (
               <div key={tie.id} className="bg-white rounded-lg border overflow-hidden">
                 <div onClick={() => handleSelectTie(tie)} className="p-4 cursor-pointer hover:bg-gray-50 transition">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 flex-wrap">
-                      <span className="text-xs text-gray-400 w-6">#{tie.tie_order}</span>
+                      <span className="text-xs text-gray-400">#{tie.tie_order}</span>
                       <span className={`font-semibold ${aWin?'text-blue-600':''}`}>{tie.club_a?.name||'TBD'}</span>
                       <span className="text-gray-400 text-sm">vs</span>
                       <span className={`font-semibold ${bWin?'text-blue-600':''}`}>{tie.club_b?.name||'TBD'}</span>
+                      {/* 코트 표시 */}
+                      {tie.court_number && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">코트 {tie.court_number}</span>}
                     </div>
                     <div className="flex items-center gap-2">
                       {(tie.status==='completed'||tie.status==='in_progress') && <span className="text-lg font-bold">{tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}</span>}
@@ -164,6 +163,23 @@ export default function TiesPage() {
                     <div className="flex gap-2 flex-wrap">
                       <button onClick={e => {e.stopPropagation();copyLineupUrl(tie.id);}} className="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-200">
                         {copiedTieId===tie.id?'✅ 복사됨!':'📋 라인업 URL 복사'}</button>
+
+                      {/* 코트 배정 */}
+                      {!isEditingThisCourt ? (
+                        <button onClick={e => { e.stopPropagation(); setEditingCourt(tie.id); setCourtInput(tie.court_number?.toString()||''); }}
+                          className="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-lg hover:bg-green-200">
+                          {tie.court_number ? `코트 ${tie.court_number} (변경)` : '🏟 코트 배정'}</button>
+                      ) : (
+                        <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                          <select value={courtInput} onChange={e => setCourtInput(e.target.value)} className="border rounded px-2 py-1 text-xs">
+                            <option value="">미배정</option>
+                            {Array.from({length:courtCount},(_,i)=>i+1).map(n => <option key={n} value={n}>코트 {n}</option>)}
+                          </select>
+                          <button onClick={() => handleCourtAssign(tie.id, courtInput ? parseInt(courtInput) : null)}
+                            className="text-xs bg-green-600 text-white px-2 py-1 rounded">확인</button>
+                          <button onClick={() => setEditingCourt(null)} className="text-xs bg-gray-200 px-2 py-1 rounded">취소</button>
+                        </div>
+                      )}
                     </div>
 
                     {rubbersLoading ? <div className="text-center text-gray-400 py-4">로딩중...</div> :
@@ -172,7 +188,6 @@ export default function TiesPage() {
                         {rubbers.map(r => {
                           const isEditing = editingRubber===r.id;
                           const hasScore = r.set1_a!==null;
-                          // 라인업에서 선수 찾기
                           const laA = tieLineups.find(l => l.rubber_number===r.rubber_number && l.club_id===tie.club_a_id);
                           const laB = tieLineups.find(l => l.rubber_number===r.rubber_number && l.club_id===tie.club_b_id);
                           return (
@@ -184,48 +199,29 @@ export default function TiesPage() {
                                   {r.pin_code && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono">PIN: {r.pin_code}</span>}
                                 </div>
                               </div>
-
-                              {/* 선수 표시 */}
-                              {(laA || laB) && (
+                              {(laA||laB) && (
                                 <div className="grid grid-cols-5 items-center gap-1 mb-3 text-xs">
-                                  <div className="col-span-2 text-right">
-                                    <div>{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</div>
-                                    <div className="text-gray-400">{tie.club_a?.name}</div>
-                                  </div>
+                                  <div className="col-span-2 text-right"><div>{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</div><div className="text-gray-400">{tie.club_a?.name}</div></div>
                                   <div className="text-center text-gray-400 font-bold">vs</div>
-                                  <div className="col-span-2 text-left">
-                                    <div>{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</div>
-                                    <div className="text-gray-400">{tie.club_b?.name}</div>
-                                  </div>
+                                  <div className="col-span-2 text-left"><div>{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</div><div className="text-gray-400">{tie.club_b?.name}</div></div>
                                 </div>
                               )}
-                              {!laA && !laB && tie.lineup_revealed && (
-                                <p className="text-xs text-gray-400 mb-2">라인업 정보 없음</p>
-                              )}
-
+                              {!laA && !laB && tie.lineup_revealed && <p className="text-xs text-gray-400 mb-2">라인업 정보 없음</p>}
                               {hasScore && !isEditing && (
                                 <div className="flex items-center justify-between">
-                                  <div className="text-center flex-1">
-                                    <div className="text-lg font-bold">{formatSetScore(r.set1_a,r.set1_b)}
-                                      {r.set2_a!==null&&' / '+formatSetScore(r.set2_a,r.set2_b)}
-                                      {r.set3_a!==null&&' / '+formatSetScore(r.set3_a,r.set3_b)}</div>
-                                    {r.winning_club_id && <div className="text-xs text-blue-600 mt-1">승: {r.winning_club_id===tie.club_a_id?tie.club_a?.name:tie.club_b?.name}</div>}
-                                  </div>
+                                  <div className="text-center flex-1"><div className="text-lg font-bold">{formatSetScore(r.set1_a,r.set1_b)}
+                                    {r.set2_a!==null&&' / '+formatSetScore(r.set2_a,r.set2_b)}{r.set3_a!==null&&' / '+formatSetScore(r.set3_a,r.set3_b)}</div>
+                                    {r.winning_club_id && <div className="text-xs text-blue-600 mt-1">승: {r.winning_club_id===tie.club_a_id?tie.club_a?.name:tie.club_b?.name}</div>}</div>
                                   <button onClick={() => startScoreEdit(r)} className="text-xs text-gray-400 hover:text-blue-600 px-2">수정</button>
                                 </div>
                               )}
-                              {!hasScore && !isEditing && (
-                                <button onClick={() => startScoreEdit(r)} className="w-full bg-blue-50 text-blue-700 py-2 rounded-lg text-sm hover:bg-blue-100">점수 입력</button>
-                              )}
+                              {!hasScore && !isEditing && <button onClick={() => startScoreEdit(r)} className="w-full bg-blue-50 text-blue-700 py-2 rounded-lg text-sm hover:bg-blue-100">점수 입력</button>}
                               {isEditing && (
                                 <div className="space-y-3 mt-2">
-                                  <SetRow label="1세트" aVal={scoreInput.set1a} bVal={scoreInput.set1b}
-                                    setA={v=>setScoreInput(p=>({...p,set1a:v}))} setB={v=>setScoreInput(p=>({...p,set1b:v}))} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
+                                  <SetRow label="1세트" aVal={scoreInput.set1a} bVal={scoreInput.set1b} setA={v=>setScoreInput(p=>({...p,set1a:v}))} setB={v=>setScoreInput(p=>({...p,set1b:v}))} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
                                   {setsPerRubber===3 && (<>
-                                    <SetRow label="2세트" aVal={scoreInput.set2a} bVal={scoreInput.set2b}
-                                      setA={v=>setScoreInput(p=>({...p,set2a:v}))} setB={v=>setScoreInput(p=>({...p,set2b:v}))} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
-                                    <SetRow label="3세트" aVal={scoreInput.set3a} bVal={scoreInput.set3b}
-                                      setA={v=>setScoreInput(p=>({...p,set3a:v}))} setB={v=>setScoreInput(p=>({...p,set3b:v}))} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
+                                    <SetRow label="2세트" aVal={scoreInput.set2a} bVal={scoreInput.set2b} setA={v=>setScoreInput(p=>({...p,set2a:v}))} setB={v=>setScoreInput(p=>({...p,set2b:v}))} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
+                                    <SetRow label="3세트" aVal={scoreInput.set3a} bVal={scoreInput.set3b} setA={v=>setScoreInput(p=>({...p,set3a:v}))} setB={v=>setScoreInput(p=>({...p,set3b:v}))} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
                                   </>)}
                                   {saveError && <p className="text-red-500 text-xs">{saveError}</p>}
                                   <div className="flex gap-2">
