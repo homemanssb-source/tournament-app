@@ -64,11 +64,15 @@ const debugInfo = {
           if (clubErr) { errors.push(`${entry.club_name}: ${clubErr.message}`); continue; }
           clubId = newClub.id;
         }
-        const { data: members } = await appA.from('team_event_members').select('*').eq('entry_id', entry.id).order('member_order');
+        const { data: members, error: membersErr } = await appA.from('team_event_members').select('*').eq('entry_id', entry.id).order('member_order');
+        console.log('MEMBERS for', entry.club_name, ':', members?.length, 'err:', membersErr?.message);
+        if (membersErr) { errors.push(`${entry.club_name} members: ${membersErr.message}`); }
         await appB.from('club_members').delete().eq('club_id', clubId);
         if (members && members.length > 0) {
           const rows = members.map((m: any, idx: number) => ({ club_id: clubId, name: m.member_name, gender: m.gender || null, grade: m.grade || null, is_captain: m.member_name === entry.captain_name, member_order: m.member_order || idx + 1 }));
-          await appB.from('club_members').insert(rows);
+          const { error: insertErr } = await appB.from('club_members').insert(rows);
+          if (insertErr) { errors.push(`${entry.club_name} insert: ${insertErr.message}`); }
+          console.log('INSERTED', rows.length, 'members for', entry.club_name, 'err:', insertErr?.message);
         }
         await appB.from('sync_log').insert({ event_id, sync_type: 'team', app_a_record_id: entry.id, app_b_record_id: clubId, app_b_table: 'clubs', status: 'synced' });
         syncedCount++;
