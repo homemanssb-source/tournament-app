@@ -7,9 +7,15 @@ import { supabase } from '@/lib/supabase'
 const NAV = [
   { href: '/dashboard', label: '홈', emoji: '🏠' },
   { href: '/dashboard/teams', label: '팀 관리', emoji: '👥' },
-  { href: '/dashboard/groups', label: '조편성', emoji: '🎯' },
+  { href: '/dashboard/groups', label: '조편성', emoji: '🔢' },
   { href: '/dashboard/tournament', label: '본선 토너먼트', emoji: '🏆' },
-  { href: '/dashboard/courts', label: '코트 배정', emoji: '🎾' },
+  { href: '/dashboard/courts', label: '코트 배정', emoji: '🏟' },
+  { href: '/dashboard/teams/clubs', label: '단체전 클럽', emoji: '🏟️' },
+  { href: '/dashboard/teams/groups', label: '단체전 조편성', emoji: '⚔️' },
+  { href: '/dashboard/teams/ties', label: '단체전 대전', emoji: '🎾' },
+  { href: '/dashboard/teams/standings', label: '단체전 순위', emoji: '📊' },
+  { href: '/dashboard/teams/bracket', label: '단체전 토너먼트', emoji: '🏆' },
+  { href: '/dashboard/sync', label: '앱A 연동', emoji: '🔄' },
 ]
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
