@@ -31,7 +31,7 @@ export default function TiesPage() {
   const [copiedTieId, setCopiedTieId] = useState<string | null>(null);
 
   // 코트 배정
-  const [courtCount, setCourtCount] = useState(20const);
+  const [courtCount, setCourtCount] = useState(20);
   const [editingCourt, setEditingCourt] = useState<string | null>(null);
   const [courtInput, setCourtInput] = useState('');
 
