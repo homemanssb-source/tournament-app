@@ -42,6 +42,10 @@ export default function EventDetailPage() {
       const { data: ev } = await supabase.from('events').select('*').eq('id', eventId).single()
       setEvent(ev)
 
+      // event_type에 따라 초기 모드 설정
+      if (ev?.event_type === 'team') setMode('team')
+      else setMode('individual')
+
       // 개인전 데이터
       const { data: divs } = await supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order')
       setDivisions(divs || [])
@@ -105,7 +109,8 @@ export default function EventDetailPage() {
           </div>
         </div>
 
-        {/* 개인전 / 단체전 모드 전환 (항상 표시) */}
+        {/* 개인전 / 단체전 모드 전환 (both일 때만 표시, 또는 event_type 미설정시) */}
+        {(!event.event_type || event.event_type === 'both') && (
         <div className="max-w-5xl mx-auto px-4 flex gap-2 pb-2">
           <button onClick={() => setMode('individual')}
             className={`px-4 py-1.5 rounded-full text-sm font-medium transition ${mode === 'individual' ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'}`}>
@@ -114,6 +119,16 @@ export default function EventDetailPage() {
             className={`px-4 py-1.5 rounded-full text-sm font-medium transition ${mode === 'team' ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'}`}>
             📋 단체전</button>
         </div>
+        )}
+
+        {/* 단일 타입 배지 표시 */}
+        {event.event_type && event.event_type !== 'both' && (
+          <div className="max-w-5xl mx-auto px-4 pb-2">
+            <span className="px-4 py-1.5 rounded-full text-sm font-medium bg-white text-[#2d5016]">
+              {event.event_type === 'team' ? '📋 단체전' : '🎾 개인전'}
+            </span>
+          </div>
+        )}
 
         {/* 개인전 부서 탭 */}
         {mode === 'individual' && divisions.length > 1 && iTab !== 'courts' && (
