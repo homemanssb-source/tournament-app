@@ -13,6 +13,7 @@ export interface Club {
   captain_phone: string | null;
   captain_pin: string | null;
   seed_number: number | null;
+  division_id: string | null;       // ★ 신규: 개인전 부서 연동
   created_at: string;
 }
 
@@ -50,6 +51,7 @@ export interface Tie {
   is_bye: boolean;
   court_number: number | null;
   scheduled_time: string | null;
+  division_id: string | null;       // ★ 신규
   created_at: string;
 }
 
@@ -109,6 +111,7 @@ export interface TeamStanding {
 
 export type TeamFormat = 'full_league' | 'group_tournament' | 'prelim_tournament';
 export type LineupMode = 'captain_pin' | 'admin_only';
+export type TeamMatchType = '3_doubles' | '5_doubles';   // ★ 신규
 
 export interface EventTeamConfig {
   event_type: 'individual' | 'team' | 'both';
@@ -118,6 +121,7 @@ export interface EventTeamConfig {
   allow_player_reuse: boolean;
   lineup_mode: LineupMode;
   team_member_limit: number | null;
+  team_match_type: TeamMatchType | null;   // ★ 신규
 }
 
 // ── 조인된/UI용 확장 타입 ──

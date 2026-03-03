@@ -3,7 +3,7 @@
 // src/lib/team-utils.ts
 // ============================================================
 
-import type { TieStatus, TeamFormat } from '@/types/team';
+import type { TieStatus, TeamFormat, TeamMatchType } from '@/types/team';
 
 // ── 대전 상태 한글 표시 ──
 export function getTieStatusLabel(status: TieStatus): string {
@@ -109,4 +109,26 @@ export function generatePin(): string {
 export function getSeedBadge(seedNumber: number | null): string {
   if (!seedNumber) return '';
   return `[${seedNumber}시드]`;
+}
+
+// ★ ── 경기방식(team_match_type) 관련 ──
+
+export function getMatchTypeLabel(matchType: TeamMatchType | string | null): string {
+  if (matchType === '5_doubles') return '5복식 (3승 선승)';
+  if (matchType === '3_doubles') return '3복식 (2승 선승)';
+  return '3복식 (기본)';
+}
+
+export function getMatchTypeShort(matchType: TeamMatchType | string | null): string {
+  if (matchType === '5_doubles') return '5복식';
+  return '3복식';
+}
+
+export function getRubberCountByMatchType(matchType: TeamMatchType | string | null): number {
+  if (matchType === '5_doubles') return 5;
+  return 3; // 기본값
+}
+
+export function getMajorityByMatchType(matchType: TeamMatchType | string | null): number {
+  return getMajority(getRubberCountByMatchType(matchType));
 }

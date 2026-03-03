@@ -147,6 +147,34 @@ export async function deleteClubMember(memberId: string): Promise<void> {
   if (error) throw error;
 }
 
+// ★ ════════════════════════════════════════
+// 주장(캡틴) 변경
+// ════════════════════════════════════════
+
+export async function setCaptain(
+  clubId: string,
+  memberId: string,
+): Promise<{ success: boolean; error?: string }> {
+  // 1) 기존 주장 해제
+  const { error: resetError } = await supabase
+    .from('club_members')
+    .update({ is_captain: false })
+    .eq('club_id', clubId)
+    .eq('is_captain', true);
+
+  if (resetError) return { success: false, error: resetError.message };
+
+  // 2) 새 주장 지정
+  const { error: setError } = await supabase
+    .from('club_members')
+    .update({ is_captain: true })
+    .eq('id', memberId)
+    .eq('club_id', clubId);
+
+  if (setError) return { success: false, error: setError.message };
+  return { success: true };
+}
+
 
 // ════════════════════════════════════════
 // 대전(Tie) 조회
@@ -390,7 +418,7 @@ export async function calculateStandings(eventId: string, groupId?: string | nul
 export async function fetchEventTeamConfig(eventId: string): Promise<EventTeamConfig | null> {
   const { data, error } = await supabase
     .from('events')
-    .select('event_type, team_format, team_rubber_count, team_sets_per_rubber, allow_player_reuse, lineup_mode, team_member_limit')
+    .select('event_type, team_format, team_rubber_count, team_sets_per_rubber, allow_player_reuse, lineup_mode, team_member_limit, team_match_type')
     .eq('id', eventId)
     .single();
   if (error) throw error;
@@ -403,4 +431,83 @@ export async function updateEventTeamConfig(eventId: string, config: Partial<Eve
     .update(config)
     .eq('id', eventId);
   if (error) throw error;
+}
+
+
+// ★ ════════════════════════════════════════
+// 개인전 본선 결과 전송 (App B → App A)
+// ════════════════════════════════════════
+
+export async function fetchFinalsMatches(eventId: string) {
+  // 32강 이상 본선 + 완료된 경기만
+  const { data, error } = await supabase
+    .from('matches')
+    .select(`
+      id, match_num, event_id, division_id, division_name,
+      stage, round, team_a_id, team_b_id, score,
+      winner_team_id, status, ended_at,
+      team_a_name, team_b_name, winner_name
+    `)
+    .eq('event_id', eventId)
+    .eq('stage', 'FINALS')
+    .eq('status', 'FINISHED')
+    .in('round', ['R32', 'R16', 'QF', 'SF', 'F'])
+    .order('round')
+    .order('slot');
+
+  if (error) throw error;
+  return data || [];
+}
+
+export async function sendResultsToAppA(
+  appAClient: any,
+  eventId: string,
+  matches: any[],
+): Promise<{ success: boolean; synced: number; skipped: number; errors: string[] }> {
+  const roundMap: Record<string, string> = {
+    'R32': '32', 'R16': '16', 'QF': '8', 'SF': '4', 'F': 'final',
+  };
+
+  let synced = 0, skipped = 0;
+  const errors: string[] = [];
+
+  for (const m of matches) {
+    // 중복 체크
+    const { data: existing } = await appAClient
+      .from('app_b_match_results')
+      .select('id')
+      .eq('event_id', eventId)
+      .eq('external_match_id', m.id)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      skipped++;
+      continue;
+    }
+
+    const { error } = await appAClient.from('app_b_match_results').insert([{
+      event_id: eventId,
+      division_id: m.division_id || null,
+      division_name: m.division_name || null,
+      round: roundMap[m.round] || m.round,
+      match_num: m.match_num || null,
+      external_match_id: m.id,
+      team_a_name: m.team_a_name || null,
+      team_b_name: m.team_b_name || null,
+      team_a_id: m.team_a_id || null,
+      team_b_id: m.team_b_id || null,
+      score: m.score || null,
+      winner_name: m.winner_name || null,
+      winner_id: m.winner_team_id || null,
+      completed_at: m.ended_at || new Date().toISOString(),
+    }]);
+
+    if (error) {
+      errors.push(`${m.match_num || m.id}: ${error.message}`);
+    } else {
+      synced++;
+    }
+  }
+
+  return { success: errors.length === 0, synced, skipped, errors };
 }
