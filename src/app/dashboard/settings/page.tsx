@@ -1,7 +1,3 @@
-// ============================================================
-// 설정 페이지 - 마스터PIN + 부설경기장 PIN 관리
-// src/app/dashboard/settings/page.tsx
-// ============================================================
 'use client'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -19,14 +15,12 @@ export default function SettingsPage() {
   const [eventId, setEventId] = useState('')
   const [eventName, setEventName] = useState('')
 
-  // 마스터 PIN
   const [newPin, setNewPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
   const [hasMasterPin, setHasMasterPin] = useState(false)
   const [pinMsg, setPinMsg] = useState('')
   const [pinSaving, setPinSaving] = useState(false)
 
-  // 부설경기장 PIN
   const [venuePins, setVenuePins] = useState<VenuePin[]>([])
   const [newVenueName, setNewVenueName] = useState('')
   const [newVenuePin, setNewVenuePin] = useState('')
@@ -59,36 +53,27 @@ export default function SettingsPage() {
   }
 
   async function saveMasterPin() {
-    if (!newPin.trim()) { setPinMsg('❌ 새 PIN을 입력하세요.'); return }
-    if (newPin.length < 4) { setPinMsg('❌ PIN은 최소 4자리 이상이어야 합니다.'); return }
-    if (newPin !== confirmPin) { setPinMsg('❌ PIN 확인이 일치하지 않습니다.'); return }
+    if (!newPin.trim()) { setPinMsg('! PIN을 입력하세요.'); return }
+    if (newPin.length < 4) { setPinMsg('! PIN은 최소 4자리 이상이어야 합니다.'); return }
+    if (newPin !== confirmPin) { setPinMsg('! PIN 확인이 일치하지 않습니다.'); return }
 
     setPinSaving(true); setPinMsg('')
     const { error } = await supabase.rpc('rpc_set_master_pin', {
       p_event_id: eventId,
       p_new_pin: newPin.trim()
     })
-```
-
-파일 위치: `src\app\dashboard\settings\page.tsx`
-
-수정 후 push:
-```
-git add .
-git commit -m "fix: 마스터PIN bcrypt 해시 저장으로 수정"
-git push origin main
 
     setPinSaving(false)
-    if (error) { setPinMsg('❌ ' + error.message); return }
-    setPinMsg('✅ 마스터 PIN이 변경되었습니다.')
+    if (error) { setPinMsg('! ' + error.message); return }
+    setPinMsg('OK 마스터 PIN이 변경되었습니다.')
     setHasMasterPin(true)
     setNewPin(''); setConfirmPin('')
   }
 
   async function addVenuePin() {
-    if (!newVenueName.trim()) { setVenueMsg('❌ 경기장 이름을 입력하세요.'); return }
-    if (!newVenuePin.trim()) { setVenueMsg('❌ PIN을 입력하세요.'); return }
-    if (newVenuePin.length < 4) { setVenueMsg('❌ PIN은 최소 4자리 이상이어야 합니다.'); return }
+    if (!newVenueName.trim()) { setVenueMsg('! 경기장 이름을 입력하세요.'); return }
+    if (!newVenuePin.trim()) { setVenueMsg('! PIN을 입력하세요.'); return }
+    if (newVenuePin.length < 4) { setVenueMsg('! PIN은 최소 4자리 이상이어야 합니다.'); return }
 
     setVenueMsg('')
     const { error } = await supabase.from('venue_pins').insert({
@@ -96,8 +81,8 @@ git push origin main
       venue_name: newVenueName.trim(),
       pin_code: newVenuePin.trim(),
     })
-    if (error) { setVenueMsg('❌ ' + error.message); return }
-    setVenueMsg('✅ 부설경기장 PIN 추가됨')
+    if (error) { setVenueMsg('! ' + error.message); return }
+    setVenueMsg('OK 부설경기장 PIN 추가됨')
     setNewVenueName(''); setNewVenuePin('')
     loadVenuePins(eventId)
   }
@@ -106,15 +91,15 @@ git push origin main
     const { error } = await supabase.from('venue_pins').update({
       is_active: !pin.is_active
     }).eq('id', pin.id)
-    if (error) { setVenueMsg('❌ ' + error.message); return }
+    if (error) { setVenueMsg('! ' + error.message); return }
     loadVenuePins(eventId)
   }
 
   async function deleteVenuePin(pin: VenuePin) {
-    if (!confirm(`"${pin.venue_name}" PIN을 삭제하시겠습니까?`)) return
+    if (!confirm(pin.venue_name + ' PIN을 삭제하시겠습니까?')) return
     const { error } = await supabase.from('venue_pins').delete().eq('id', pin.id)
-    if (error) { setVenueMsg('❌ ' + error.message); return }
-    setVenueMsg('✅ 삭제됨')
+    if (error) { setVenueMsg('! ' + error.message); return }
+    setVenueMsg('OK 삭제됨')
     loadVenuePins(eventId)
   }
 
@@ -126,13 +111,12 @@ git push origin main
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
-      <h1 className="text-2xl font-bold">⚙️ 설정</h1>
+      <h1 className="text-2xl font-bold">설정</h1>
       <p className="text-sm text-stone-500">{eventName}</p>
 
-      {/* 마스터 PIN */}
       <div className="bg-white rounded-xl border p-5 space-y-4">
         <div className="flex items-center gap-2">
-          <h2 className="font-bold text-lg">🔐 마스터 PIN</h2>
+          <h2 className="font-bold text-lg">마스터 PIN</h2>
           {hasMasterPin
             ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">설정됨</span>
             : <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">미설정</span>
@@ -149,7 +133,7 @@ git push origin main
                 className="flex-1 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
               <button onClick={() => setNewPin(generateRandomPin())}
                 className="text-xs bg-stone-100 text-stone-600 px-3 py-2 rounded-lg hover:bg-stone-200 whitespace-nowrap">
-                🎲 랜덤
+                랜덤
               </button>
             </div>
           </div>
@@ -161,7 +145,7 @@ git push origin main
               className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
           </div>
           {pinMsg && (
-            <p className={`text-sm ${pinMsg.startsWith('✅') ? 'text-green-600' : 'text-red-500'}`}>{pinMsg}</p>
+            <p className={`text-sm ${pinMsg.startsWith('OK') ? 'text-green-600' : 'text-red-500'}`}>{pinMsg}</p>
           )}
           <button onClick={saveMasterPin} disabled={pinSaving || !newPin.trim()}
             className="bg-blue-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
@@ -170,14 +154,12 @@ git push origin main
         </div>
       </div>
 
-      {/* 부설경기장 PIN */}
       <div className="bg-white rounded-xl border p-5 space-y-4">
-        <h2 className="font-bold text-lg">🏟️ 부설경기장 PIN</h2>
+        <h2 className="font-bold text-lg">부설경기장 PIN</h2>
         <p className="text-xs text-stone-400">
           부설경기장 관리자에게 PIN을 부여하면 해당 코트의 스코어를 입력할 수 있습니다.
         </p>
 
-        {/* 추가 폼 */}
         <div className="flex gap-2">
           <input type="text" value={newVenueName} onChange={e => setNewVenueName(e.target.value)}
             placeholder="경기장 이름 (예: A코트)"
@@ -189,7 +171,7 @@ git push origin main
               className="w-24 border border-stone-300 rounded-lg px-3 py-2 text-sm text-center" />
             <button onClick={() => setNewVenuePin(generateRandomPin())}
               className="text-xs bg-stone-100 text-stone-600 px-2 py-2 rounded-lg hover:bg-stone-200">
-              🎲
+              랜덤
             </button>
           </div>
           <button onClick={addVenuePin}
@@ -200,10 +182,9 @@ git push origin main
         </div>
 
         {venueMsg && (
-          <p className={`text-sm ${venueMsg.startsWith('✅') || venueMsg.startsWith('📋') ? 'text-green-600' : 'text-red-500'}`}>{venueMsg}</p>
+          <p className={`text-sm ${venueMsg.startsWith('OK') ? 'text-green-600' : 'text-red-500'}`}>{venueMsg}</p>
         )}
 
-        {/* PIN 목록 */}
         {venueLoading ? (
           <p className="text-stone-400 text-sm text-center py-4">불러오는 중...</p>
         ) : venuePins.length === 0 ? (
@@ -229,7 +210,7 @@ git push origin main
                   </button>
                   <button onClick={() => deleteVenuePin(vp)}
                     className="text-xs text-stone-400 hover:text-red-500 px-2 py-1">
-                    🗑️
+                    삭제
                   </button>
                 </div>
               </div>
@@ -241,9 +222,9 @@ git push origin main
           <button onClick={() => {
             const text = venuePins.filter(v => v.is_active).map(v => `${v.venue_name}: ${v.pin_code}`).join('\n')
             navigator.clipboard.writeText(text)
-            setVenueMsg('📋 활성 PIN 목록이 복사되었습니다.')
+            setVenueMsg('OK 활성 PIN 목록이 복사되었습니다.')
           }} className="text-xs text-blue-600 hover:underline">
-            📋 활성 PIN 목록 복사
+            활성 PIN 목록 복사
           </button>
         )}
       </div>
