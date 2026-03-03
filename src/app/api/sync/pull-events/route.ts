@@ -1,11 +1,9 @@
 // ============================================================
-// [앱B] 앱A 대회 목록 가져오기 API
+// [앱B] 앱A 대회 목록 + 부서 가져오기 API
 // src/app/api/sync/pull-events/route.ts
 //
 // 앱A events → 앱B events 동기화
-// - 앱A event_id를 앱B app_a_event_id에 저장
-// - 중복 체크: app_a_event_id 기준
-// - 새 대회는 INSERT, 기존 대회는 UPDATE
+// 앱A event_divisions → 앱B divisions 동기화
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -35,7 +33,6 @@ function getAppBServiceClient() {
   return createClient(url, key);
 }
 
-// 앱A status → 앱B status 매핑
 function mapStatus(appAStatus: string): string {
   const s = (appAStatus || '').toUpperCase();
   if (s === 'OPEN' || s === 'ACTIVE') return 'active';
@@ -82,14 +79,16 @@ export async function POST(request: NextRequest) {
     let syncedCount = 0;
     let skippedCount = 0;
     let updatedCount = 0;
+    let divisionsSynced = 0;
     const errors: string[] = [];
 
     for (const ae of appAEvents) {
       try {
         const existing = existingMap.get(ae.event_id);
+        let appBEventId: string;
 
         if (existing) {
-          // 이미 존재 → 이름/상태 업데이트
+          appBEventId = existing.id;
           const { error: updateErr } = await appB
             .from('events')
             .update({
@@ -102,12 +101,11 @@ export async function POST(request: NextRequest) {
 
           if (updateErr) {
             errors.push(`${ae.event_name}: 업데이트 실패 - ${updateErr.message}`);
-          } else {
-            updatedCount++;
+            continue;
           }
+          updatedCount++;
         } else {
-          // 신규 대회 → INSERT
-          const { error: insertErr } = await appB
+          const { data: newEvent, error: insertErr } = await appB
             .from('events')
             .insert({
               name: ae.event_name,
@@ -117,14 +115,56 @@ export async function POST(request: NextRequest) {
               location: '',
               app_a_event_id: ae.event_id,
               app_a_connected: true,
-            });
+            })
+            .select('id')
+            .single();
 
-          if (insertErr) {
-            errors.push(`${ae.event_name}: 추가 실패 - ${insertErr.message}`);
-          } else {
-            syncedCount++;
+          if (insertErr || !newEvent) {
+            errors.push(`${ae.event_name}: 추가 실패 - ${insertErr?.message}`);
+            continue;
+          }
+          appBEventId = newEvent.id;
+          syncedCount++;
+        }
+
+        // 3. 해당 대회의 부서(divisions) 동기화
+        const { data: appADivs } = await appA
+          .from('event_divisions')
+          .select('division_id, division_name')
+          .eq('event_id', ae.event_id)
+          .order('created_at');
+
+        if (appADivs && appADivs.length > 0) {
+          // 앱B에 이미 있는 부서 조회
+          const { data: existingDivs } = await appB
+            .from('divisions')
+            .select('id, name')
+            .eq('event_id', appBEventId);
+
+          const existingDivNames = new Set(
+            (existingDivs || []).map(d => d.name)
+          );
+
+          for (let i = 0; i < appADivs.length; i++) {
+            const div = appADivs[i];
+            if (existingDivNames.has(div.division_name)) continue;
+
+            const { error: divErr } = await appB
+              .from('divisions')
+              .insert({
+                event_id: appBEventId,
+                name: div.division_name,
+                sort_order: i + 1,
+              });
+
+            if (divErr) {
+              errors.push(`${ae.event_name} 부서 ${div.division_name}: ${divErr.message}`);
+            } else {
+              divisionsSynced++;
+            }
           }
         }
+
       } catch (e: any) {
         errors.push(`${ae.event_name}: ${e.message}`);
       }
@@ -135,6 +175,7 @@ export async function POST(request: NextRequest) {
       synced: syncedCount,
       updated: updatedCount,
       skipped: skippedCount,
+      divisionsSynced,
       total: appAEvents.length,
       errors: errors.length > 0 ? errors : undefined,
     }, { headers: corsHeaders });
