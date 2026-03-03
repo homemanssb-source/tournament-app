@@ -20,6 +20,7 @@ export default function ClubsPage() {
 
   const [clubs, setClubs] = useState<Club[]>([]);
   const [config, setConfig] = useState<EventTeamConfig | null>(null);
+  const [divisions, setDivisions] = useState<Record<string, string>>({});
   const [selectedClub, setSelectedClub] = useState<Club | null>(null);
   const [members, setMembers] = useState<ClubMember[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,6 +51,11 @@ export default function ClubsPage() {
     setClubs(data);
     const cfg = await fetchEventTeamConfig(eventId);
     setConfig(cfg);
+    // 부서 로드
+    const { data: divs } = await supabase.from('divisions').select('id, name').eq('event_id', eventId);
+    const divMap: Record<string, string> = {};
+    (divs || []).forEach(d => { divMap[d.id] = d.name; });
+    setDivisions(divMap);
     setLoading(false);
   }, [eventId]);
 
@@ -229,6 +235,11 @@ export default function ClubsPage() {
                   <div className="flex items-center justify-between">
                     <div>
                       <span className="font-semibold">{club.name}</span>
+                      {(club as any).division_id && divisions[(club as any).division_id] && (
+                        <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                          {divisions[(club as any).division_id]}
+                        </span>
+                      )}
                       {club.seed_number && (
                         <span className="ml-2 text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded">
                           {club.seed_number}시드
