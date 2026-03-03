@@ -144,6 +144,31 @@ export default function SyncDashboardPage() {
     }
   }
 
+  // 앱A 대회 목록 가져오기
+  async function handlePullEvents() {
+    setSyncing(true);
+    setSyncResult(null);
+
+    try {
+      const res = await fetch('/api/sync/pull-events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const result = await res.json();
+      setSyncResult({ type: 'pull-events', ...result });
+      // 대회 목록 다시 로드
+      const { data } = await supabase
+        .from('events')
+        .select('id, name, event_type, app_a_event_id, app_a_connected')
+        .order('created_at', { ascending: false });
+      setEvents(data || []);
+    } catch (err: any) {
+      setSyncResult({ type: 'pull-events', success: false, error: err.message });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   // 동기화 통계
   const teamLogs = syncLogs.filter(l => l.sync_type === 'team');
   const individualLogs = syncLogs.filter(l => l.sync_type === 'individual');
@@ -154,6 +179,21 @@ export default function SyncDashboardPage() {
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">
       <h1 className="text-2xl font-bold">🔄 앱A 데이터 연동</h1>
+
+      {/* 앱A 대회 가져오기 */}
+      <div className="bg-white rounded-lg border p-6 space-y-3">
+        <h2 className="font-semibold">📥 앱A 대회 가져오기</h2>
+        <p className="text-sm text-gray-500">
+          앱A에 등록된 대회 목록을 앱B로 가져옵니다. 새 대회는 추가, 기존 대회는 업데이트됩니다.
+        </p>
+        <button
+          onClick={handlePullEvents}
+          disabled={syncing}
+          className="w-full bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+        >
+          {syncing ? '가져오는 중...' : '📥 앱A 대회 목록 가져오기'}
+        </button>
+      </div>
 
       {/* 대회 선택 */}
       <div className="bg-white rounded-lg border p-4">
@@ -266,12 +306,13 @@ export default function SyncDashboardPage() {
           {syncResult && (
             <div className={`rounded-lg border p-4 ${syncResult.success ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
               <h3 className={`font-semibold text-sm ${syncResult.success ? 'text-green-800' : 'text-red-800'}`}>
-                {syncResult.type === 'team' ? '단체전' : syncResult.type === 'push-results' ? '본선 결과 전송' : '개인전'} 동기화 결과
+                {syncResult.type === 'team' ? '단체전' : syncResult.type === 'push-results' ? '본선 결과 전송' : syncResult.type === 'pull-events' ? '대회 가져오기' : '개인전'} 동기화 결과
               </h3>
               <div className="text-sm mt-2 space-y-1">
                 {syncResult.success ? (
                   <>
-                    <p className="text-green-700">✅ 성공: {syncResult.synced}건 동기화</p>
+                    <p className="text-green-700">✅ 성공: {syncResult.synced}건 추가</p>
+                    {syncResult.updated > 0 && <p className="text-blue-600">🔄 업데이트: {syncResult.updated}건</p>}
                     {syncResult.skipped > 0 && <p className="text-gray-600">⏩ 스킵: {syncResult.skipped}건 (이미 동기화됨)</p>}
                     <p className="text-gray-600">전체: {syncResult.total}건</p>
                   </>
