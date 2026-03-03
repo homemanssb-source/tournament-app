@@ -2,13 +2,14 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
-interface VenuePin {
+interface Venue {
   id: string
   event_id: string
-  venue_name: string
-  pin_code: string
-  is_active: boolean
-  created_at: string
+  name: string
+  courts: string[]
+  pin_plain: string
+  manager_name: string
+  phone: string | null
 }
 
 export default function SettingsPage() {
@@ -21,9 +22,11 @@ export default function SettingsPage() {
   const [pinMsg, setPinMsg] = useState('')
   const [pinSaving, setPinSaving] = useState(false)
 
-  const [venuePins, setVenuePins] = useState<VenuePin[]>([])
+  const [venues, setVenues] = useState<Venue[]>([])
   const [newVenueName, setNewVenueName] = useState('')
   const [newVenuePin, setNewVenuePin] = useState('')
+  const [newVenueCourts, setNewVenueCourts] = useState('')
+  const [newVenueManager, setNewVenueManager] = useState('')
   const [venueMsg, setVenueMsg] = useState('')
   const [venueLoading, setVenueLoading] = useState(true)
 
@@ -32,7 +35,7 @@ export default function SettingsPage() {
     if (stored) {
       setEventId(stored)
       loadEvent(stored)
-      loadVenuePins(stored)
+      loadVenues(stored)
     }
   }, [])
 
@@ -44,11 +47,11 @@ export default function SettingsPage() {
     }
   }
 
-  async function loadVenuePins(eid: string) {
+  async function loadVenues(eid: string) {
     setVenueLoading(true)
-    const { data } = await supabase.from('venue_pins').select('*')
+    const { data } = await supabase.from('venues').select('*')
       .eq('event_id', eid).order('created_at')
-    setVenuePins(data || [])
+    setVenues(data || [])
     setVenueLoading(false)
   }
 
@@ -56,13 +59,10 @@ export default function SettingsPage() {
     if (!newPin.trim()) { setPinMsg('! PIN을 입력하세요.'); return }
     if (newPin.length < 4) { setPinMsg('! PIN은 최소 4자리 이상이어야 합니다.'); return }
     if (newPin !== confirmPin) { setPinMsg('! PIN 확인이 일치하지 않습니다.'); return }
-
     setPinSaving(true); setPinMsg('')
     const { error } = await supabase.rpc('rpc_set_master_pin', {
-      p_event_id: eventId,
-      p_new_pin: newPin.trim()
+      p_event_id: eventId, p_new_pin: newPin.trim()
     })
-
     setPinSaving(false)
     if (error) { setPinMsg('! ' + error.message); return }
     setPinMsg('OK 마스터 PIN이 변경되었습니다.')
@@ -70,41 +70,37 @@ export default function SettingsPage() {
     setNewPin(''); setConfirmPin('')
   }
 
-  async function addVenuePin() {
+  async function addVenue() {
     if (!newVenueName.trim()) { setVenueMsg('! 경기장 이름을 입력하세요.'); return }
-    if (!newVenuePin.trim()) { setVenueMsg('! PIN을 입력하세요.'); return }
-    if (newVenuePin.length < 4) { setVenueMsg('! PIN은 최소 4자리 이상이어야 합니다.'); return }
-
+    if (!newVenuePin.trim() || newVenuePin.length < 4) { setVenueMsg('! PIN 4자리 이상 입력하세요.'); return }
     setVenueMsg('')
-    const { error } = await supabase.from('venue_pins').insert({
+    const courts = newVenueCourts.trim()
+      ? newVenueCourts.split(',').map(c => c.trim()).filter(Boolean)
+      : [newVenueName.trim()]
+    const { error } = await supabase.from('venues').insert({
       event_id: eventId,
-      venue_name: newVenueName.trim(),
-      pin_code: newVenuePin.trim(),
+      name: newVenueName.trim(),
+      courts: courts,
+      pin_plain: newVenuePin.trim(),
+      pin_hash: newVenuePin.trim(),
+      manager_name: newVenueManager.trim() || newVenueName.trim() + ' 관리자',
     })
     if (error) { setVenueMsg('! ' + error.message); return }
-    setVenueMsg('OK 부설경기장 PIN 추가됨')
-    setNewVenueName(''); setNewVenuePin('')
-    loadVenuePins(eventId)
+    setVenueMsg('OK 경기장 추가됨')
+    setNewVenueName(''); setNewVenuePin(''); setNewVenueCourts(''); setNewVenueManager('')
+    loadVenues(eventId)
   }
 
-  async function toggleVenuePin(pin: VenuePin) {
-    const { error } = await supabase.from('venue_pins').update({
-      is_active: !pin.is_active
-    }).eq('id', pin.id)
-    if (error) { setVenueMsg('! ' + error.message); return }
-    loadVenuePins(eventId)
-  }
-
-  async function deleteVenuePin(pin: VenuePin) {
-    if (!confirm(pin.venue_name + ' PIN을 삭제하시겠습니까?')) return
-    const { error } = await supabase.from('venue_pins').delete().eq('id', pin.id)
+  async function deleteVenue(v: Venue) {
+    if (!confirm(v.name + ' 삭제하시겠습니까?')) return
+    const { error } = await supabase.from('venues').delete().eq('id', v.id)
     if (error) { setVenueMsg('! ' + error.message); return }
     setVenueMsg('OK 삭제됨')
-    loadVenuePins(eventId)
+    loadVenues(eventId)
   }
 
   function generateRandomPin() {
-    return String(1000 + Math.floor(Math.random() * 9000))
+    return String(100000 + Math.floor(Math.random() * 900000))
   }
 
   if (!eventId) return <p className="text-stone-400">대시보드 홈에서 대회를 선택해주세요.</p>
@@ -122,8 +118,7 @@ export default function SettingsPage() {
             : <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">미설정</span>
           }
         </div>
-        <p className="text-xs text-stone-400">운영자 인증에 사용되는 PIN입니다. 스코어 수정, 결과 확정 등에 필요합니다.</p>
-
+        <p className="text-xs text-stone-400">운영자 인증에 사용되는 PIN입니다.</p>
         <div className="space-y-3">
           <div>
             <label className="block text-sm text-stone-600 mb-1">새 PIN</label>
@@ -140,8 +135,7 @@ export default function SettingsPage() {
           <div>
             <label className="block text-sm text-stone-600 mb-1">PIN 확인</label>
             <input type="text" value={confirmPin} onChange={e => setConfirmPin(e.target.value)}
-              placeholder="PIN 다시 입력"
-              onKeyDown={e => e.key === 'Enter' && saveMasterPin()}
+              placeholder="PIN 다시 입력" onKeyDown={e => e.key === 'Enter' && saveMasterPin()}
               className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm" />
           </div>
           {pinMsg && (
@@ -155,29 +149,30 @@ export default function SettingsPage() {
       </div>
 
       <div className="bg-white rounded-xl border p-5 space-y-4">
-        <h2 className="font-bold text-lg">부설경기장 PIN</h2>
-        <p className="text-xs text-stone-400">
-          부설경기장 관리자에게 PIN을 부여하면 해당 코트의 스코어를 입력할 수 있습니다.
-        </p>
-
-        <div className="flex gap-2">
-          <input type="text" value={newVenueName} onChange={e => setNewVenueName(e.target.value)}
-            placeholder="경기장 이름 (예: A코트)"
-            className="flex-1 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
-          <div className="flex gap-1">
-            <input type="text" value={newVenuePin} onChange={e => setNewVenuePin(e.target.value)}
-              placeholder="PIN"
-              onKeyDown={e => e.key === 'Enter' && addVenuePin()}
-              className="w-24 border border-stone-300 rounded-lg px-3 py-2 text-sm text-center" />
-            <button onClick={() => setNewVenuePin(generateRandomPin())}
-              className="text-xs bg-stone-100 text-stone-600 px-2 py-2 rounded-lg hover:bg-stone-200">
-              랜덤
-            </button>
+        <h2 className="font-bold text-lg">부설경기장 관리</h2>
+        <p className="text-xs text-stone-400">부설경기장별 PIN을 설정하면 해당 경기장 관리자가 스코어를 입력할 수 있습니다.</p>
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input type="text" value={newVenueName} onChange={e => setNewVenueName(e.target.value)}
+              placeholder="경기장 이름 (예: C경기장)"
+              className="flex-1 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+            <div className="flex gap-1">
+              <input type="text" value={newVenuePin} onChange={e => setNewVenuePin(e.target.value)}
+                placeholder="PIN" className="w-24 border border-stone-300 rounded-lg px-3 py-2 text-sm text-center" />
+              <button onClick={() => setNewVenuePin(generateRandomPin())}
+                className="text-xs bg-stone-100 text-stone-600 px-2 py-2 rounded-lg hover:bg-stone-200">랜덤</button>
+            </div>
           </div>
-          <button onClick={addVenuePin}
-            disabled={!newVenueName.trim() || !newVenuePin.trim()}
-            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 whitespace-nowrap">
-            + 추가
+          <div className="flex gap-2">
+            <input type="text" value={newVenueCourts} onChange={e => setNewVenueCourts(e.target.value)}
+              placeholder="코트 목록 (예: 코트 7, 코트 8) - 비우면 자동"
+              className="flex-1 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+            <input type="text" value={newVenueManager} onChange={e => setNewVenueManager(e.target.value)}
+              placeholder="관리자명" className="w-28 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <button onClick={addVenue} disabled={!newVenueName.trim() || !newVenuePin.trim()}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50">
+            + 경기장 추가
           </button>
         </div>
 
@@ -187,45 +182,35 @@ export default function SettingsPage() {
 
         {venueLoading ? (
           <p className="text-stone-400 text-sm text-center py-4">불러오는 중...</p>
-        ) : venuePins.length === 0 ? (
-          <p className="text-stone-400 text-sm text-center py-4">등록된 부설경기장 PIN이 없습니다.</p>
+        ) : venues.length === 0 ? (
+          <p className="text-stone-400 text-sm text-center py-4">등록된 경기장이 없습니다.</p>
         ) : (
           <div className="divide-y rounded-lg border overflow-hidden">
-            {venuePins.map(vp => (
-              <div key={vp.id} className={`flex items-center justify-between px-4 py-3 ${vp.is_active ? '' : 'bg-stone-50 opacity-60'}`}>
-                <div className="flex items-center gap-3">
-                  <span className={`w-2 h-2 rounded-full ${vp.is_active ? 'bg-green-500' : 'bg-stone-300'}`} />
-                  <div>
-                    <span className="font-medium text-sm">{vp.venue_name}</span>
-                    <span className="ml-3 font-mono text-sm text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{vp.pin_code}</span>
+            {venues.map(v => (
+              <div key={v.id} className="px-4 py-3 flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-sm">{v.name}</span>
+                    <span className="font-mono text-sm text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{v.pin_plain}</span>
+                  </div>
+                  <div className="text-xs text-stone-400 mt-1">
+                    {v.manager_name && <span className="mr-3">관리자: {v.manager_name}</span>}
+                    {v.courts && <span>코트: {Array.isArray(v.courts) ? v.courts.join(', ') : v.courts}</span>}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => toggleVenuePin(vp)}
-                    className={`text-xs px-3 py-1 rounded-lg ${vp.is_active
-                      ? 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
-                      : 'bg-green-100 text-green-700 hover:bg-green-200'
-                    }`}>
-                    {vp.is_active ? '비활성화' : '활성화'}
-                  </button>
-                  <button onClick={() => deleteVenuePin(vp)}
-                    className="text-xs text-stone-400 hover:text-red-500 px-2 py-1">
-                    삭제
-                  </button>
-                </div>
+                <button onClick={() => deleteVenue(v)}
+                  className="text-xs text-stone-400 hover:text-red-500 px-2 py-1">삭제</button>
               </div>
             ))}
           </div>
         )}
 
-        {venuePins.length > 0 && (
+        {venues.length > 0 && (
           <button onClick={() => {
-            const text = venuePins.filter(v => v.is_active).map(v => `${v.venue_name}: ${v.pin_code}`).join('\n')
+            const text = venues.map(v => v.name + ': ' + v.pin_plain).join('\n')
             navigator.clipboard.writeText(text)
-            setVenueMsg('OK 활성 PIN 목록이 복사되었습니다.')
-          }} className="text-xs text-blue-600 hover:underline">
-            활성 PIN 목록 복사
-          </button>
+            setVenueMsg('OK PIN 목록이 복사되었습니다.')
+          }} className="text-xs text-blue-600 hover:underline">PIN 목록 복사</button>
         )}
       </div>
     </div>
