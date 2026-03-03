@@ -128,6 +128,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
           {/* ── 앱A 연동 ── */}
           {navLink('/dashboard/sync', '앱A 연동', '🔄')}
+          {navLink('/dashboard/settings', '설정', '⚙️')}
 
           <hr className="my-2" />
           <button onClick={handleLogout}
