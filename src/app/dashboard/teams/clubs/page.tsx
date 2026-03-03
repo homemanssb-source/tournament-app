@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
 import {
   fetchClubs, fetchClubMembers, createClub, updateClub, deleteClub,
   addClubMember, addClubMembersBatch, deleteClubMember, fetchEventTeamConfig,
@@ -141,6 +142,20 @@ export default function ClubsPage() {
     if (!selectedClub) return;
     await deleteClubMember(memberId);
     await loadMembers(selectedClub);
+  }
+
+  // 주장 변경
+  async function handleSetCaptain(member: ClubMember) {
+    if (!selectedClub) return;
+    // 기존 주장 해제
+    await supabase.from('club_members').update({ is_captain: false }).eq('club_id', selectedClub.id);
+    // 새 주장 설정
+    await supabase.from('club_members').update({ is_captain: true }).eq('id', member.id);
+    // 클럽 테이블에도 주장 이름 업데이트
+    await supabase.from('clubs').update({ captain_name: member.name }).eq('id', selectedClub.id);
+    // 리로드
+    await loadMembers(selectedClub);
+    await loadClubs();
   }
 
   if (loading) return <div className="p-8 text-center text-gray-500">로딩중...</div>;
@@ -357,12 +372,22 @@ export default function ClubsPage() {
                             <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">주장</span>
                           )}
                         </div>
-                        <button
-                          onClick={() => handleDeleteMember(m.id)}
-                          className="text-xs text-red-400 hover:text-red-600"
-                        >
-                          ✕
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {!m.is_captain && (
+                            <button
+                              onClick={() => handleSetCaptain(m)}
+                              className="text-xs text-blue-400 hover:text-blue-600"
+                            >
+                              주장 지정
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDeleteMember(m.id)}
+                            className="text-xs text-red-400 hover:text-red-600"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
