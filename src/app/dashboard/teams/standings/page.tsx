@@ -1,7 +1,7 @@
 // ============================================================
 // 순위표 + 수동 순위 지정
 // src/app/dashboard/teams/standings/page.tsx
-// FIX: group_index → group_num, group_name → group_label
+// + 부서 선택 탭 추가
 // ============================================================
 'use client';
 
@@ -10,6 +10,8 @@ import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { fetchStandings, fetchEventTeamConfig, calculateStandings, setManualRank } from '@/lib/team-api';
 import type { StandingWithClub, EventTeamConfig } from '@/types/team';
+
+interface Division { id: string; name: string; sort_order: number; }
 
 export default function StandingsPage() {
   const searchParams = useSearchParams();
@@ -24,11 +26,20 @@ export default function StandingsPage() {
   const [manualNotes, setManualNotes] = useState('');
   const [savingManual, setSavingManual] = useState(false);
 
+  // 부서
+  const [divisions, setDivisions] = useState<Division[]>([]);
+  const [selectedDiv, setSelectedDiv] = useState<string>('all');
+
   const loadData = useCallback(async () => {
     if (!eventId) return;
     setLoading(true);
     const cfg = await fetchEventTeamConfig(eventId);
     setConfig(cfg);
+
+    // 부서 로드
+    const { data: divs } = await supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order');
+    setDivisions(divs || []);
+
     const map: Record<string, StandingWithClub[]> = {};
     if (cfg?.team_format === 'full_league') {
       map['full'] = await fetchStandings(eventId, null);
@@ -99,6 +110,22 @@ export default function StandingsPage() {
           {recalculating ? '계산중...' : '🔄 순위 재계산'}</button>
       </div>
 
+      {/* 부서 선택 탭 */}
+      {divisions.length > 0 && (
+        <div className="flex gap-1 overflow-x-auto">
+          <button onClick={() => setSelectedDiv('all')}
+            className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+              selectedDiv === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}>전체</button>
+          {divisions.map(d => (
+            <button key={d.id} onClick={() => setSelectedDiv(d.id)}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                selectedDiv === d.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}>{d.name}</button>
+          ))}
+        </div>
+      )}
+
       {hasTied && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
           <span className="text-yellow-500 text-xl">⚠️</span>
@@ -109,6 +136,12 @@ export default function StandingsPage() {
 
       {allEntries.map(([key, standings]) => {
         const group = groups.find(g => g.id === key);
+
+        // 부서 필터: 그룹의 division_id가 selectedDiv와 일치하는지
+        if (selectedDiv !== 'all' && group && group.division_id && group.division_id !== selectedDiv) {
+          return null;
+        }
+
         const groupName = key === 'full' ? '풀리그 순위표' : (group?.group_label || group?.group_name || key);
         return (
           <div key={key} className="bg-white rounded-lg border overflow-hidden">
