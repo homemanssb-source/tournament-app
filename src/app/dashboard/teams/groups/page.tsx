@@ -1,7 +1,7 @@
 // ============================================================
 // 조편성 페이지
 // src/app/dashboard/teams/groups/page.tsx
-// FIX: group_index → group_num, group_name → group_label
+// + 부서 선택 탭 추가
 // ============================================================
 'use client';
 
@@ -11,6 +11,8 @@ import { fetchClubs, fetchEventTeamConfig, fetchStandings, fetchTies, generateFu
 import { supabase } from '@/lib/supabase';
 import { getFormatLabel, getFullLeagueTieCount } from '@/lib/team-utils';
 import type { Club, EventTeamConfig, StandingWithClub, TieWithClubs } from '@/types/team';
+
+interface Division { id: string; name: string; sort_order: number; }
 
 function calcGroupDistribution(totalTeams: number, groupSize: number): number[] {
   if (totalTeams < 2) return [];
@@ -41,7 +43,16 @@ export default function GroupsPage() {
   const [generating, setGenerating] = useState(false);
   const [groupSize, setGroupSize] = useState(3);
 
-  const distribution = useMemo(() => calcGroupDistribution(clubs.length, groupSize), [clubs.length, groupSize]);
+  // 부서
+  const [divisions, setDivisions] = useState<Division[]>([]);
+  const [selectedDiv, setSelectedDiv] = useState<string>('all');
+
+  const filteredClubs = useMemo(() => {
+    if (selectedDiv === 'all') return clubs;
+    return clubs.filter(c => (c as any).division_id === selectedDiv);
+  }, [clubs, selectedDiv]);
+
+  const distribution = useMemo(() => calcGroupDistribution(filteredClubs.length, groupSize), [filteredClubs.length, groupSize]);
   const groupCount = distribution.length;
 
   const loadData = useCallback(async () => {
@@ -49,6 +60,11 @@ export default function GroupsPage() {
     setLoading(true);
     const [cfg, clubList] = await Promise.all([fetchEventTeamConfig(eventId), fetchClubs(eventId)]);
     setConfig(cfg); setClubs(clubList);
+
+    // 부서 로드
+    const { data: divs } = await supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order');
+    setDivisions(divs || []);
+
     const { data: grps } = await supabase.from('groups').select('*').eq('event_id', eventId).order('group_num');
     setGroups(grps || []);
     if (grps?.length) {
@@ -66,7 +82,7 @@ export default function GroupsPage() {
   useEffect(() => { loadData(); }, [loadData]);
 
   async function handleFullLeague() {
-    if (!confirm(`${clubs.length}팀 풀리그를 생성합니다. (${getFullLeagueTieCount(clubs.length)}대전)`)) return;
+    if (!confirm(`${filteredClubs.length}팀 풀리그를 생성합니다. (${getFullLeagueTieCount(filteredClubs.length)}대전)`)) return;
     setGenerating(true);
     try { const r = await generateFullLeague(eventId); if (!r.success) { alert(r.error); return; } await loadData(); }
     catch (err: any) { alert(err.message || '풀리그 생성 실패'); }
@@ -91,16 +107,32 @@ export default function GroupsPage() {
     <div className="max-w-5xl mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">🏟️ 조편성</h1>
-        <span className="text-sm text-gray-500">{clubs.length}팀 · {config ? getFormatLabel(config.team_format) : ''}</span>
+        <span className="text-sm text-gray-500">{filteredClubs.length}팀 · {config ? getFormatLabel(config.team_format) : ''}</span>
       </div>
 
-      {clubs.length < 2 && <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-yellow-800">최소 2팀 이상 등록해야 조편성이 가능합니다.</div>}
+      {/* 부서 선택 탭 */}
+      {divisions.length > 0 && (
+        <div className="flex gap-1 overflow-x-auto">
+          <button onClick={() => setSelectedDiv('all')}
+            className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+              selectedDiv === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}>전체</button>
+          {divisions.map(d => (
+            <button key={d.id} onClick={() => setSelectedDiv(d.id)}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                selectedDiv === d.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}>{d.name}</button>
+          ))}
+        </div>
+      )}
 
-      {clubs.length >= 2 && (<>
+      {filteredClubs.length < 2 && <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-yellow-800">최소 2팀 이상 등록해야 조편성이 가능합니다.</div>}
+
+      {filteredClubs.length >= 2 && (<>
         {config?.team_format === 'full_league' && (
           <div className="bg-white rounded-lg border p-6 space-y-4">
             <h2 className="font-semibold">풀리그 생성</h2>
-            <p className="text-sm text-gray-500">{clubs.length}팀 전체 라운드로빈 → {getFullLeagueTieCount(clubs.length)}대전</p>
+            <p className="text-sm text-gray-500">{filteredClubs.length}팀 전체 라운드로빈 → {getFullLeagueTieCount(filteredClubs.length)}대전</p>
             <button onClick={handleFullLeague} disabled={generating} className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50">
               {generating ? '생성중...' : hasTies ? '풀리그 재생성' : '풀리그 생성'}</button>
             {hasTies && <p className="text-xs text-red-500">⚠️ 재생성 시 기존 대전/스코어가 초기화됩니다.</p>}
@@ -125,7 +157,7 @@ export default function GroupsPage() {
                       {String.fromCharCode(65 + i)}조: {size}팀</span>
                   ))}
                 </div>
-                <p className="text-xs text-blue-600">총 {distribution.reduce((a, b) => a + b, 0)}팀 배정 (등록: {clubs.length}팀)</p>
+                <p className="text-xs text-blue-600">총 {distribution.reduce((a, b) => a + b, 0)}팀 배정 (등록: {filteredClubs.length}팀)</p>
               </div>
             )}
             <button onClick={handleCreateGroups} disabled={generating || distribution.length === 0}
@@ -135,11 +167,11 @@ export default function GroupsPage() {
           </div>
         )}
 
-        {clubs.some(c => c.seed_number) && (
+        {filteredClubs.some(c => c.seed_number) && (
           <div className="bg-yellow-50 rounded-lg border border-yellow-200 p-4">
             <h3 className="font-semibold text-sm text-yellow-800 mb-2">시드 클럽</h3>
             <div className="flex flex-wrap gap-2">
-              {clubs.filter(c => c.seed_number).sort((a, b) => (a.seed_number||0) - (b.seed_number||0))
+              {filteredClubs.filter(c => c.seed_number).sort((a, b) => (a.seed_number||0) - (b.seed_number||0))
                 .map(c => <span key={c.id} className="bg-yellow-100 text-yellow-900 px-3 py-1 rounded text-sm">{c.seed_number}시드: {c.name}</span>)}
             </div>
           </div>

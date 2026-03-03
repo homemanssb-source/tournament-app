@@ -17,11 +17,13 @@ import type {
 // 클럽 CRUD
 // ════════════════════════════════════════
 
-export async function fetchClubs(eventId: string): Promise<Club[]> {
-  const { data, error } = await supabase
+export async function fetchClubs(eventId: string, divisionId?: string | null): Promise<Club[]> {
+  let query = supabase
     .from('clubs')
     .select('*')
-    .eq('event_id', eventId)
+    .eq('event_id', eventId);
+  if (divisionId) query = query.eq('division_id', divisionId);
+  const { data, error } = await query
     .order('seed_number', { ascending: true, nullsFirst: false })
     .order('created_at');
   if (error) throw error;
