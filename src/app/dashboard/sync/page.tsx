@@ -4,13 +4,13 @@
 // ============================================================
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { fetchClubs } from '@/lib/team-api';
 import type { Club, SyncLog } from '@/types/team';
 
-export default function SyncDashboardPage() {
+function SyncDashboardInner() {
   const searchParams = useSearchParams();
   const eventId = searchParams.get('event_id') || '';
 
