@@ -64,9 +64,19 @@ export default function SettingsPage() {
     if (newPin !== confirmPin) { setPinMsg('❌ PIN 확인이 일치하지 않습니다.'); return }
 
     setPinSaving(true); setPinMsg('')
-    const { error } = await supabase.from('events').update({
-      master_pin_hash: newPin.trim()
-    }).eq('id', eventId)
+    const { error } = await supabase.rpc('rpc_set_master_pin', {
+      p_event_id: eventId,
+      p_new_pin: newPin.trim()
+    })
+```
+
+파일 위치: `src\app\dashboard\settings\page.tsx`
+
+수정 후 push:
+```
+git add .
+git commit -m "fix: 마스터PIN bcrypt 해시 저장으로 수정"
+git push origin main
 
     setPinSaving(false)
     if (error) { setPinMsg('❌ ' + error.message); return }
