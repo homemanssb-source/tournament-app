@@ -26,9 +26,6 @@ export default function SyncDashboardPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<any>(null);
 
-  // 앱A 통계 (연동 후 표시용)
-  const [appAStats, setAppAStats] = useState<{ teamEntries: number; individualEntries: number } | null>(null);
-
   // 대회 목록
   useEffect(() => {
     (async () => {
@@ -122,6 +119,31 @@ export default function SyncDashboardPage() {
     }
   }
 
+  // 본선 결과 → 앱A 전송
+  async function handlePushResults() {
+    if (!event?.app_a_event_id) return alert('먼저 앱A 대회를 연결하세요.');
+    setSyncing(true);
+    setSyncResult(null);
+
+    try {
+      const res = await fetch('/api/sync/push-results', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id: selectedEventId,
+          app_a_event_id: event.app_a_event_id,
+        }),
+      });
+      const result = await res.json();
+      setSyncResult({ type: 'push-results', ...result });
+      await loadEventData();
+    } catch (err: any) {
+      setSyncResult({ type: 'push-results', success: false, error: err.message });
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   // 동기화 통계
   const teamLogs = syncLogs.filter(l => l.sync_type === 'team');
   const individualLogs = syncLogs.filter(l => l.sync_type === 'individual');
@@ -188,35 +210,53 @@ export default function SyncDashboardPage() {
 
           {/* 연동 패널 */}
           {event?.app_a_connected && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* 개인전 */}
-              <div className="bg-white rounded-lg border p-6 space-y-3">
-                <h3 className="font-semibold">개인전 참가자</h3>
-                <div className="text-sm text-gray-600 space-y-1">
-                  <p>앱B 등록: {individualLogs.length}팀 동기화됨</p>
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* 개인전 */}
+                <div className="bg-white rounded-lg border p-6 space-y-3">
+                  <h3 className="font-semibold">🎾 개인전 참가자</h3>
+                  <div className="text-sm text-gray-600 space-y-1">
+                    <p>앱B 등록: {individualLogs.length}팀 동기화됨</p>
+                  </div>
+                  <button
+                    onClick={handlePullIndividual}
+                    disabled={syncing}
+                    className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {syncing ? '동기화중...' : '🔄 개인전 가져오기'}
+                  </button>
                 </div>
-                <button
-                  onClick={handlePullIndividual}
-                  disabled={syncing}
-                  className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {syncing ? '동기화중...' : '🔄 개인전 가져오기'}
-                </button>
+
+                {/* 단체전 */}
+                <div className="bg-white rounded-lg border p-6 space-y-3">
+                  <h3 className="font-semibold">📋 단체전 참가팀</h3>
+                  <div className="text-sm text-gray-600 space-y-1">
+                    <p>앱B 등록: {clubs.length}클럽</p>
+                    <p>동기화 이력: {teamLogs.length}건</p>
+                  </div>
+                  <button
+                    onClick={handlePullTeam}
+                    disabled={syncing}
+                    className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 disabled:opacity-50"
+                  >
+                    {syncing ? '동기화중...' : '🔄 단체전 가져오기'}
+                  </button>
+                </div>
               </div>
 
-              {/* 단체전 */}
+              {/* 본선 결과 → 앱A 전송 */}
               <div className="bg-white rounded-lg border p-6 space-y-3">
-                <h3 className="font-semibold">단체전 참가팀</h3>
-                <div className="text-sm text-gray-600 space-y-1">
-                  <p>앱B 등록: {clubs.length}클럽</p>
-                  <p>동기화 이력: {teamLogs.length}건</p>
-                </div>
+                <h3 className="font-semibold">📤 본선 결과 → 앱A 전송</h3>
+                <p className="text-sm text-gray-500">
+                  개인전 본선(토너먼트) 완료된 경기의 순위와 포인트를 앱A에 전송합니다.
+                  복식 팀 2명 각각에게 개별 포인트가 부여됩니다.
+                </p>
                 <button
-                  onClick={handlePullTeam}
+                  onClick={handlePushResults}
                   disabled={syncing}
-                  className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 disabled:opacity-50"
+                  className="w-full bg-purple-600 text-white py-3 rounded-lg hover:bg-purple-700 disabled:opacity-50"
                 >
-                  {syncing ? '동기화중...' : '🔄 단체전 가져오기'}
+                  {syncing ? '전송중...' : '📤 본선 결과 전송하기'}
                 </button>
               </div>
             </div>
@@ -226,7 +266,7 @@ export default function SyncDashboardPage() {
           {syncResult && (
             <div className={`rounded-lg border p-4 ${syncResult.success ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
               <h3 className={`font-semibold text-sm ${syncResult.success ? 'text-green-800' : 'text-red-800'}`}>
-                {syncResult.type === 'team' ? '단체전' : '개인전'} 동기화 결과
+                {syncResult.type === 'team' ? '단체전' : syncResult.type === 'push-results' ? '본선 결과 전송' : '개인전'} 동기화 결과
               </h3>
               <div className="text-sm mt-2 space-y-1">
                 {syncResult.success ? (
@@ -238,6 +278,9 @@ export default function SyncDashboardPage() {
                 ) : (
                   <p className="text-red-700">❌ 실패: {syncResult.error}</p>
                 )}
+                {syncResult.unmatched?.map((u: string, i: number) => (
+                  <p key={`u${i}`} className="text-orange-600 text-xs">👤 매칭실패: {u}</p>
+                ))}
                 {syncResult.errors?.map((e: string, i: number) => (
                   <p key={i} className="text-red-600 text-xs">⚠️ {e}</p>
                 ))}
