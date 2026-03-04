@@ -5,6 +5,7 @@
 // 앱A의 team_event_entries + team_event_members를
 // 앱B의 clubs + club_members에 동기화
 // - 클럽 매칭: name + division_id 기준 (부서별 분리)
+// ★ 수정: team_match_type 기반 rubber_count 동기화
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -44,6 +45,22 @@ export async function POST(request: NextRequest) {
     const appA = getAppAClient();
     const appB = getAppBServiceClient();
 
+    // ★ 신규: 앱A에서 해당 대회의 경기방식 조회
+    const { data: appAEvent } = await appA
+      .from('events')
+      .select('team_match_type')
+      .eq('event_id', app_a_event_id)
+      .single();
+
+    const teamMatchType = appAEvent?.team_match_type || '3_doubles';
+    const rubberCount = teamMatchType === '5_doubles' ? 5 : 3;
+
+    // ★ 신규: 앱B events 테이블에 team_match_type, team_rubber_count 업데이트
+    await appB.from('events').update({
+      team_match_type: teamMatchType,
+      team_rubber_count: rubberCount,
+    }).eq('id', event_id);
+
     // 앱A에서 단체전 엔트리 가져오기
     const { data: entries, error: entriesErr } = await appA
       .from('team_event_entries')
@@ -56,7 +73,13 @@ export async function POST(request: NextRequest) {
     }
 
     if (!entries || entries.length === 0) {
-      return NextResponse.json({ success: true, message: '동기화할 데이터가 없습니다.', synced: 0 }, { headers: corsHeaders });
+      return NextResponse.json({
+        success: true,
+        message: '동기화할 데이터가 없습니다.',
+        synced: 0,
+        team_match_type: teamMatchType,
+        rubber_count: rubberCount,
+      }, { headers: corsHeaders });
     }
 
     // 앱A 부서 정보 조회
@@ -208,6 +231,8 @@ export async function POST(request: NextRequest) {
       synced: syncedCount,
       skipped: skippedCount,
       total: entries.length,
+      team_match_type: teamMatchType,   // ★ 응답에 경기방식 포함
+      rubber_count: rubberCount,        // ★ 응답에 rubber_count 포함
       errors: errors.length > 0 ? errors : undefined,
     }, { headers: corsHeaders });
 

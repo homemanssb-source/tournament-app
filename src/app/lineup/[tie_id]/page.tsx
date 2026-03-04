@@ -5,6 +5,7 @@
 // - PIN 자동 인증 (sessionStorage)
 // - submitted 상태에서 5초 폴링 → 상대 제출 시 자동 revealed
 // - 점수: 이긴 팀 선택 → 점수 → 확정 (1회, 수정불가)
+// ★ 수정: events.team_match_type 읽어서 경기방식 표시
 // ============================================================
 'use client';
 
@@ -12,7 +13,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { fetchClubMembers, fetchLineups, fetchRevealedLineups, submitLineup, fetchRubbers } from '@/lib/team-api';
-import { getGenderLabel, formatSetScore } from '@/lib/team-utils';
+import { getGenderLabel, formatSetScore, getMatchTypeShort } from '@/lib/team-utils';
 import type { Tie, Club, ClubMember, TeamLineup, LineupEntry, TieRubber } from '@/types/team';
 
 type Step = 'pin' | 'edit' | 'submitted' | 'revealed';
@@ -47,6 +48,8 @@ export default function LineupPage() {
   const [scoreSaving, setScoreSaving] = useState(false);
   const [scoreError, setScoreError] = useState('');
   const [setsPerRubber, setSetsPerRubber] = useState(1);
+  // ★ 신규: 경기방식 표시용
+  const [teamMatchType, setTeamMatchType] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clubARef = useRef<Club | null>(null);
   const clubBRef = useRef<Club | null>(null);
@@ -60,8 +63,12 @@ export default function LineupPage() {
       const { data: cb } = await supabase.from('clubs').select('*').eq('id', t.club_b_id).single();
       setClubA(ca); setClubB(cb);
       clubARef.current = ca; clubBRef.current = cb;
-      const { data: ev } = await supabase.from('events').select('team_sets_per_rubber').eq('id', t.event_id).single();
+      // ★ 수정: team_match_type도 함께 조회
+      const { data: ev } = await supabase.from('events')
+        .select('team_sets_per_rubber, team_match_type')
+        .eq('id', t.event_id).single();
       setSetsPerRubber(ev?.team_sets_per_rubber || 1);
+      setTeamMatchType(ev?.team_match_type || null);
       if (t.lineup_revealed) {
         setStep('revealed');
         await loadRevealedData(tieId, ca, cb);
@@ -214,7 +221,17 @@ export default function LineupPage() {
       <div className="max-w-lg mx-auto p-6 space-y-6">
         <div className="text-center">
           <h1 className="text-xl font-bold">🎾 단체전</h1>
-          {clubA && clubB && <p className="text-gray-600 mt-1">{clubA.name} vs {clubB.name} · {tie?.rubber_count}복식</p>}
+          {/* ★ 수정: 경기방식 라벨 표시 */}
+          {clubA && clubB && (
+            <p className="text-gray-600 mt-1">
+              {clubA.name} vs {clubB.name} · {tie?.rubber_count}복식
+              {teamMatchType && (
+                <span className="ml-1 text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">
+                  {getMatchTypeShort(teamMatchType)}
+                </span>
+              )}
+            </p>
+          )}
         </div>
 
         {step === 'pin' && (
@@ -232,7 +249,9 @@ export default function LineupPage() {
           <div className="space-y-4">
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
               <p className="font-medium text-blue-800">📋 {myClub.name} 라인업 작성</p>
-              <p className="text-sm text-blue-600 mt-1">상대: {opponentClub?.name} · 제출 후 봉인됩니다.</p>
+              <p className="text-sm text-blue-600 mt-1">
+                상대: {opponentClub?.name} · {tie.rubber_count}복식 · 제출 후 봉인됩니다.
+              </p>
             </div>
             {lineups.map((lineup, idx) => (
               <div key={idx} className="bg-white rounded-xl border p-4">
@@ -294,7 +313,7 @@ export default function LineupPage() {
                 ) : (
                   <><p className="font-bold text-blue-800">🔓 라인업 확정 · 경기 진행중</p>
                   <div className="text-2xl font-bold mt-2">{clubA?.name} <span className="text-gray-400">{tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}</span> {clubB?.name}</div>
-                  <p className="text-xs text-blue-600 mt-1">{majority}승 선승제</p></>
+                  <p className="text-xs text-blue-600 mt-1">{majority}승 선승제 ({tie.rubber_count}복식)</p></>
                 )}
               </div>
             )}

@@ -4,6 +4,7 @@
 //
 // 앱A events → 앱B events 동기화
 // 앱A event_divisions → 앱B divisions 동기화
+// ★ 수정: team_match_type 동기화 추가
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -38,6 +39,12 @@ function mapStatus(appAStatus: string): string {
   if (s === 'OPEN' || s === 'ACTIVE') return 'active';
   if (s === 'CLOSED' || s === 'COMPLETED') return 'completed';
   return 'draft';
+}
+
+// ★ 신규: team_match_type → rubber_count 매핑
+function getRubberCount(teamMatchType: string | null): number {
+  if (teamMatchType === '5_doubles') return 5;
+  return 3; // 기본값
 }
 
 export async function POST(request: NextRequest) {
@@ -89,6 +96,7 @@ export async function POST(request: NextRequest) {
 
         if (existing) {
           appBEventId = existing.id;
+          // ★ 수정: team_match_type, team_rubber_count 업데이트 추가
           const { error: updateErr } = await appB
             .from('events')
             .update({
@@ -96,6 +104,8 @@ export async function POST(request: NextRequest) {
               date: ae.event_date,
               event_type: ae.event_type || 'individual',
               status: mapStatus(ae.status),
+              team_match_type: ae.team_match_type || null,
+              team_rubber_count: getRubberCount(ae.team_match_type),
             })
             .eq('id', existing.id);
 
@@ -105,6 +115,7 @@ export async function POST(request: NextRequest) {
           }
           updatedCount++;
         } else {
+          // ★ 수정: team_match_type, team_rubber_count 삽입 추가
           const { data: newEvent, error: insertErr } = await appB
             .from('events')
             .insert({
@@ -115,6 +126,8 @@ export async function POST(request: NextRequest) {
               location: '',
               app_a_event_id: ae.event_id,
               app_a_connected: true,
+              team_match_type: ae.team_match_type || null,
+              team_rubber_count: getRubberCount(ae.team_match_type),
             })
             .select('id')
             .single();
