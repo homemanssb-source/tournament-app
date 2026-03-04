@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // [앱B] 개인전 본선 결과 → 앱A 전송 API
 // src/app/api/sync/push-results/route.ts
 //
@@ -22,7 +22,7 @@ export async function OPTIONS() {
 }
 
 function getAppAClient() {
-  const url = 'https://bhvtfptvtepljrohfeic.supabase.co';
+  const url = process.env.APP_A_SUPABASE_URL!;
   const key = process.env.APP_A_ANON_KEY;
   if (!key) throw new Error('APP_A_ANON_KEY not set');
   return createClient(url, key);

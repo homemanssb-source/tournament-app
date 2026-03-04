@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // 앱A → 앱B 단체전 데이터 Pull API
 // src/app/api/sync/pull-team/route.ts
 //
@@ -22,7 +22,7 @@ export async function OPTIONS() {
 }
 
 function getAppAClient() {
-  const url = 'https://bhvtfptvtepljrohfeic.supabase.co';
+  const url = process.env.APP_A_SUPABASE_URL!;
   const key = process.env.APP_A_ANON_KEY;
   if (!key) throw new Error('APP_A_ANON_KEY not set');
   return createClient(url, key);

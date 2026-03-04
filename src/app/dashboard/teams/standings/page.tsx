@@ -1,7 +1,7 @@
 // ============================================================
 // 순위표 + 수동 순위 지정
 // src/app/dashboard/teams/standings/page.tsx
-// + 부서 선택 탭 추가
+// ★ 수정: 순위별 색상 강조 (1위 금, 2위 은, 3위 동)
 // ============================================================
 'use client';
 
@@ -12,6 +12,14 @@ import { fetchStandings, fetchEventTeamConfig, calculateStandings, setManualRank
 import type { StandingWithClub, EventTeamConfig } from '@/types/team';
 
 interface Division { id: string; name: string; sort_order: number; }
+
+// ★ 순위별 스타일
+function getRankStyle(rank: number | null) {
+  if (rank === 1) return { bg: 'bg-yellow-50', text: 'text-yellow-700', badge: 'bg-yellow-400 text-white', icon: '🥇' };
+  if (rank === 2) return { bg: 'bg-gray-50', text: 'text-gray-600', badge: 'bg-gray-400 text-white', icon: '🥈' };
+  if (rank === 3) return { bg: 'bg-orange-50', text: 'text-orange-600', badge: 'bg-orange-400 text-white', icon: '🥉' };
+  return { bg: '', text: '', badge: '', icon: '' };
+}
 
 export default function StandingsPage() {
   const searchParams = useSearchParams();
@@ -26,7 +34,6 @@ export default function StandingsPage() {
   const [manualNotes, setManualNotes] = useState('');
   const [savingManual, setSavingManual] = useState(false);
 
-  // 부서
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [selectedDiv, setSelectedDiv] = useState<string>('all');
 
@@ -36,7 +43,6 @@ export default function StandingsPage() {
     const cfg = await fetchEventTeamConfig(eventId);
     setConfig(cfg);
 
-    // 부서 로드
     const { data: divs } = await supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order');
     setDivisions(divs || []);
 
@@ -110,7 +116,6 @@ export default function StandingsPage() {
           {recalculating ? '계산중...' : '🔄 순위 재계산'}</button>
       </div>
 
-      {/* 부서 선택 탭 */}
       {divisions.length > 0 && (
         <div className="flex gap-1 overflow-x-auto">
           <button onClick={() => setSelectedDiv('all')}
@@ -137,7 +142,6 @@ export default function StandingsPage() {
       {allEntries.map(([key, standings]) => {
         const group = groups.find(g => g.id === key);
 
-        // 부서 필터: 그룹의 division_id가 selectedDiv와 일치하는지
         if (selectedDiv !== 'all' && group && group.division_id && group.division_id !== selectedDiv) {
           return null;
         }
@@ -165,15 +169,35 @@ export default function StandingsPage() {
                   {standings.length === 0 && <tr><td colSpan={9} className="px-4 py-6 text-center text-gray-400">데이터 없음</td></tr>}
                   {standings.map(s => {
                     const isTied = s.is_tied;
+                    // ★ 순위별 스타일
+                    const rs = getRankStyle(s.rank);
                     return (
-                      <tr key={s.id} className={isTied ? 'bg-yellow-50 cursor-pointer hover:bg-yellow-100' : ''}
+                      <tr key={s.id} className={`${
+                        isTied ? 'bg-yellow-50 cursor-pointer hover:bg-yellow-100' :
+                        rs.bg ? rs.bg + ' ' : ''
+                      }`}
                         onClick={isTied ? () => openManualRank(s, standings) : undefined}>
-                        <td className="px-4 py-3">{s.rank !== null ? <span className="font-bold text-lg">{s.rank}</span> : <span className="text-yellow-600 font-medium">—</span>}</td>
-                        <td className="px-4 py-3"><span className="font-medium">{s.club?.name || '-'}</span>
-                          {s.club?.seed_number && <span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">{s.club.seed_number}시드</span>}</td>
+                        <td className="px-4 py-3">
+                          {s.rank !== null ? (
+                            <span className="flex items-center gap-1">
+                              {/* ★ 메달 아이콘 */}
+                              {rs.icon && <span className="text-base">{rs.icon}</span>}
+                              <span className={`font-bold text-lg ${rs.text}`}>{s.rank}</span>
+                            </span>
+                          ) : <span className="text-yellow-600 font-medium">—</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`font-medium ${rs.text}`}>{s.club?.name || '-'}</span>
+                          {s.club?.seed_number && <span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">{s.club.seed_number}시드</span>}
+                        </td>
                         <td className="px-4 py-3 text-center">{s.played}</td>
-                        <td className="px-4 py-3 text-center font-medium">{s.won}</td>
-                        <td className="px-4 py-3 text-center">{s.lost}</td>
+                        {/* ★ 승수 강조 */}
+                        <td className="px-4 py-3 text-center font-bold">
+                          <span className={s.won > 0 ? 'text-blue-600' : ''}>{s.won}</span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={s.lost > 0 ? 'text-red-500' : ''}>{s.lost}</span>
+                        </td>
                         <td className="px-4 py-3 text-center">{s.rubbers_for}</td>
                         <td className="px-4 py-3 text-center">{s.rubbers_against}</td>
                         <td className="px-4 py-3 text-center font-bold"><span className={s.rubber_diff > 0 ? 'text-green-600' : s.rubber_diff < 0 ? 'text-red-600' : ''}>

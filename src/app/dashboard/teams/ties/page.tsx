@@ -1,7 +1,8 @@
 // ============================================================
-// 대전 관리 페이지 (운영자 대시보드)
+// 대전 관리 페이지 (운영본부용)
 // src/app/dashboard/teams/ties/page.tsx
-// + 코트 배정, 선수 표시
+// + 코트 배정, 점수 표시
+// ★ 수정: 승자 팀 강조 표시 (배경색 + 트로피)
 // ============================================================
 'use client';
 
@@ -30,7 +31,6 @@ export default function TiesPage() {
   const [saveError, setSaveError] = useState('');
   const [copiedTieId, setCopiedTieId] = useState<string | null>(null);
 
-  // 코트 배정
   const [courtCount, setCourtCount] = useState(20);
   const [editingCourt, setEditingCourt] = useState<string | null>(null);
   const [courtInput, setCourtInput] = useState('');
@@ -83,7 +83,6 @@ export default function TiesPage() {
     finally { setSaving(false); }
   }
 
-  // 코트 배정
   async function handleCourtAssign(tieId: string, courtNum: number | null) {
     await supabase.from('ties').update({ court_number: courtNum }).eq('id', tieId);
     setEditingCourt(null); setCourtInput('');
@@ -131,30 +130,49 @@ export default function TiesPage() {
           {group.ties.map(tie => {
             const isSelected = selectedTie?.id===tie.id;
             const maj = getMajority(tie.rubber_count);
-            const aWin = tie.club_a_rubbers_won>=maj, bWin = tie.club_b_rubbers_won>=maj;
+            const aWin = tie.club_a_rubbers_won>=maj && tie.status==='completed';
+            const bWin = tie.club_b_rubbers_won>=maj && tie.status==='completed';
             const isEditingThisCourt = editingCourt === tie.id;
             return (
-              <div key={tie.id} className="bg-white rounded-lg border overflow-hidden">
-                <div onClick={() => handleSelectTie(tie)} className="p-4 cursor-pointer hover:bg-gray-50 transition">
+              <div key={tie.id} className={`bg-white rounded-lg border overflow-hidden ${
+                tie.status==='completed' ? 'border-green-300' : ''
+              }`}>
+                <div onClick={() => handleSelectTie(tie)} className={`p-4 cursor-pointer hover:bg-gray-50 transition ${
+                  tie.status==='completed' ? 'bg-green-50/30' : ''
+                }`}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 flex-wrap">
                       <span className="text-xs text-gray-400">#{tie.tie_order}</span>
-                      <span className={`font-semibold ${aWin?'text-blue-600':''}`}>{tie.club_a?.name||'TBD'}</span>
+                      {/* ★ 승자 강조: 배경색 + 트로피 */}
+                      <span className={`font-semibold px-2 py-0.5 rounded ${
+                        aWin ? 'bg-blue-100 text-blue-700' : bWin ? 'text-gray-400' : ''
+                      }`}>
+                        {aWin && '🏆 '}{tie.club_a?.name||'TBD'}
+                      </span>
                       <span className="text-gray-400 text-sm">vs</span>
-                      <span className={`font-semibold ${bWin?'text-blue-600':''}`}>{tie.club_b?.name||'TBD'}</span>
-                      {/* 코트 표시 */}
+                      <span className={`font-semibold px-2 py-0.5 rounded ${
+                        bWin ? 'bg-blue-100 text-blue-700' : aWin ? 'text-gray-400' : ''
+                      }`}>
+                        {bWin && '🏆 '}{tie.club_b?.name||'TBD'}
+                      </span>
                       {tie.court_number && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">코트 {tie.court_number}</span>}
                     </div>
                     <div className="flex items-center gap-2">
-                      {(tie.status==='completed'||tie.status==='in_progress') && <span className="text-lg font-bold">{tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}</span>}
+                      {(tie.status==='completed'||tie.status==='in_progress') && (
+                        <span className="text-lg font-bold">
+                          <span className={aWin ? 'text-blue-700' : ''}>{tie.club_a_rubbers_won}</span>
+                          <span className="text-gray-400 mx-1">-</span>
+                          <span className={bWin ? 'text-blue-700' : ''}>{tie.club_b_rubbers_won}</span>
+                        </span>
+                      )}
                       <span className={`text-xs px-2 py-1 rounded-full ${getTieStatusColor(tie.status)}`}>{getTieStatusLabel(tie.status)}</span>
                       <span className="text-gray-400 text-sm">{isSelected?'▲':'▼'}</span>
                     </div>
                   </div>
                   <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
-                    <span>{tie.club_a?.name?.slice(0,6)}: {tie.club_a_lineup_submitted?<span className="text-green-600 ml-1">✅제출</span>:<span className="text-orange-500 ml-1">⏳대기</span>}</span>
-                    <span>{tie.club_b?.name?.slice(0,6)}: {tie.club_b_lineup_submitted?<span className="text-green-600 ml-1">✅제출</span>:<span className="text-orange-500 ml-1">⏳대기</span>}</span>
-                    {tie.lineup_revealed && <span className="text-blue-600">🔓공개됨</span>}
+                    <span>{tie.club_a?.name?.slice(0,6)}: {tie.club_a_lineup_submitted?<span className="text-green-600 ml-1">봉제출</span>:<span className="text-orange-500 ml-1">대기중</span>}</span>
+                    <span>{tie.club_b?.name?.slice(0,6)}: {tie.club_b_lineup_submitted?<span className="text-green-600 ml-1">봉제출</span>:<span className="text-orange-500 ml-1">대기중</span>}</span>
+                    {tie.lineup_revealed && <span className="text-blue-600">🔓공개완료</span>}
                   </div>
                 </div>
 
@@ -162,9 +180,8 @@ export default function TiesPage() {
                   <div className="border-t bg-gray-50 p-4 space-y-4">
                     <div className="flex gap-2 flex-wrap">
                       <button onClick={e => {e.stopPropagation();copyLineupUrl(tie.id);}} className="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-200">
-                        {copiedTieId===tie.id?'✅ 복사됨!':'📋 라인업 URL 복사'}</button>
+                        {copiedTieId===tie.id?'✅복사됨':'📋 라인업 URL 복사'}</button>
 
-                      {/* 코트 배정 */}
                       {!isEditingThisCourt ? (
                         <button onClick={e => { e.stopPropagation(); setEditingCourt(tie.id); setCourtInput(tie.court_number?.toString()||''); }}
                           className="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-lg hover:bg-green-200">
@@ -190,10 +207,22 @@ export default function TiesPage() {
                           const hasScore = r.set1_a!==null;
                           const laA = tieLineups.find(l => l.rubber_number===r.rubber_number && l.club_id===tie.club_a_id);
                           const laB = tieLineups.find(l => l.rubber_number===r.rubber_number && l.club_id===tie.club_b_id);
+                          // ★ 러버 승자 표시
+                          const rubberWinA = r.winning_club_id === tie.club_a_id;
+                          const rubberWinB = r.winning_club_id === tie.club_b_id;
                           return (
-                            <div key={r.id} className="bg-white rounded-lg border p-4">
+                            <div key={r.id} className={`bg-white rounded-lg border p-4 ${
+                              r.status==='completed' ? 'border-green-200' : ''
+                            }`}>
                               <div className="flex items-center justify-between mb-2">
-                                <span className="font-medium text-sm">복식 {r.rubber_number}</span>
+                                <span className="font-medium text-sm">
+                                  복식 {r.rubber_number}
+                                  {r.status==='completed' && r.winning_club_id && (
+                                    <span className="ml-2 text-xs text-blue-600 font-normal">
+                                      🏆 {r.winning_club_id===tie.club_a_id?tie.club_a?.name:tie.club_b?.name} 승
+                                    </span>
+                                  )}
+                                </span>
                                 <div className="flex items-center gap-2">
                                   {r.status==='completed' && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">완료</span>}
                                   {r.pin_code && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono">PIN: {r.pin_code}</span>}
@@ -201,9 +230,16 @@ export default function TiesPage() {
                               </div>
                               {(laA||laB) && (
                                 <div className="grid grid-cols-5 items-center gap-1 mb-3 text-xs">
-                                  <div className="col-span-2 text-right"><div>{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</div><div className="text-gray-400">{tie.club_a?.name}</div></div>
+                                  {/* ★ 라인업에서도 승자 강조 */}
+                                  <div className={`col-span-2 text-right rounded p-1 ${rubberWinA ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}>
+                                    <div>{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</div>
+                                    <div className="text-gray-400">{tie.club_a?.name}</div>
+                                  </div>
                                   <div className="text-center text-gray-400 font-bold">vs</div>
-                                  <div className="col-span-2 text-left"><div>{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</div><div className="text-gray-400">{tie.club_b?.name}</div></div>
+                                  <div className={`col-span-2 text-left rounded p-1 ${rubberWinB ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}>
+                                    <div>{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</div>
+                                    <div className="text-gray-400">{tie.club_b?.name}</div>
+                                  </div>
                                 </div>
                               )}
                               {!laA && !laB && tie.lineup_revealed && <p className="text-xs text-gray-400 mb-2">라인업 정보 없음</p>}
@@ -211,7 +247,7 @@ export default function TiesPage() {
                                 <div className="flex items-center justify-between">
                                   <div className="text-center flex-1"><div className="text-lg font-bold">{formatSetScore(r.set1_a,r.set1_b)}
                                     {r.set2_a!==null&&' / '+formatSetScore(r.set2_a,r.set2_b)}{r.set3_a!==null&&' / '+formatSetScore(r.set3_a,r.set3_b)}</div>
-                                    {r.winning_club_id && <div className="text-xs text-blue-600 mt-1">승: {r.winning_club_id===tie.club_a_id?tie.club_a?.name:tie.club_b?.name}</div>}</div>
+                                  </div>
                                   <button onClick={() => startScoreEdit(r)} className="text-xs text-gray-400 hover:text-blue-600 px-2">수정</button>
                                 </div>
                               )}
@@ -227,7 +263,7 @@ export default function TiesPage() {
                                   <div className="flex gap-2">
                                     <button onClick={() => {setEditingRubber(null);setSaveError('');}} className="flex-1 bg-gray-100 py-2 rounded-lg text-sm">취소</button>
                                     <button onClick={() => handleSaveScore(r.id)} disabled={saving} className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50">
-                                      {saving?'저장중...':'점수 저장'}</button>
+                                      {saving?'저장중...':'점수 확정'}</button>
                                   </div>
                                 </div>
                               )}

@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+﻿import { createClient } from '@supabase/supabase-js'
 
 export const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -16,7 +16,7 @@ export function getServiceClient() {
 export function getAppAClient() {
   const appAAnonKey = process.env.APP_A_ANON_KEY;
   if (!appAAnonKey) throw new Error('APP_A_ANON_KEY not set');
-  return createClient('https://bhvtfptvtepljrohfeic.supabase.co', appAAnonKey);
+  return createClient(process.env.APP_A_SUPABASE_URL!, appAAnonKey);
 }
 
 // ============================================================

@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // 앱A → 앱B 개인전 데이터 Pull API
 // src/app/api/sync/pull-individual/route.ts
 //
@@ -9,7 +9,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 function getAppAClient() {
-  const url = 'https://bhvtfptvtepljrohfeic.supabase.co';
+  const url = process.env.APP_A_SUPABASE_URL!;
   const key = process.env.APP_A_ANON_KEY;
   if (!key) throw new Error('APP_A_ANON_KEY not set');
   return createClient(url, key);
