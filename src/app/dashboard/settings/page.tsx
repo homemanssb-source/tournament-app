@@ -16,6 +16,11 @@ export default function SettingsPage() {
   const [eventId, setEventId] = useState('')
   const [eventName, setEventName] = useState('')
 
+  // ── 대회 공개 상태 (추가된 부분) ──
+  const [eventStatus, setEventStatus] = useState<string>('')
+  const [statusLoading, setStatusLoading] = useState(false)
+  const [statusMsg, setStatusMsg] = useState('')
+
   const [newPin, setNewPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
   const [hasMasterPin, setHasMasterPin] = useState(false)
@@ -33,10 +38,8 @@ export default function SettingsPage() {
   const [totalCourts, setTotalCourts] = useState(10)
   const allCourtNames = Array.from({ length: totalCourts }, (_, i) => '코트 ' + (i + 1))
 
-  // 이미 다른 경기장에 배정된 코트
   const usedCourts = venues.flatMap(v => Array.isArray(v.courts) ? v.courts : [])
 
-  // 편집 모드
   const [editVenueId, setEditVenueId] = useState<string | null>(null)
   const [editCourts, setEditCourts] = useState<string[]>([])
 
@@ -50,11 +53,27 @@ export default function SettingsPage() {
   }, [])
 
   async function loadEvent(eid: string) {
-    const { data } = await supabase.from('events').select('name, master_pin_hash').eq('id', eid).single()
+    const { data } = await supabase.from('events').select('name, master_pin_hash, status').eq('id', eid).single()
     if (data) {
       setEventName(data.name)
       setHasMasterPin(!!data.master_pin_hash)
+      setEventStatus(data.status || 'preparing') // ← 추가
     }
+  }
+
+  // ── 대회 공개/잠금 토글 (추가된 함수) ──
+  async function toggleEventStatus() {
+    setStatusLoading(true)
+    setStatusMsg('')
+    const newStatus = eventStatus === 'active' ? 'preparing' : 'active'
+    const { error } = await supabase
+      .from('events')
+      .update({ status: newStatus })
+      .eq('id', eventId)
+    setStatusLoading(false)
+    if (error) { setStatusMsg('❌ ' + error.message); return }
+    setEventStatus(newStatus)
+    setStatusMsg(newStatus === 'active' ? '✅ 대회가 공개되었습니다.' : '✅ 대회가 비공개로 변경되었습니다.')
   }
 
   async function loadVenues(eid: string) {
@@ -75,7 +94,7 @@ export default function SettingsPage() {
     })
     setPinSaving(false)
     if (error) { setPinMsg('! ' + error.message); return }
-    setPinMsg('OK 마스터 PIN이 변경되었습니다.')
+    setPinMsg('OK 마스터 PIN이 설정되었습니다.')
     setHasMasterPin(true)
     setNewPin(''); setConfirmPin('')
   }
@@ -151,6 +170,52 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold">설정</h1>
       <p className="text-sm text-stone-500">{eventName}</p>
 
+      {/* ── 대회 공개 설정 (추가된 섹션) ── */}
+      <div className="bg-white rounded-xl border p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <h2 className="font-bold text-lg">대회 공개 설정</h2>
+          {eventStatus === 'active'
+            ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">공개중</span>
+            : <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">비공개</span>
+          }
+        </div>
+        <p className="text-xs text-stone-400">
+          공개 상태일 때만 선수들이 대회 목록에서 이 대회를 볼 수 있습니다.
+        </p>
+
+        <div className={`rounded-xl p-4 flex items-center justify-between ${
+          eventStatus === 'active' ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'
+        }`}>
+          <div>
+            <p className="font-medium text-sm">
+              {eventStatus === 'active' ? '🔓 현재 공개 상태' : '🔒 현재 비공개 상태'}
+            </p>
+            <p className="text-xs text-stone-500 mt-0.5">
+              {eventStatus === 'active'
+                ? '선수들이 대회 목록에서 이 대회를 볼 수 있어요.'
+                : '선수들에게 대회가 보이지 않아요.'}
+            </p>
+          </div>
+          <button
+            onClick={toggleEventStatus}
+            disabled={statusLoading}
+            className={`px-4 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 ${
+              eventStatus === 'active'
+                ? 'bg-amber-500 text-white hover:bg-amber-600'
+                : 'bg-green-500 text-white hover:bg-green-600'
+            }`}
+          >
+            {statusLoading ? '변경 중...' : eventStatus === 'active' ? '🔒 비공개로 변경' : '🔓 대회 오픈하기'}
+          </button>
+        </div>
+
+        {statusMsg && (
+          <p className={`text-sm ${statusMsg.startsWith('✅') ? 'text-green-600' : 'text-red-500'}`}>
+            {statusMsg}
+          </p>
+        )}
+      </div>
+
       {/* 마스터 PIN */}
       <div className="bg-white rounded-xl border p-5 space-y-4">
         <div className="flex items-center gap-2">
@@ -160,7 +225,7 @@ export default function SettingsPage() {
             : <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full">미설정</span>
           }
         </div>
-        <p className="text-xs text-stone-400">운영자 인증에 사용되는 PIN입니다.</p>
+        <p className="text-xs text-stone-400">대시보드 접근에 사용하는 PIN입니다.</p>
         <div className="space-y-3">
           <div>
             <label className="block text-sm text-stone-600 mb-1">새 PIN</label>
@@ -181,24 +246,24 @@ export default function SettingsPage() {
           {pinMsg && <p className={`text-sm ${pinMsg.startsWith('OK') ? 'text-green-600' : 'text-red-500'}`}>{pinMsg}</p>}
           <button onClick={saveMasterPin} disabled={pinSaving || !newPin.trim()}
             className="bg-blue-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
-            {pinSaving ? '저장중...' : '마스터 PIN 저장'}
+            {pinSaving ? '저장 중...' : '마스터 PIN 저장'}
           </button>
         </div>
       </div>
 
-      {/* 부설경기장 관리 */}
+      {/* 경기장(부설) 관리 */}
       <div className="bg-white rounded-xl border p-5 space-y-4">
         <div className="flex items-center justify-between">
-          <h2 className="font-bold text-lg">부설경기장 관리</h2>
+          <h2 className="font-bold text-lg">경기장(부설) 관리</h2>
           <div className="flex items-center gap-2">
-            <label className="text-xs text-stone-500">총 코트:</label>
+            <label className="text-xs text-stone-500">전체 코트:</label>
             <select value={totalCourts} onChange={e => setTotalCourts(Number(e.target.value))}
               className="border rounded px-2 py-1 text-sm">
               {[6, 8, 10, 12, 14, 16, 18, 20].map(n => <option key={n} value={n}>{n}개</option>)}
             </select>
           </div>
         </div>
-        <p className="text-xs text-stone-400">경기장별 PIN과 담당 코트를 설정하면 해당 경기장 관리자가 스코어를 입력할 수 있습니다.</p>
+        <p className="text-xs text-stone-400">경기장마다 PIN과 해당 코트를 설정하면 해당 경기장 관리자가 로그인해서 입력할 수 있습니다.</p>
 
         {/* 추가 폼 */}
         <div className="space-y-3 bg-stone-50 rounded-lg p-4">
@@ -219,9 +284,8 @@ export default function SettingsPage() {
               className="text-xs bg-white text-stone-600 px-3 py-2 rounded-lg hover:bg-stone-100 border">랜덤</button>
           </div>
 
-          {/* 코트 선택 */}
           <div>
-            <p className="text-xs text-stone-600 mb-2">담당 코트 선택:</p>
+            <p className="text-xs text-stone-600 mb-2">해당 코트 선택:</p>
             <div className="flex flex-wrap gap-1.5">
               {allCourtNames.map(court => {
                 const isUsed = usedCourts.includes(court)
@@ -291,10 +355,9 @@ export default function SettingsPage() {
                     </div>
                   </div>
 
-                  {/* 코트 편집 */}
                   {isEditing && (
                     <div className="bg-blue-50 px-4 py-3 space-y-2 border-t">
-                      <p className="text-xs text-blue-700 font-medium">코트 재선택:</p>
+                      <p className="text-xs text-blue-700 font-medium">코트 재선택</p>
                       <div className="flex flex-wrap gap-1.5">
                         {allCourtNames.map(court => {
                           const isOtherUsed = otherUsedCourts.includes(court)
@@ -331,7 +394,7 @@ export default function SettingsPage() {
               return v.name + ' (PIN: ' + v.pin_plain + ') - ' + courts
             }).join('\n')
             navigator.clipboard.writeText(text)
-            setVenueMsg('OK PIN 목록이 복사되었습니다.')
+            setVenueMsg('OK PIN 목록을 복사했습니다.')
           }} className="text-xs text-blue-600 hover:underline">PIN + 코트 목록 복사</button>
         )}
       </div>
