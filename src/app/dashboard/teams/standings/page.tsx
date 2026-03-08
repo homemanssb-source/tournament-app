@@ -41,15 +41,15 @@ export default function StandingsPage() {
     if (!eventId) return;
     setLoading(true);
 
-    // ✅ config, divisions, groups를 동시에 fetch
     const [cfg, divsRes, grpsRes] = await Promise.all([
       fetchEventTeamConfig(eventId),
       supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
-      supabase.from('groups').select('*').eq('event_id', eventId).order('group_num'),
+      supabase.from('groups').select('*').eq('event_id', eventId).order('division_id').order('group_num'),
     ]);
 
     setConfig(cfg);
-    setDivisions(divsRes.data || []);
+    const divList = divsRes.data || [];
+    setDivisions(divList);
 
     const map: Record<string, StandingWithClub[]> = {};
 
@@ -59,7 +59,7 @@ export default function StandingsPage() {
       const grps = grpsRes.data || [];
       setGroups(grps);
 
-      // ✅ 전체 조의 standings를 병렬로 fetch (순차 루프 제거)
+      // 전체 조의 standings를 병렬로 fetch
       const standingsResults = await Promise.all(
         grps.map(g => fetchStandings(eventId, g.id))
       );
@@ -155,11 +155,18 @@ export default function StandingsPage() {
       {allEntries.map(([key, standings]) => {
         const group = groups.find(g => g.id === key);
 
-        if (selectedDiv !== 'all' && group && group.division_id && group.division_id !== selectedDiv) {
-          return null;
+        // ✅ division 필터: 특정 부 선택 시 해당 부의 조만 표시
+        if (selectedDiv !== 'all') {
+          if (!group) return null;
+          if (!group.division_id || group.division_id !== selectedDiv) return null;
         }
 
-        const groupName = key === 'full' ? '풀리그 순위표' : (group?.group_label || group?.group_name || key);
+        // ✅ 조 이름: group_label → group_num(A,B,C...) 순으로 fallback
+        const groupNumLabel = group?.group_num ? String.fromCharCode(64 + group.group_num) + '조' : '';
+        const groupName = key === 'full'
+          ? '풀리그 순위표'
+          : group?.group_label || groupNumLabel || group?.group_name || key;
+
         return (
           <div key={key} className="bg-white rounded-lg border overflow-hidden">
             <div className="bg-gray-50 px-4 py-3 font-semibold">{groupName}</div>
