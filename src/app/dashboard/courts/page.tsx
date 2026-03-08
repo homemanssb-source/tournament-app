@@ -24,51 +24,65 @@ export default function CourtsPage() {
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
 
-  // 코트 설정 - 기본 10, 최대 20
   const [courtCount, setCourtCount] = useState(10)
   const courtNames = Array.from({ length: courtCount }, (_, i) => `코트 ${i + 1}`)
 
-  // 부서별 자동배정 설정
   const [autoDiv, setAutoDiv] = useState('')
   const [autoCourts, setAutoCourts] = useState<string[]>([])
   const [autoStage, setAutoStage] = useState<'GROUP' | 'FINALS'>('GROUP')
 
-  // 드래그
   const [dragMatch, setDragMatch] = useState<string | null>(null)
   const [dragIsTie, setDragIsTie] = useState(false)
 
-  // 점수 모달
   const [editMatch, setEditMatch] = useState<MatchSlim | null>(null)
   const [editScore, setEditScore] = useState('')
   const [editWinner, setEditWinner] = useState<'A' | 'B' | ''>('')
   const [submitting, setSubmitting] = useState(false)
 
-  // 필터
   const [viewFilter, setViewFilter] = useState('ALL')
 
-  useEffect(() => { if (eventId) { loadMatches(); loadTies() } }, [eventId])
-  useEffect(() => {
-    if (!eventId) return
-    const interval = setInterval(() => { loadMatches(); loadTies() }, 15000)
-    return () => clearInterval(interval)
-  }, [eventId])
+  // ✅ 초기 로딩: matches + ties 병렬 fetch
+  async function loadAll(showLoading = false) {
+    if (showLoading) setLoading(true)
+    try {
+      const [matchRes, tieData] = await Promise.all([
+        supabase.from('v_matches_with_teams').select('*')
+          .eq('event_id', eventId)
+          .order('court', { ascending: true, nullsFirst: false })
+          .order('court_order', { ascending: true, nullsFirst: true }),
+        fetchTies(eventId),
+      ])
+      setMatches((matchRes.data || []).filter((m: any) => m.score !== 'BYE'))
+      setTies(tieData)
+    } catch {}
+    if (showLoading) setLoading(false)
+  }
 
+  // ✅ 개별 갱신 (코트 배정 후 해당 데이터만 업데이트)
   async function loadMatches() {
-    setLoading(true)
     const { data } = await supabase.from('v_matches_with_teams').select('*')
       .eq('event_id', eventId)
       .order('court', { ascending: true, nullsFirst: false })
       .order('court_order', { ascending: true, nullsFirst: true })
-    const filtered = (data || []).filter(m => m.score !== 'BYE')
-    setMatches(filtered)
-    setLoading(false)
+    setMatches((data || []).filter(m => m.score !== 'BYE'))
   }
 
   async function loadTies() {
     try { const data = await fetchTies(eventId); setTies(data) } catch {}
   }
 
-  // 단체전 ties → MatchSlim 형태로 변환
+  useEffect(() => {
+    if (!eventId) return
+    loadAll(true)
+  }, [eventId])
+
+  // ✅ 15초 자동갱신 - setLoading 없이 백그라운드 갱신 (깜빡임 없음)
+  useEffect(() => {
+    if (!eventId) return
+    const interval = setInterval(() => loadAll(false), 15000)
+    return () => clearInterval(interval)
+  }, [eventId])
+
   function tiesToMatchSlim(tieList: TieWithClubs[]): MatchSlim[] {
     return tieList.filter(t => !t.is_bye).map(t => {
       const statusMap: Record<string, string> = {
@@ -97,7 +111,6 @@ export default function CourtsPage() {
     })
   }
 
-  // 합쳐진 데이터
   const tieMatches = tiesToMatchSlim(ties)
   const allItems = [...matches, ...tieMatches]
   const filteredAll = viewFilter === 'ALL' ? allItems
@@ -109,12 +122,10 @@ export default function CourtsPage() {
   for (const name of courtNames) byCourt.set(name, [])
   for (const m of filteredAll) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
 
-  // 부서별 색상 (단체전 = 파란색)
   const divColors: Record<string, string> = { TEAM: '#2563eb' }
   const colors = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#ef4444']
   divisions.forEach((d, i) => { divColors[d.id] = colors[i % colors.length] })
 
-  // ===== 부서별 자동 배정 =====
   function toggleAutoCourt(court: string) {
     setAutoCourts(prev => prev.includes(court) ? prev.filter(c => c !== court) : [...prev, court])
   }
@@ -123,7 +134,6 @@ export default function CourtsPage() {
     if (!autoDiv) { setMsg('부서를 선택해주세요.'); return }
     if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
 
-    // 단체전 자동배정
     if (autoDiv === 'TEAM') {
       const unTies = ties.filter(t => !t.is_bye && !t.court_number && t.status !== 'completed')
       if (unTies.length === 0) { setMsg('배정할 단체전 대전이 없습니다.'); return }
@@ -164,7 +174,6 @@ export default function CourtsPage() {
     loadMatches()
   }
 
-  // ===== 코트 배정/해제 (개인전 + 단체전 통합) =====
   async function assignItemToCourt(itemId: string, court: string) {
     if (itemId.startsWith('tie_')) {
       const tieId = itemId.replace('tie_', '')
@@ -191,7 +200,7 @@ export default function CourtsPage() {
   }
 
   async function moveMatchOrder(matchId: string, direction: 'up' | 'down') {
-    if (matchId.startsWith('tie_')) return // 단체전은 순서 이동 미지원
+    if (matchId.startsWith('tie_')) return
     const m = matches.find(mm => mm.id === matchId)
     if (!m || !m.court || !m.court_order) return
     const courtMatches = matches.filter(mm => mm.court === m.court).sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
@@ -228,9 +237,8 @@ export default function CourtsPage() {
     setMsg('✅ 전체 코트 배정 초기화'); loadMatches(); loadTies()
   }
 
-  // 점수 입력 (개인전만)
   function openScoreEdit(m: MatchSlim) {
-    if (m.is_team_tie) return // 단체전은 점수 모달 미사용
+    if (m.is_team_tie) return
     setEditMatch(m); setEditScore(m.score || '')
     setEditWinner(m.winner_team_id === m.team_a_id ? 'A' : m.winner_team_id === m.team_b_id ? 'B' : '')
     setMsg('')
@@ -252,12 +260,12 @@ export default function CourtsPage() {
     loadMatches()
   }
 
-  // 드래그
   function handleDragOver(e: React.DragEvent) { e.preventDefault() }
   function handleDropOnCourt(court: string) { if (dragMatch) assignItemToCourt(dragMatch, court); setDragMatch(null) }
   function handleDropOnUnassigned() { if (dragMatch) unassignItem(dragMatch); setDragMatch(null) }
 
   if (!eventId) return <p className="text-stone-400">대시보드 홈에서 대회를 선택해주세요.</p>
+  if (loading) return <p className="text-stone-400">불러오는 중...</p>
 
   const hasTeamTies = ties.filter(t => !t.is_bye).length > 0
 
@@ -438,7 +446,7 @@ export default function CourtsPage() {
   )
 }
 
-// ===== MatchChip 컴포넌트 (개인전 + 단체전 통합) =====
+// ===== MatchChip 컴포넌트 =====
 function MatchChip({ m, order, badge, divColor, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown }: {
   m: MatchSlim; order?: number; badge?: string; divColor?: string
   onDragStart: (id: string) => void; onClickScore: () => void

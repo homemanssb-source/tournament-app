@@ -54,7 +54,6 @@ export default function TeamPinScorePage() {
         .single();
 
       if (!rubberData) {
-        // in_progress도 체크
         const { data: ipData } = await supabase
           .from('tie_rubbers')
           .select('*')
@@ -72,7 +71,7 @@ export default function TeamPinScorePage() {
 
       setRubber(rubberData);
 
-      // 대전 정보
+      // ✅ 대전 정보 fetch
       const { data: tieData } = await supabase
         .from('ties')
         .select('*')
@@ -81,27 +80,40 @@ export default function TeamPinScorePage() {
       setTie(tieData);
 
       if (tieData) {
-        // 클럽 정보
-        const { data: ca } = await supabase.from('clubs').select('*').eq('id', tieData.club_a_id).single();
-        const { data: cb } = await supabase.from('clubs').select('*').eq('id', tieData.club_b_id).single();
+        // ✅ 클럽 A/B, 이벤트 설정, 선수 정보를 한 번에 병렬 fetch
+        const playerAQueries = rubberData.club_a_player1_id ? [
+          supabase.from('club_members').select('*').eq('id', rubberData.club_a_player1_id).single(),
+          rubberData.club_a_player2_id
+            ? supabase.from('club_members').select('*').eq('id', rubberData.club_a_player2_id).single()
+            : Promise.resolve({ data: null }),
+        ] : [Promise.resolve({ data: null }), Promise.resolve({ data: null })];
+
+        const playerBQueries = rubberData.club_b_player1_id ? [
+          supabase.from('club_members').select('*').eq('id', rubberData.club_b_player1_id).single(),
+          rubberData.club_b_player2_id
+            ? supabase.from('club_members').select('*').eq('id', rubberData.club_b_player2_id).single()
+            : Promise.resolve({ data: null }),
+        ] : [Promise.resolve({ data: null }), Promise.resolve({ data: null })];
+
+        const [
+          { data: ca },
+          { data: cb },
+          { data: ev },
+          [{ data: ap1 }, { data: ap2 }],
+          [{ data: bp1 }, { data: bp2 }],
+        ] = await Promise.all([
+          supabase.from('clubs').select('*').eq('id', tieData.club_a_id).single(),
+          supabase.from('clubs').select('*').eq('id', tieData.club_b_id).single(),
+          supabase.from('events').select('team_sets_per_rubber').eq('id', tieData.event_id).single(),
+          Promise.all(playerAQueries),
+          Promise.all(playerBQueries),
+        ]);
+
         setClubA(ca);
         setClubB(cb);
-
-        // 세트 수 설정
-        const { data: ev } = await supabase.from('events').select('team_sets_per_rubber').eq('id', tieData.event_id).single();
         setSetsPerRubber(ev?.team_sets_per_rubber || 1);
-
-        // 선수 정보
-        if (rubberData.club_a_player1_id) {
-          const { data: ap1 } = await supabase.from('club_members').select('*').eq('id', rubberData.club_a_player1_id).single();
-          const { data: ap2 } = await supabase.from('club_members').select('*').eq('id', rubberData.club_a_player2_id).single();
-          setPlayersA({ p1: ap1, p2: ap2 });
-        }
-        if (rubberData.club_b_player1_id) {
-          const { data: bp1 } = await supabase.from('club_members').select('*').eq('id', rubberData.club_b_player1_id).single();
-          const { data: bp2 } = await supabase.from('club_members').select('*').eq('id', rubberData.club_b_player2_id).single();
-          setPlayersB({ p1: bp1, p2: bp2 });
-        }
+        setPlayersA({ p1: ap1, p2: ap2 });
+        setPlayersB({ p1: bp1, p2: bp2 });
       }
 
       setStep('score');
@@ -118,7 +130,6 @@ export default function TeamPinScorePage() {
 
     if (setsPerRubber === 3) {
       if (!set2a || !set2b) { setError('2세트 점수를 입력하세요.'); return; }
-      // 1:1이면 3세트 필요
       const s1win = parseInt(set1a) > parseInt(set1b) ? 'a' : 'b';
       const s2win = parseInt(set2a) > parseInt(set2b) ? 'a' : 'b';
       if (s1win !== s2win && (!set3a || !set3b)) {

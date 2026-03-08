@@ -50,19 +50,16 @@ export default function GroupsPage() {
   const [divisions, setDivisions] = useState<Division[]>([]);
   const [selectedDiv, setSelectedDiv] = useState<string>('');
 
-  // ✅ 선택된 부서 클럽만 필터
   const filteredClubs = useMemo(() => {
     if (!selectedDiv) return clubs;
     return clubs.filter(c => (c as any).division_id === selectedDiv);
   }, [clubs, selectedDiv]);
 
-  // ✅ 선택된 부서 그룹만 필터
   const filteredGroups = useMemo(() => {
     if (!selectedDiv) return groups;
     return groups.filter(g => g.division_id === selectedDiv);
   }, [groups, selectedDiv]);
 
-  // ✅ 선택된 부서 ties만 필터
   const filteredTies = useMemo(() => {
     if (!selectedDiv) return ties;
     return ties.filter(t => (t as any).division_id === selectedDiv);
@@ -78,40 +75,37 @@ export default function GroupsPage() {
     if (!eventId) return;
     setLoading(true);
 
-    // 부서 먼저 로드
-    const { data: divs } = await supabase
-      .from('divisions').select('id, name, sort_order')
-      .eq('event_id', eventId).order('sort_order');
-    const divList = divs || [];
+    // ✅ 부서, config, clubs, groups, ties를 한 번에 병렬 fetch
+    const [divsRes, cfg, clubList, grpsRes, tieList] = await Promise.all([
+      supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
+      fetchEventTeamConfig(eventId),
+      fetchClubs(eventId),
+      supabase.from('groups').select('*').eq('event_id', eventId).order('group_num'),
+      fetchTies(eventId),
+    ]);
+
+    const divList = divsRes.data || [];
+    const grps = grpsRes.data || [];
+
     setDivisions(divList);
     if (divList.length > 0) {
       setSelectedDiv(prev => prev || divList[0].id);
     }
-
-    const [cfg, clubList] = await Promise.all([
-      fetchEventTeamConfig(eventId),
-      fetchClubs(eventId),
-    ]);
     setConfig(cfg);
     setClubs(clubList);
+    setGroups(grps);
+    setTies(tieList);
 
-    const { data: grps } = await supabase
-      .from('groups').select('*').eq('event_id', eventId).order('group_num');
-    setGroups(grps || []);
-
-    if (grps?.length) {
+    // ✅ standings도 병렬 fetch
+    if (cfg?.team_format === 'full_league') {
+      setGroupStandings({ full: await fetchStandings(eventId, null) });
+    } else if (grps.length > 0) {
+      const standingsResults = await Promise.all(grps.map(g => fetchStandings(eventId, g.id)));
       const standings: Record<string, StandingWithClub[]> = {};
-      for (const g of grps) {
-        standings[g.id] = await fetchStandings(eventId, g.id);
-      }
+      grps.forEach((g, i) => { standings[g.id] = standingsResults[i]; });
       setGroupStandings(standings);
     }
 
-    if (cfg?.team_format === 'full_league') {
-      setGroupStandings({ full: await fetchStandings(eventId, null) });
-    }
-
-    setTies(await fetchTies(eventId));
     setLoading(false);
   }, [eventId]);
 
@@ -121,7 +115,6 @@ export default function GroupsPage() {
     if (!confirm(`${filteredClubs.length}팀 풀리그를 생성합니다. (${getFullLeagueTieCount(filteredClubs.length)}경기)`)) return;
     setGenerating(true);
     try {
-      // ✅ divisionId 전달
       const r = await generateFullLeague(eventId, selectedDiv || undefined);
       if (!r.success) { alert(r.error); return; }
       await loadData();
@@ -138,7 +131,6 @@ export default function GroupsPage() {
     if (!confirm(`${groupCount}개 조로 편성합니다.\n${desc}`)) return;
     setGenerating(true);
     try {
-      // ✅ divisionId 전달
       const r = await createTeamGroups(eventId, groupCount, groupSize, selectedDiv || undefined);
       if (!r.success) { alert(r.error); return; }
       await loadData();
@@ -163,7 +155,6 @@ export default function GroupsPage() {
         </span>
       </div>
 
-      {/* ✅ 부서 탭 */}
       {divisions.length > 0 && (
         <div className="flex gap-1 overflow-x-auto">
           {divisions.map(d => (
@@ -183,7 +174,6 @@ export default function GroupsPage() {
 
       {filteredClubs.length >= 2 && (
         <>
-          {/* 풀리그 */}
           {config?.team_format === 'full_league' && (
             <div className="bg-white rounded-lg border p-6 space-y-4">
               <h2 className="font-semibold">풀리그 생성</h2>
@@ -198,7 +188,6 @@ export default function GroupsPage() {
             </div>
           )}
 
-          {/* 조별 리그 */}
           {(config?.team_format === 'group_tournament' || config?.team_format === 'prelim_tournament') && (
             <div className="bg-white rounded-lg border p-6 space-y-4">
               <h2 className="font-semibold">
@@ -243,7 +232,6 @@ export default function GroupsPage() {
             </div>
           )}
 
-          {/* 시드 클럽 */}
           {filteredClubs.some(c => c.seed_number) && (
             <div className="bg-yellow-50 rounded-lg border border-yellow-200 p-4">
               <h3 className="font-semibold text-sm text-yellow-800 mb-2">시드 클럽</h3>
@@ -260,7 +248,6 @@ export default function GroupsPage() {
             </div>
           )}
 
-          {/* 풀리그 순위표 */}
           {config?.team_format === 'full_league' && groupStandings.full && (
             <div className="bg-white rounded-lg border p-4">
               <h3 className="font-semibold mb-3">풀리그 순위</h3>
@@ -268,7 +255,6 @@ export default function GroupsPage() {
             </div>
           )}
 
-          {/* 조별 순위표 */}
           {hasGroups && (
             <div className="space-y-4">
               {filteredGroups.map(g => (
@@ -282,7 +268,6 @@ export default function GroupsPage() {
             </div>
           )}
 
-          {/* 경기 목록 */}
           {hasTies && (
             <div className="bg-white rounded-lg border p-4">
               <h3 className="font-semibold mb-3">경기 일정 ({filteredTies.length}경기)</h3>

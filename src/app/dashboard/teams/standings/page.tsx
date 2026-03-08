@@ -40,23 +40,32 @@ export default function StandingsPage() {
   const loadData = useCallback(async () => {
     if (!eventId) return;
     setLoading(true);
-    const cfg = await fetchEventTeamConfig(eventId);
-    setConfig(cfg);
 
-    const { data: divs } = await supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order');
-    setDivisions(divs || []);
+    // ✅ config, divisions, groups를 동시에 fetch
+    const [cfg, divsRes, grpsRes] = await Promise.all([
+      fetchEventTeamConfig(eventId),
+      supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
+      supabase.from('groups').select('*').eq('event_id', eventId).order('group_num'),
+    ]);
+
+    setConfig(cfg);
+    setDivisions(divsRes.data || []);
 
     const map: Record<string, StandingWithClub[]> = {};
+
     if (cfg?.team_format === 'full_league') {
       map['full'] = await fetchStandings(eventId, null);
     } else {
-      const { data: grps } = await supabase
-        .from('groups').select('*').eq('event_id', eventId).order('group_num');
-      setGroups(grps || []);
-      for (const g of (grps || [])) {
-        map[g.id] = await fetchStandings(eventId, g.id);
-      }
+      const grps = grpsRes.data || [];
+      setGroups(grps);
+
+      // ✅ 전체 조의 standings를 병렬로 fetch (순차 루프 제거)
+      const standingsResults = await Promise.all(
+        grps.map(g => fetchStandings(eventId, g.id))
+      );
+      grps.forEach((g, i) => { map[g.id] = standingsResults[i]; });
     }
+
     setStandingsMap(map);
     setLoading(false);
   }, [eventId]);
@@ -66,8 +75,12 @@ export default function StandingsPage() {
   async function handleRecalculate() {
     setRecalculating(true);
     try {
-      if (config?.team_format === 'full_league') { await calculateStandings(eventId, null); }
-      else { for (const g of groups) { await calculateStandings(eventId, g.id); } }
+      if (config?.team_format === 'full_league') {
+        await calculateStandings(eventId, null);
+      } else {
+        // ✅ 재계산도 병렬 실행
+        await Promise.all(groups.map(g => calculateStandings(eventId, g.id)));
+      }
       await loadData();
     } catch (err: any) { alert(err.message || '순위 재계산 실패'); }
     finally { setRecalculating(false); }
@@ -169,7 +182,6 @@ export default function StandingsPage() {
                   {standings.length === 0 && <tr><td colSpan={9} className="px-4 py-6 text-center text-gray-400">데이터 없음</td></tr>}
                   {standings.map(s => {
                     const isTied = s.is_tied;
-                    // ★ 순위별 스타일
                     const rs = getRankStyle(s.rank);
                     return (
                       <tr key={s.id} className={`${
@@ -180,7 +192,6 @@ export default function StandingsPage() {
                         <td className="px-4 py-3">
                           {s.rank !== null ? (
                             <span className="flex items-center gap-1">
-                              {/* ★ 메달 아이콘 */}
                               {rs.icon && <span className="text-base">{rs.icon}</span>}
                               <span className={`font-bold text-lg ${rs.text}`}>{s.rank}</span>
                             </span>
@@ -191,7 +202,6 @@ export default function StandingsPage() {
                           {s.club?.seed_number && <span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">{s.club.seed_number}시드</span>}
                         </td>
                         <td className="px-4 py-3 text-center">{s.played}</td>
-                        {/* ★ 승수 강조 */}
                         <td className="px-4 py-3 text-center font-bold">
                           <span className={s.won > 0 ? 'text-blue-600' : ''}>{s.won}</span>
                         </td>

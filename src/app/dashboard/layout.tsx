@@ -26,27 +26,33 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   useEffect(() => {
     if (isLoginPage) { setChecking(false); return }
-    supabase.auth.getSession().then(({ data: { session } }) => {
+
+    // ✅ auth 확인 + eventId 조회를 동시에 실행
+    const stored = sessionStorage.getItem('dashboard_event_id')
+
+    const authPromise = supabase.auth.getSession()
+    const eventPromise = stored
+      ? Promise.resolve(stored)
+      : supabase.from('events').select('id').order('date', { ascending: false }).limit(1)
+          .then(({ data }) => {
+            const id = data?.[0]?.id || ''
+            if (id) sessionStorage.setItem('dashboard_event_id', id)
+            return id
+          })
+
+    Promise.all([authPromise, eventPromise]).then(([{ data: { session } }, resolvedEventId]) => {
       if (!session) { router.push('/dashboard/login'); return }
-      setUser(session.user); setChecking(false)
+      setUser(session.user)
+      if (resolvedEventId) setEventId(resolvedEventId)
+      setChecking(false)
     })
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session && !isLoginPage) router.push('/dashboard/login')
       else if (session) setUser(session.user)
     })
     return () => subscription.unsubscribe()
   }, [router, isLoginPage])
-
-  useEffect(() => {
-    const stored = sessionStorage.getItem('dashboard_event_id')
-    if (stored) { setEventId(stored) }
-    else {
-      supabase.from('events').select('id').order('date', { ascending: false }).limit(1)
-        .then(({ data }) => {
-          if (data && data.length > 0) { setEventId(data[0].id); sessionStorage.setItem('dashboard_event_id', data[0].id) }
-        })
-    }
-  }, [])
 
   async function handleLogout() { await supabase.auth.signOut(); router.push('/') }
 

@@ -26,60 +26,68 @@ export default function DashboardHome() {
     sessionStorage.setItem('dashboard_event_id', selectedEvent)
 
     const ev = events.find(e => e.id === selectedEvent)
-    setEventType(ev?.event_type || 'individual')
+    const type = ev?.event_type || 'individual'
+    setEventType(type)
 
-    // 개인전 통계
-    Promise.all([
+    const isTeam = type === 'team' || type === 'both'
+    const isIndiv = type === 'individual' || type === 'both'
+
+    // ✅ 개인전 + 단체전 통계를 한 번에 병렬 실행
+    const indivQueries = isIndiv ? [
       supabase.from('divisions').select('id', { count: 'exact', head: true }).eq('event_id', selectedEvent),
       supabase.from('teams').select('id', { count: 'exact', head: true }).eq('event_id', selectedEvent),
       supabase.from('groups').select('id', { count: 'exact', head: true }).eq('event_id', selectedEvent),
       supabase.from('matches').select('id, status').eq('event_id', selectedEvent),
-    ]).then(([divs, teams, groups, matches]) => {
-      const all = matches.data || []
-      setStats({
-        divisions: divs.count || 0,
-        teams: teams.count || 0,
-        groups: groups.count || 0,
-        matches: all.length,
-        finished: all.filter(m => m.status === 'FINISHED').length,
-      })
-    })
+    ] : [
+      Promise.resolve({ count: 0 }),
+      Promise.resolve({ count: 0 }),
+      Promise.resolve({ count: 0 }),
+      Promise.resolve({ data: [] }),
+    ]
 
-    // 단체전 통계
-    if (ev?.event_type === 'team' || ev?.event_type === 'both') {
-      Promise.all([
-        supabase.from('clubs').select('id', { count: 'exact', head: true }).eq('event_id', selectedEvent),
-        supabase.from('ties').select('id, status').eq('event_id', selectedEvent),
-        supabase.from('rubbers').select('id, status, tie_id')
-          .in('tie_id',
-            // rubbers는 tie_id로 필터 — ties에서 해당 event의 tie id를 가져옴
-            // Supabase에서 서브쿼리 대신 별도 쿼리로 처리
-            []
-          ),
-      ]).then(async ([clubsRes, tiesRes]) => {
-        const tieIds = (tiesRes.data || []).map(t => t.id)
-        const tiesAll = tiesRes.data || []
+    const teamQueries = isTeam ? [
+      supabase.from('clubs').select('id', { count: 'exact', head: true }).eq('event_id', selectedEvent),
+      supabase.from('ties').select('id, status').eq('event_id', selectedEvent),
+    ] : [
+      Promise.resolve({ count: 0 }),
+      Promise.resolve({ data: [] }),
+    ]
 
-        let rubbersAll: any[] = []
-        if (tieIds.length > 0) {
-          const { data: rData } = await supabase
-            .from('rubbers')
-            .select('id, status')
-            .in('tie_id', tieIds)
-          rubbersAll = rData || []
-        }
+    // ✅ 전체 병렬 실행 (개인전 4개 + 단체전 2개 동시)
+    Promise.all([...indivQueries, ...teamQueries]).then(async ([divs, teams, groups, matches, clubsRes, tiesRes]) => {
+      // 개인전 통계
+      if (isIndiv) {
+        const all = (matches as any).data || []
+        setStats({
+          divisions: (divs as any).count || 0,
+          teams: (teams as any).count || 0,
+          groups: (groups as any).count || 0,
+          matches: all.length,
+          finished: all.filter((m: any) => m.status === 'FINISHED').length,
+        })
+      }
+
+      // 단체전 통계
+      if (isTeam) {
+        const tiesAll = (tiesRes as any).data || []
+        const tieIds = tiesAll.map((t: any) => t.id)
+
+        // ✅ rubbers는 tieIds 확보 후 바로 fetch (별도 단계 없이)
+        const rubbersAll = tieIds.length > 0
+          ? await supabase.from('rubbers').select('id, status').in('tie_id', tieIds).then(({ data }) => data || [])
+          : []
 
         setTeamStats({
-          clubs: clubsRes.count || 0,
+          clubs: (clubsRes as any).count || 0,
           ties: tiesAll.length,
-          tiesFinished: tiesAll.filter(t => t.status === 'FINISHED').length,
+          tiesFinished: tiesAll.filter((t: any) => t.status === 'FINISHED').length,
           rubbers: rubbersAll.length,
-          rubbersFinished: rubbersAll.filter(r => r.status === 'FINISHED').length,
+          rubbersFinished: rubbersAll.filter((r: any) => r.status === 'FINISHED').length,
         })
-      })
-    } else {
-      setTeamStats({ clubs: 0, ties: 0, tiesFinished: 0, rubbers: 0, rubbersFinished: 0 })
-    }
+      } else {
+        setTeamStats({ clubs: 0, ties: 0, tiesFinished: 0, rubbers: 0, rubbersFinished: 0 })
+      }
+    })
   }, [selectedEvent, events])
 
   if (loading) return <p className="text-stone-400">불러오는 중...</p>

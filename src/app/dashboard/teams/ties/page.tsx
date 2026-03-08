@@ -38,10 +38,15 @@ export default function TiesPage() {
   const loadData = useCallback(async () => {
     if (!eventId) return;
     setLoading(true);
-    const [cfg, tieList] = await Promise.all([fetchEventTeamConfig(eventId), fetchTies(eventId)]);
-    setConfig(cfg); setTies(tieList);
-    const { data: grps } = await supabase.from('groups').select('*').eq('event_id', eventId).order('group_num');
-    setGroups(grps || []);
+    // ✅ config + ties + groups 병렬 fetch
+    const [cfg, tieList, grpsRes] = await Promise.all([
+      fetchEventTeamConfig(eventId),
+      fetchTies(eventId),
+      supabase.from('groups').select('*').eq('event_id', eventId).order('group_num'),
+    ]);
+    setConfig(cfg);
+    setTies(tieList);
+    setGroups(grpsRes.data || []);
     setLoading(false);
   }, [eventId]);
 
@@ -50,12 +55,22 @@ export default function TiesPage() {
   async function handleSelectTie(tie: TieWithClubs) {
     if (selectedTie?.id === tie.id) { setSelectedTie(null); setRubbers([]); setTieLineups([]); return; }
     setSelectedTie(tie); setRubbersLoading(true); setEditingRubber(null);
-    const [rubberData, lineupData] = await Promise.all([fetchRubbers(tie.id), fetchRevealedLineups(tie.id)]);
-    setRubbers(rubberData); setTieLineups(lineupData);
+
+    // ✅ rubbers, lineups, 클럽A 멤버, 클럽B 멤버 4개 동시 fetch
+    const [rubberData, lineupData, membersA, membersB] = await Promise.all([
+      fetchRubbers(tie.id),
+      fetchRevealedLineups(tie.id),
+      tie.club_a_id ? fetchClubMembers(tie.club_a_id) : Promise.resolve([]),
+      tie.club_b_id ? fetchClubMembers(tie.club_b_id) : Promise.resolve([]),
+    ]);
+
+    setRubbers(rubberData);
+    setTieLineups(lineupData);
     const mm: Record<string, ClubMember> = {};
-    if (tie.club_a_id) { (await fetchClubMembers(tie.club_a_id)).forEach(m => { mm[m.id] = m; }); }
-    if (tie.club_b_id) { (await fetchClubMembers(tie.club_b_id)).forEach(m => { mm[m.id] = m; }); }
-    setMemberMap(mm); setRubbersLoading(false);
+    membersA.forEach(m => { mm[m.id] = m; });
+    membersB.forEach(m => { mm[m.id] = m; });
+    setMemberMap(mm);
+    setRubbersLoading(false);
   }
 
   function getMemberName(id: string|null|undefined): string { return id && memberMap[id] ? memberMap[id].name : '-'; }
@@ -143,7 +158,6 @@ export default function TiesPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 flex-wrap">
                       <span className="text-xs text-gray-400">#{tie.tie_order}</span>
-                      {/* ★ 승자 강조: 배경색 + 트로피 */}
                       <span className={`font-semibold px-2 py-0.5 rounded ${
                         aWin ? 'bg-blue-100 text-blue-700' : bWin ? 'text-gray-400' : ''
                       }`}>
@@ -207,7 +221,6 @@ export default function TiesPage() {
                           const hasScore = r.set1_a!==null;
                           const laA = tieLineups.find(l => l.rubber_number===r.rubber_number && l.club_id===tie.club_a_id);
                           const laB = tieLineups.find(l => l.rubber_number===r.rubber_number && l.club_id===tie.club_b_id);
-                          // ★ 러버 승자 표시
                           const rubberWinA = r.winning_club_id === tie.club_a_id;
                           const rubberWinB = r.winning_club_id === tie.club_b_id;
                           return (
@@ -230,7 +243,6 @@ export default function TiesPage() {
                               </div>
                               {(laA||laB) && (
                                 <div className="grid grid-cols-5 items-center gap-1 mb-3 text-xs">
-                                  {/* ★ 라인업에서도 승자 강조 */}
                                   <div className={`col-span-2 text-right rounded p-1 ${rubberWinA ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}>
                                     <div>{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</div>
                                     <div className="text-gray-400">{tie.club_a?.name}</div>
