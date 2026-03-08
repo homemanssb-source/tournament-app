@@ -4,8 +4,8 @@
   "description": "제주시 테니스 대회 운영 시스템",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ff5520",
-  "theme_color": "#ff5520",
+  "background_color": "#1a2744",
+  "theme_color": "#1a2744",
   "orientation": "portrait",
   "lang": "ko",
   "icons": [
