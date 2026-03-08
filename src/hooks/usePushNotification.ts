@@ -109,8 +109,7 @@ export function usePushNotification() {
       body: '알림이 정상적으로 작동합니다!',
       icon: '/icon-192x192.png',
       badge: '/icon-72x72.png',
-      vibrate: [200, 100, 200],
-    })
+    } as NotificationOptions)
   }, [permission, subscribe])
 
   return {
