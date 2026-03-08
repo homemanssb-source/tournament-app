@@ -1,6 +1,7 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
 
 const MEMBER_CARDS = [
   {
@@ -50,8 +51,74 @@ const ADMIN_CARDS = [
   },
 ]
 
+interface Stats {
+  inProgress: number
+  activeCourts: number
+  totalTeams: number
+}
+
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<'member' | 'admin'>('member')
+  const [stats, setStats] = useState<Stats>({ inProgress: 0, activeCourts: 0, totalTeams: 0 })
+  const [statsLoading, setStatsLoading] = useState(true)
+
+  useEffect(() => {
+    async function fetchStats() {
+      try {
+        // 1. active 이벤트 찾기
+        const { data: activeEvents } = await supabase
+          .from('events')
+          .select('id')
+          .eq('status', 'active')
+
+        if (!activeEvents || activeEvents.length === 0) {
+          setStatsLoading(false)
+          return
+        }
+
+        const eventIds = activeEvents.map(e => e.id)
+
+        // 2. 진행중 경기 수
+        const { count: inProgress } = await supabase
+          .from('matches')
+          .select('*', { count: 'exact', head: true })
+          .in('event_id', eventIds)
+          .eq('status', 'IN_PROGRESS')
+
+        // 3. 사용중 코트 수 (IN_PROGRESS 중 court 값이 있는 것)
+        const { data: courtMatches } = await supabase
+          .from('matches')
+          .select('court')
+          .in('event_id', eventIds)
+          .eq('status', 'IN_PROGRESS')
+          .not('court', 'is', null)
+
+        const activeCourts = new Set(courtMatches?.map(m => m.court)).size
+
+        // 4. 참가팀 수
+        const { count: totalTeams } = await supabase
+          .from('teams')
+          .select('*', { count: 'exact', head: true })
+          .in('event_id', eventIds)
+
+        setStats({
+          inProgress: inProgress ?? 0,
+          activeCourts,
+          totalTeams: totalTeams ?? 0,
+        })
+      } catch (e) {
+        console.error('stats fetch error', e)
+      } finally {
+        setStatsLoading(false)
+      }
+    }
+
+    fetchStats()
+
+    // 30초마다 자동 갱신
+    const timer = setInterval(fetchStats, 30000)
+    return () => clearInterval(timer)
+  }, [])
 
   return (
     <div className="min-h-screen bg-stone-100 flex flex-col items-center justify-start py-8 px-4">
@@ -127,12 +194,17 @@ export default function HomePage() {
 
             {/* Quick Stats */}
             <div className="bg-white rounded-2xl p-4 shadow-sm mt-1">
-              <p className="text-xs font-bold text-stone-400 mb-3">오늘의 대회 현황</p>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-bold text-stone-400">오늘의 대회 현황</p>
+                {statsLoading && (
+                  <span className="text-[10px] text-stone-300 animate-pulse">불러오는 중...</span>
+                )}
+              </div>
               <div className="grid grid-cols-3 gap-2">
                 {[
-                  { num: '12', label: '진행중 경기' },
-                  { num: '8', label: '사용 코트' },
-                  { num: '48', label: '참가팀' },
+                  { num: statsLoading ? '…' : String(stats.inProgress), label: '진행중 경기' },
+                  { num: statsLoading ? '…' : String(stats.activeCourts), label: '사용 코트' },
+                  { num: statsLoading ? '…' : String(stats.totalTeams), label: '참가팀' },
                 ].map(s => (
                   <div key={s.label} className="bg-stone-50 rounded-xl py-3 text-center">
                     <div className="text-xl font-black text-green-700">{s.num}</div>
@@ -189,7 +261,7 @@ export default function HomePage() {
         )}
 
         {/* Footer */}
-        <p className="text-center text-[11px] text-stone-400 mt-6">🎾 제주시 테니스 협회</p>
+        <p className="text-center text-[11px] text-stone-400 mt-6">🎾 제주 테니스 동호회</p>
       </div>
     </div>
   )
