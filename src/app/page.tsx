@@ -261,7 +261,7 @@ export default function HomePage() {
         )}
 
         {/* Footer */}
-        <p className="text-center text-[11px] text-stone-400 mt-6">🎾 제주 테니스 동호회</p>
+        <p className="text-center text-[11px] text-stone-400 mt-6">🎾 제주시 테니스 협회</p>
       </div>
     </div>
   )
