@@ -31,6 +31,9 @@ export default function TiesPage() {
   const [saveError, setSaveError] = useState('');
   const [copiedTieId, setCopiedTieId] = useState<string | null>(null);
 
+  const [divisions, setDivisions] = useState<any[]>([]);
+  const [selectedDiv, setSelectedDiv] = useState<string>('all');
+
   const [courtCount, setCourtCount] = useState(20);
   const [editingCourt, setEditingCourt] = useState<string | null>(null);
   const [courtInput, setCourtInput] = useState('');
@@ -39,14 +42,16 @@ export default function TiesPage() {
     if (!eventId) return;
     setLoading(true);
     // ✅ config + ties + groups 병렬 fetch
-    const [cfg, tieList, grpsRes] = await Promise.all([
+    const [cfg, tieList, grpsRes, divsRes] = await Promise.all([
       fetchEventTeamConfig(eventId),
       fetchTies(eventId),
-      supabase.from('groups').select('*').eq('event_id', eventId).order('group_num'),
+      supabase.from('groups').select('*').eq('event_id', eventId).order('division_id').order('group_num'),
+      supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
     ]);
     setConfig(cfg);
     setTies(tieList);
     setGroups(grpsRes.data || []);
+    setDivisions(divsRes.data || []);
     setLoading(false);
   }, [eventId]);
 
@@ -113,11 +118,27 @@ export default function TiesPage() {
     if (groups.length === 0) {
       const rg: Record<string, TieWithClubs[]> = {};
       ties.forEach(t => { const k=t.round||'etc'; if(!rg[k])rg[k]=[]; rg[k].push(t); });
-      return Object.entries(rg).map(([r,tl]) => ({ groupName:{full_league:'풀리그',group:'조별리그',round_of_16:'16강',quarter:'8강',semi:'4강',final:'결승',etc:'기타'}[r]||r, groupId:null, ties:tl }));
+      return Object.entries(rg).map(([r,tl]) => ({ groupName:{full_league:'풀리그',group:'조별리그',round_of_16:'16강',quarter:'8강',semi:'4강',final:'결승',etc:'기타'}[r]||r, groupId:null, divisionId:null, ties:tl }));
     }
-    const result: {groupName:string;groupId:string|null;ties:TieWithClubs[]}[] = [];
-    for (const g of groups) { const gt=ties.filter(t=>t.group_id===g.id); if(gt.length>0) result.push({groupName:g.group_label||(g.group_num+'조'),groupId:g.id,ties:gt}); }
-    const ug=ties.filter(t=>!t.group_id); if(ug.length>0) result.push({groupName:'토너먼트',groupId:null,ties:ug});
+    // ✅ 선택된 division으로 그룹 필터링
+    const filteredGroups = selectedDiv === 'all'
+      ? groups
+      : groups.filter(g => g.division_id === selectedDiv);
+
+    const result: {groupName:string;groupId:string|null;divisionId:string|null;ties:TieWithClubs[]}[] = [];
+    for (const g of filteredGroups) {
+      const gt = ties.filter(t => t.group_id === g.id);
+      if (gt.length > 0) {
+        // ✅ group_num을 A,B,C... 로 변환
+        const groupNumLabel = g.group_num ? String.fromCharCode(64 + g.group_num) + '조' : '';
+        result.push({ groupName: g.group_label || groupNumLabel || g.group_name || g.id, groupId: g.id, divisionId: g.division_id, ties: gt });
+      }
+    }
+    // 토너먼트(group_id 없는 ties)는 division 필터 없이 표시
+    if (selectedDiv === 'all') {
+      const ug = ties.filter(t => !t.group_id);
+      if (ug.length > 0) result.push({ groupName: '토너먼트', groupId: null, divisionId: null, ties: ug });
+    }
     return result;
   }
 
@@ -138,6 +159,22 @@ export default function TiesPage() {
         <h1 className="text-2xl font-bold">🎾 대전 관리</h1>
         <span className="text-sm text-gray-500">총 {ties.length}대전 · 완료 {ties.filter(t=>t.status==='completed').length}</span>
       </div>
+
+      {/* ✅ Division 탭 */}
+      {divisions.length > 0 && (
+        <div className="flex gap-1 overflow-x-auto">
+          <button onClick={() => setSelectedDiv('all')}
+            className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+              selectedDiv === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}>전체</button>
+          {divisions.map(d => (
+            <button key={d.id} onClick={() => setSelectedDiv(d.id)}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                selectedDiv === d.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}>{d.name}</button>
+          ))}
+        </div>
+      )}
 
       {tieGroups.map(group => (
         <div key={group.groupName} className="space-y-3">
