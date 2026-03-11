@@ -9,7 +9,7 @@ interface VenueMatch {
   status: string; score: string | null; locked_by_participant: boolean
   team_a_name: string; team_b_name: string; team_a_id: string; team_b_id: string
   winner_team_id: string | null; division_name: string
-  is_team_tie?: boolean
+  is_team_tie?: boolean  // BUG#3: 이 플래그로 단체전 판별
 }
 
 export default function VenueManagePage() {
@@ -65,7 +65,6 @@ export default function VenueManagePage() {
     if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m)
   }
 
-  // 미배정: 부서 필터 적용
   const allUnassigned = matches.filter(m => !m.court && m.status !== 'FINISHED')
   const unassigned = filterDiv === 'ALL' ? allUnassigned : allUnassigned.filter(m => m.division_name === filterDiv)
 
@@ -197,7 +196,8 @@ export default function VenueManagePage() {
                   {divisionNames.map(dn => {
                     const cnt = allUnassigned.filter(m => m.division_name === dn).length
                     if (cnt === 0) return null
-                    const isTie = dn === '단체전'
+                    // BUG#3: 문자열 비교 대신 is_team_tie 플래그로 판별
+                    const isTie = allUnassigned.find(m => m.division_name === dn)?.is_team_tie === true
                     return (
                       <button key={dn} onClick={() => setFilterDiv(dn)}
                         className={`px-2 py-1 rounded text-xs font-medium transition-all ${
@@ -253,6 +253,7 @@ export default function VenueManagePage() {
                         else if (activeIdx >= 0 && i === activeIdx + 1) { badge = '대기1'; badgeColor = 'bg-amber-50 border-amber-200' }
                         else if (activeIdx >= 0 && i === activeIdx + 2) { badge = '대기2'; badgeColor = 'bg-green-50 border-green-200' }
 
+                        // BUG#3: is_team_tie 플래그 기반으로 단체전 판별
                         const canStart = !m.is_team_tie && m.status === 'PENDING' && (activeIdx < 0 || i === activeIdx)
 
                         return (
@@ -272,7 +273,7 @@ export default function VenueManagePage() {
                                 )}
                                 {!m.is_team_tie && (
                                   <button onClick={() => openScoreEdit(m)}
-                                    className="text-xs text-stone-400 hover:text-blue-500">✏️</button>
+                                    className="text-xs text-stone-400 hover:text-blue-500"></button>
                                 )}
                                 <button onClick={() => unassignFromCourt(m.id, !!m.is_team_tie)}
                                   className="text-xs text-stone-400 hover:text-red-500">x</button>
@@ -297,7 +298,7 @@ export default function VenueManagePage() {
                       })}
                       {courtMatches.length === 0 && (
                         <div className="text-center py-8 text-stone-300 border-2 border-dashed rounded-lg">
-                          <div className="text-2xl mb-1">🎾</div>
+                          <div className="text-2xl mb-1"></div>
                           <div className="text-xs">경기를 드래그하세요</div>
                         </div>
                       )}
@@ -324,7 +325,7 @@ export default function VenueManagePage() {
               <div className="text-center flex-1 font-medium">{editMatch.team_b_name || 'TBD'}</div>
             </div>
             {editMatch.locked_by_participant && (
-              <div className="mb-3 p-2 bg-amber-50 rounded-lg text-xs text-amber-700">참가자가 입력한 결과입니다.</div>
+              <div className="mb-3 p-2 bg-amber-50 rounded-lg text-xs text-amber-700">참가자가 이미 입력한 결과입니다.</div>
             )}
             <div className="mb-4">
               <label className="text-xs text-stone-500 mb-1 block">점수</label>
@@ -360,27 +361,23 @@ export default function VenueManagePage() {
 }
 
 function MatchChip({ m, onDragStart, onClickScore }: {
-  m: VenueMatch; onDragStart: (id: string) => void; onClickScore: () => void
+  m: VenueMatch
+  onDragStart: (id: string) => void
+  onClickScore: () => void
 }) {
-  const isTie = m.is_team_tie
   return (
     <div draggable onDragStart={() => onDragStart(m.id)}
-      className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs cursor-grab border bg-white hover:shadow-sm transition-all ${
-        isTie ? 'border-blue-200 hover:border-blue-400' : 'border-stone-200 hover:border-stone-300'
+      className={`rounded-lg border p-2 text-xs cursor-grab active:cursor-grabbing transition-all ${
+        m.is_team_tie ? 'bg-blue-50 border-blue-200 hover:border-blue-300' : 'bg-white border-stone-200 hover:border-stone-300'
       }`}>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1 truncate">
-          {isTie && <span className="text-[10px] bg-blue-600 text-white px-1 rounded flex-shrink-0">단체</span>}
-          <span className="font-medium">{m.team_a_name || 'TBD'}</span>
-          <span className="text-stone-300">v</span>
-          <span className="font-medium">{m.team_b_name || 'TBD'}</span>
-        </div>
-        <span className="text-stone-400">{m.division_name} {m.round}</span>
+      <div className="flex items-center gap-1 mb-1">
+        {m.is_team_tie && <span className="bg-blue-600 text-white text-[9px] px-1 rounded">단체</span>}
+        <span className="text-stone-400 truncate flex-1">{m.division_name} · {m.round}</span>
+        {!m.is_team_tie && (
+          <button onClick={e => { e.stopPropagation(); onClickScore() }} className="text-stone-300 hover:text-blue-500"></button>
+        )}
       </div>
-      {!isTie && (
-        <button onClick={e => { e.stopPropagation(); onClickScore() }}
-          className="text-stone-300 hover:text-blue-500 flex-shrink-0">✏️</button>
-      )}
+      <div className="font-medium truncate">{m.team_a_name} <span className="text-stone-300">v</span> {m.team_b_name}</div>
     </div>
   )
 }

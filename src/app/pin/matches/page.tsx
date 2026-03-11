@@ -1,408 +1,363 @@
+// ============================================================
+// PIN 현장 경기 관리
+// src/app/pin/matches/page.tsx
+// P8: 종료시간 표시 + Web Push 알림 완성
+// ============================================================
 'use client'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 
 interface PinMatch {
-  id: string; match_num: string; stage: string; round: string; court: string | null
-  court_order: number | null; status: string; score: string | null
-  locked_by_participant: boolean
-  team_a_name: string; team_b_name: string; team_a_id: string; team_b_id: string
-  my_side: 'A' | 'B'; division_name: string
+  id: string
+  match_num: string
+  stage: string
+  round: string
+  court: string | null
+  status: string
+  score: string | null
+  team_a_name: string
+  team_b_name: string
+  winner_name: string | null
+  division_name: string
+  started_at: string | null
+  ended_at: string | null
 }
 
-interface CourtContext {
-  currentOrder: number | null
-  currentMatch: { team_a_name: string; team_b_name: string; division_name: string } | null
-  myOrder: number
-  remainingBefore: number
+interface PinTie {
+  id: string
+  tie_order: number
+  round: string | null
+  status: string
+  court_number: number | null
+  club_a_rubbers_won: number
+  club_b_rubbers_won: number
+  club_a?: { name: string }
+  club_b?: { name: string }
+  started_at: string | null
+  ended_at: string | null
 }
 
 export default function PinMatchesPage() {
   const router = useRouter()
-  const [session, setSession] = useState<any>(null)
   const [matches, setMatches] = useState<PinMatch[]>([])
-  const [courtContexts, setCourtContexts] = useState<Map<string, CourtContext>>(new Map())
+  const [ties, setTies] = useState<PinTie[]>([])
   const [loading, setLoading] = useState(true)
-  const [submitting, setSubmitting] = useState<string | null>(null)
-  const [msg, setMsg] = useState('')
-  const [notifEnabled, setNotifEnabled] = useState(false)
-  const prevWaitingRef = useRef<Map<string, number>>(new Map())
+  const [notifAllowed, setNotifAllowed] = useState(false)
+  const [notifRequested, setNotifRequested] = useState(false)
+  const [tab, setTab] = useState<'individual' | 'team'>('individual')
+  const [courtFilter, setCourtFilter] = useState('ALL')
+  const [statusFilter, setStatusFilter] = useState('IN_PROGRESS')
+  const prevMatchIds = useRef<Set<string>>(new Set())
 
+  // PIN 검증
   useEffect(() => {
-    const raw = sessionStorage.getItem('pin_session')
-    if (!raw) { router.push('/pin'); return }
-    const s = JSON.parse(raw)
-    setSession(s)
-    loadData(s)
+    const pin = sessionStorage.getItem('venue_pin')
+    if (!pin) { router.replace('/pin'); return }
+    const eventId = sessionStorage.getItem('pin_event_id')
+    if (!eventId) { router.replace('/pin'); return }
+    loadData()
   }, [])
 
-  // 15초 자동 새로고침
-  useEffect(() => {
-    if (!session) return
-    const interval = setInterval(() => loadData(session), 15000)
-    return () => clearInterval(interval)
-  }, [session])
-
-  const loadData = useCallback(async (s: any) => {
-    // 내 경기 목록
-    const { data: pinData, error } = await supabase.rpc('rpc_pin_list_matches', { p_token: s.token })
-    if (error) {
-      sessionStorage.removeItem('pin_session')
-      router.push('/pin')
-      return
-    }
-    const myMatches: PinMatch[] = pinData.matches || []
-    setMatches(myMatches)
-
-    // 각 코트의 현재 진행 상황 조회
-    const courts = [...new Set(myMatches.map(m => m.court).filter(Boolean))]
-    const ctxMap = new Map<string, CourtContext>()
-
-    if (courts.length > 0) {
-      const { data: courtMatches } = await supabase.from('v_matches_with_teams').select('*')
-        .eq('event_id', s.event_id)
-        .in('court', courts)
-        .neq('score', 'BYE')
-        .order('court').order('court_order')
-
-      for (const court of courts) {
-        const cm = (courtMatches || []).filter((m: any) => m.court === court)
-        // 현재 진행 중이거나 첫 번째 대기 경기
-        const activeIdx = cm.findIndex((m: any) => m.status === 'IN_PROGRESS')
-        const pendingIdx = cm.findIndex((m: any) => m.status === 'PENDING')
-        const currentIdx = activeIdx >= 0 ? activeIdx : pendingIdx
-        const currentMatch = currentIdx >= 0 ? cm[currentIdx] : null
-
-        // 내 경기 찾기
-        const myMatch = myMatches.find(m => m.court === court)
-        const myIdx = myMatch ? cm.findIndex((m: any) => m.id === myMatch.id) : -1
-        const remainingBefore = (currentIdx >= 0 && myIdx >= 0) ? myIdx - currentIdx : 0
-
-        ctxMap.set(court!, {
-          currentOrder: currentMatch?.court_order || null,
-          currentMatch: currentMatch ? {
-            team_a_name: currentMatch.team_a_name,
-            team_b_name: currentMatch.team_b_name,
-            division_name: currentMatch.division_name,
-          } : null,
-          myOrder: myMatch?.court_order || 0,
-          remainingBefore: Math.max(0, remainingBefore),
-        })
-
-        // 알림 체크: 대기1이 되면 알림
-        if (notifEnabled && myMatch && remainingBefore === 1) {
-          const prevRemaining = prevWaitingRef.current.get(court!) ?? 99
-          if (prevRemaining > 1) {
-            sendNotification(court!, myMatch)
-          }
-        }
-        if (court) prevWaitingRef.current.set(court, remainingBefore)
-      }
-    }
-
-    setCourtContexts(ctxMap)
-    setLoading(false)
-  }, [notifEnabled])
-
-  function sendNotification(court: string, match: PinMatch) {
-    if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification('🎾 경기 준비!', {
-        body: `${court}에서 다음 경기입니다! 대기코트로 이동해주세요.`,
-        icon: '🎾',
-        tag: `court-${court}`,
-      })
-    }
-  }
-
-  async function enableNotifications() {
+  // Web Push 알림 권한 요청
+  async function requestNotification() {
+    setNotifRequested(true)
     if (!('Notification' in window)) {
-      setMsg('이 브라우저는 알림을 지원하지 않습니다.')
+      alert('이 브라우저는 알림을 지원하지 않습니다.')
       return
     }
-    const permission = await Notification.requestPermission()
-    if (permission === 'granted') {
-      setNotifEnabled(true)
-      setMsg('✅ 알림이 활성화되었습니다. 내 차례가 다가오면 알림을 보내드립니다.')
-    } else {
-      setMsg('알림 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.')
+    try {
+      const perm = await Notification.requestPermission()
+      setNotifAllowed(perm === 'granted')
+      if (perm === 'granted') {
+        new Notification('제주 테니스 토너먼트', {
+          body: '경기 완료 알림이 활성화되었습니다.',
+          icon: '/icon.png',
+        })
+      }
+    } catch {
+      setNotifAllowed(false)
     }
   }
 
-  async function submitScore(matchId: string, winnerId: string, score: string) {
-    if (!score) { setMsg('점수를 입력해주세요. (예: 6:4)'); return }
-    console.log('submitScore:', { matchId, winnerId, score })
-    setSubmitting(matchId); setMsg('')
-
-    const { data, error } = await supabase.rpc('rpc_pin_submit_score', {
-      p_token: session.token,
-      p_match_id: matchId,
-      p_score: score,
-      p_winner_id: winnerId,
-    })
-    setSubmitting(null)
-
-    if (error) { setMsg(error.message); return }
-    setMsg('✅ 결과가 저장되었습니다!')
-    loadData(session)
+  // 알림 발송 (경기 완료 시)
+  function sendNotification(title: string, body: string) {
+    if (!('Notification' in window)) return
+    if (Notification.permission === 'granted') {
+      new Notification(title, { body, icon: '/icon.png', silent: false })
+    }
   }
 
-  function handleLogout() {
-    sessionStorage.removeItem('pin_session')
-    router.push('/pin')
+  const loadData = useCallback(async () => {
+    const eventId = sessionStorage.getItem('pin_event_id')
+    if (!eventId) return
+    setLoading(true)
+    try {
+      const [matchRes, tieRes] = await Promise.all([
+        supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
+          .not('court', 'is', null).order('court').order('match_num'),
+        supabase.from('ties')
+          .select('*, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name)')
+          .eq('event_id', eventId).not('court_number', 'is', null)
+          .order('tie_order'),
+      ])
+
+      const newMatches: PinMatch[] = (matchRes.data || []).map((m: any) => ({
+        id: m.id, match_num: m.match_num, stage: m.stage, round: m.round,
+        court: m.court, status: m.status, score: m.score,
+        team_a_name: m.team_a_name, team_b_name: m.team_b_name,
+        winner_name: m.winner_name, division_name: m.division_name,
+        started_at: m.started_at, ended_at: m.ended_at,
+      }))
+
+      // 새로 완료된 경기 감지 → 알림
+      newMatches.forEach(m => {
+        if (m.status === 'FINISHED' && !prevMatchIds.current.has(m.id)) {
+          sendNotification(
+            `경기 완료 - ${m.court}`,
+            `${m.team_a_name} vs ${m.team_b_name}: ${m.score}`
+          )
+        }
+      })
+      prevMatchIds.current = new Set(newMatches.filter(m => m.status === 'FINISHED').map(m => m.id))
+
+      setMatches(newMatches)
+      setTies(tieRes.data || [])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  // 30초 자동 갱신
+  useEffect(() => {
+    const interval = setInterval(() => loadData(), 30000)
+    return () => clearInterval(interval)
+  }, [loadData])
+
+  useEffect(() => { loadData() }, [loadData])
+
+  // 브라우저 알림 권한 상태 초기화
+  useEffect(() => {
+    if ('Notification' in window) {
+      setNotifAllowed(Notification.permission === 'granted')
+      setNotifRequested(Notification.permission !== 'default')
+    }
+  }, [])
+
+  function formatDuration(start: string, end?: string | null): string {
+    const from = new Date(start).getTime()
+    const to = end ? new Date(end).getTime() : Date.now()
+    const mins = Math.round((to - from) / 60000)
+    if (mins < 60) return `${mins}분`
+    return `${Math.floor(mins / 60)}시간 ${mins % 60}분`
   }
 
-  if (!session) return null
+  function formatTime(iso: string): string {
+    return new Date(iso).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+  }
+
+  const courts = [...new Set(matches.map(m => m.court).filter(Boolean))]
+
+  const filteredMatches = matches.filter(m => {
+    if (courtFilter !== 'ALL' && m.court !== courtFilter) return false
+    if (statusFilter !== 'ALL' && m.status !== statusFilter) return false
+    return true
+  })
+
+  const filteredTies = ties.filter(t => {
+    if (statusFilter === 'IN_PROGRESS' && t.status !== 'in_progress') return false
+    if (statusFilter === 'FINISHED' && t.status !== 'completed') return false
+    return true
+  })
 
   return (
-    <div className="min-h-screen bg-stone-50">
-      <header className="bg-white border-b sticky top-0 z-10">
-        <div className="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
-          <div>
-            <h1 className="font-bold">🔑 {session.team_name}</h1>
-            <p className="text-xs text-stone-500">{session.division}</p>
+    <div className="min-h-screen bg-gray-50">
+      {/* 헤더 */}
+      <header className="bg-[#2d5016] text-white sticky top-0 z-10">
+        <div className="max-w-3xl mx-auto px-4 py-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="font-bold">경기 현황</h1>
+              <p className="text-xs text-white/60">30초 자동 갱신</p>
+            </div>
+            <div className="flex items-center gap-2">
+              {!notifAllowed && !notifRequested && (
+                <button onClick={requestNotification}
+                  className="text-xs bg-yellow-500 text-white px-2.5 py-1 rounded-full">
+                  🔔 알림 켜기
+                </button>
+              )}
+              {notifAllowed && (
+                <span className="text-xs text-white/60">🔔 알림 켜짐</span>
+              )}
+              <button onClick={loadData} className="text-xs bg-white/20 px-2.5 py-1 rounded-full">
+                🔄
+              </button>
+            </div>
           </div>
-          <button onClick={handleLogout} className="text-sm text-stone-400 hover:text-red-500">로그아웃</button>
+
+          {/* 탭 */}
+          <div className="flex gap-2 mt-3 border-t border-white/10 pt-3">
+            <button onClick={() => setTab('individual')}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium ${tab === 'individual' ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'}`}>
+              🎾 개인전
+            </button>
+            <button onClick={() => setTab('team')}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium ${tab === 'team' ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'}`}>
+              🏆 단체전
+            </button>
+          </div>
+
+          {/* 필터 */}
+          <div className="flex gap-2 mt-2 overflow-x-auto pb-1">
+            <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+              className="text-xs bg-white/10 text-white border-0 rounded px-2 py-1">
+              <option value="ALL">전체 상태</option>
+              <option value="IN_PROGRESS">진행중</option>
+              <option value="FINISHED">완료</option>
+            </select>
+            {tab === 'individual' && courts.length > 0 && (
+              <select value={courtFilter} onChange={e => setCourtFilter(e.target.value)}
+                className="text-xs bg-white/10 text-white border-0 rounded px-2 py-1">
+                <option value="ALL">전체 코트</option>
+                {courts.map(c => <option key={c} value={c!}>{c}</option>)}
+              </select>
+            )}
+          </div>
         </div>
       </header>
 
-      <main className="max-w-lg mx-auto px-4 py-6">
-        {/* 알림 활성화 버튼 */}
-        {!notifEnabled && (
-          <button onClick={enableNotifications}
-            className="w-full mb-4 p-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-700 hover:bg-blue-100 transition-all">
-            🔔 알림 켜기 — 내 차례가 다가오면 알려드립니다
-          </button>
-        )}
-        {notifEnabled && (
-          <div className="mb-4 p-2 bg-blue-50 rounded-xl text-xs text-blue-600 text-center">
-            🔔 알림 활성화됨 — 대기 1번째가 되면 알림을 보내드립니다
-          </div>
-        )}
-
-        {msg && (
-          <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('✅') ? 'bg-tennis-50 text-tennis-700' : 'bg-red-50 text-red-600'}`}>
-            {msg}
-          </div>
-        )}
-
+      <main className="max-w-3xl mx-auto px-4 py-4 space-y-3">
         {loading ? (
-          <p className="text-center py-10 text-stone-400">불러오는 중...</p>
-        ) : matches.length === 0 ? (
-          <div className="text-center py-10">
-            <div className="text-4xl mb-3">🎉</div>
-            <p className="text-stone-500">입력할 경기가 없습니다.</p>
-            <p className="text-stone-400 text-sm mt-1">모든 경기가 완료되었거나 아직 배정되지 않았습니다.</p>
-          </div>
+          <p className="text-center py-10 text-gray-400">불러오는 중...</p>
+        ) : tab === 'individual' ? (
+          filteredMatches.length === 0 ? (
+            <p className="text-center py-10 text-gray-400">경기가 없습니다.</p>
+          ) : (
+            filteredMatches.map(m => (
+              <MatchCard key={m.id} match={m} formatTime={formatTime} formatDuration={formatDuration} />
+            ))
+          )
         ) : (
-          <div className="space-y-4">
-            {matches.map(m => {
-              const ctx = m.court ? courtContexts.get(m.court) : null
-              return (
-                <div key={m.id} className="bg-white rounded-xl border overflow-hidden">
-                  {/* 코트 대기 상황 */}
-                  {ctx && m.court && m.stage === 'GROUP' && (
-                    <CourtWaitingBar court={m.court} ctx={ctx} />
-                  )}
-
-                  <div className="p-4">
-                    {/* 경기 정보 */}
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-stone-400">{m.round} · {m.match_num}</span>
-                        <span className="text-xs px-1.5 py-0.5 rounded bg-stone-100 text-stone-500">{m.division_name}</span>
-                      </div>
-                      {m.court && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-[#2d5016]/10 text-[#2d5016] font-bold">
-                          {m.court} #{m.court_order}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* 팀 대결 */}
-                    <div className="flex items-center justify-center gap-3 mb-3">
-                      <div className={`text-center flex-1 ${m.my_side === 'A' ? 'font-bold text-tennis-700' : ''}`}>
-                        <div className="text-sm">{m.team_a_name}</div>
-                        {m.my_side === 'A' && <span className="text-xs text-tennis-500">내 팀</span>}
-                      </div>
-                      <span className="text-stone-300 font-bold">VS</span>
-                      <div className={`text-center flex-1 ${m.my_side === 'B' ? 'font-bold text-tennis-700' : ''}`}>
-                        <div className="text-sm">{m.team_b_name}</div>
-                        {m.my_side === 'B' && <span className="text-xs text-tennis-500">내 팀</span>}
-                      </div>
-                    </div>
-
-                    {/* 점수 입력 */}
-                    {m.locked_by_participant ? (
-                      <div className="text-center text-sm text-stone-400 py-2">
-                        🔒 이미 입력 완료 ({m.score})
-                      </div>
-                    ) : (
-                      <ScoreInput
-                        match={m}
-                        submitting={submitting === m.id}
-                        onSubmit={(matchId, winnerId, score) => submitScore(matchId, winnerId, score)}
-                      />
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+          filteredTies.length === 0 ? (
+            <p className="text-center py-10 text-gray-400">단체전이 없습니다.</p>
+          ) : (
+            filteredTies.map(t => (
+              <TieCard key={t.id} tie={t} formatTime={formatTime} formatDuration={formatDuration} />
+            ))
+          )
         )}
       </main>
     </div>
   )
 }
 
-// 코트 대기 상황 바
-function CourtWaitingBar({ court, ctx }: { court: string; ctx: CourtContext }) {
-  const { remainingBefore, currentMatch } = ctx
-
-  let statusColor = 'bg-stone-100 text-stone-600'
-  let statusText = ''
-  let statusEmoji = ''
-
-  if (remainingBefore === 0) {
-    statusColor = 'bg-red-100 text-red-700'
-    statusText = '지금 내 경기!'
-    statusEmoji = '🔴'
-  } else if (remainingBefore === 1) {
-    statusColor = 'bg-amber-100 text-amber-700'
-    statusText = '다음 경기 (대기코트로 이동!)'
-    statusEmoji = '🟡'
-  } else if (remainingBefore === 2) {
-    statusColor = 'bg-green-100 text-green-700'
-    statusText = `앞에 ${remainingBefore}경기 남음`
-    statusEmoji = '🟢'
-  } else {
-    statusText = `앞에 ${remainingBefore}경기 남음`
-    statusEmoji = '⏳'
-  }
+function MatchCard({ match: m, formatTime, formatDuration }: {
+  match: PinMatch
+  formatTime: (s: string) => string
+  formatDuration: (s: string, e?: string | null) => string
+}) {
+  const isLive = m.status === 'IN_PROGRESS'
+  const isDone = m.status === 'FINISHED'
 
   return (
-    <div className={`px-4 py-2.5 ${statusColor}`}>
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-bold">{statusEmoji} {statusText}</span>
-        <span className="text-xs opacity-70">{court}</span>
-      </div>
-      {currentMatch && remainingBefore > 0 && (
-        <div className="text-xs mt-1 opacity-70">
-          현재 진행: {currentMatch.team_a_name} vs {currentMatch.team_b_name} ({currentMatch.division_name})
+    <div className={`bg-white rounded-xl border shadow-sm overflow-hidden ${isLive ? 'border-red-300 shadow-red-100' : isDone ? 'opacity-70' : ''}`}>
+      {isLive && (
+        <div className="bg-red-500 text-white px-4 py-1.5 flex items-center gap-2 text-xs font-bold">
+          <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+          LIVE
+          {m.started_at && <span className="ml-auto font-normal">{formatDuration(m.started_at)} 경과</span>}
         </div>
       )}
+      <div className="p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <span className={`px-2 py-0.5 rounded font-medium ${isLive ? 'bg-red-100 text-red-700' : isDone ? 'bg-green-100 text-green-700' : 'bg-gray-100'}`}>
+              {m.court}
+            </span>
+            <span>{m.division_name}</span>
+          </div>
+          {isDone && m.ended_at && (
+            <span className="text-xs text-gray-400">
+              종료 {formatTime(m.ended_at)}
+              {m.started_at && ` (${formatDuration(m.started_at, m.ended_at)})`}
+            </span>
+          )}
+          {!isDone && m.started_at && (
+            <span className="text-xs text-gray-400">시작 {formatTime(m.started_at)}</span>
+          )}
+        </div>
+
+        <div className="flex items-center">
+          <div className={`flex-1 font-medium ${m.winner_name === m.team_a_name ? 'text-green-700 font-bold' : ''}`}>
+            {m.team_a_name}
+          </div>
+          <div className="px-4 text-center">
+            {isDone && m.score ? (
+              <span className="text-xl font-black">{m.score}</span>
+            ) : isLive ? (
+              <span className="text-sm font-bold text-red-500">진행중</span>
+            ) : (
+              <span className="text-sm text-gray-400">vs</span>
+            )}
+          </div>
+          <div className={`flex-1 text-right font-medium ${m.winner_name === m.team_b_name ? 'text-green-700 font-bold' : ''}`}>
+            {m.team_b_name}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
 
-// 점수 입력 (3단계: ① 승자 선택 → ② 점수 입력 → ③ 최종 확인)
-function ScoreInput({ match, submitting, onSubmit }: {
-  match: PinMatch
-  submitting: boolean
-  onSubmit: (matchId: string, winnerId: string, score: string) => void
+function TieCard({ tie: t, formatTime, formatDuration }: {
+  tie: PinTie
+  formatTime: (s: string) => string
+  formatDuration: (s: string, e?: string | null) => string
 }) {
-  const [step, setStep] = useState<'select_winner' | 'enter_score' | 'confirm'>('select_winner')
-  const [winnerId, setWinnerId] = useState<string>('')
-  const [score, setScore] = useState('')
+  const isLive = t.status === 'in_progress'
+  const isDone = t.status === 'completed'
 
-  function selectWinner(id: string) {
-    setWinnerId(id)
-    setStep('enter_score')
-  }
-
-  function goToConfirm() {
-    if (!score.trim()) return
-    setStep('confirm')
-  }
-
-  function reset() {
-    setStep('select_winner')
-    setWinnerId('')
-    setScore('')
-  }
-
-  const winnerName = winnerId === match.team_a_id ? match.team_a_name : match.team_b_name
-  const loserName = winnerId === match.team_a_id ? match.team_b_name : match.team_a_name
-
-  // ① 승자 선택
-  if (step === 'select_winner') {
-    return (
-      <div>
-        <p className="text-xs text-stone-500 text-center mb-2">승리팀을 선택하세요</p>
-        <div className="flex gap-2">
-          <button
-            onClick={() => selectWinner(match.team_a_id)}
-            className="flex-1 py-3 rounded-lg border-2 border-stone-200 hover:border-tennis-500 hover:bg-tennis-50 transition-all text-sm font-bold"
-          >
-            🏆 {match.team_a_name}
-            {match.my_side === 'A' && <span className="block text-xs font-normal text-tennis-500">내 팀</span>}
-          </button>
-          <button
-            onClick={() => selectWinner(match.team_b_id)}
-            className="flex-1 py-3 rounded-lg border-2 border-stone-200 hover:border-tennis-500 hover:bg-tennis-50 transition-all text-sm font-bold"
-          >
-            🏆 {match.team_b_name}
-            {match.my_side === 'B' && <span className="block text-xs font-normal text-tennis-500">내 팀</span>}
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // ② 점수 입력
-  if (step === 'enter_score') {
-    return (
-      <div>
-        <div className="text-center mb-3">
-          <span className="inline-block px-3 py-1 bg-tennis-50 text-tennis-700 rounded-full text-xs font-bold">
-            🏆 승리: {winnerName}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            type="text" placeholder="점수 입력 (예: 6:4)"
-            value={score}
-            onChange={e => setScore(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && goToConfirm()}
-            className="score-input flex-1"
-            autoFocus
-          />
-          <button onClick={goToConfirm}
-            disabled={!score.trim()}
-            className="bg-amber-500 text-white font-bold px-4 py-3 rounded-lg hover:bg-amber-600 disabled:opacity-50 transition-all whitespace-nowrap">
-            다음
-          </button>
-          <button onClick={reset}
-            className="text-stone-400 hover:text-stone-600 px-2 py-3 text-sm">
-            취소
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  // ③ 최종 확인
   return (
-    <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
-      <p className="text-center text-sm font-bold text-amber-800 mb-3">⚠️ 결과를 확인해주세요</p>
-      <div className="text-center space-y-1 mb-4">
-        <div className="text-lg font-bold text-tennis-700">🏆 {winnerName}</div>
-        <div className="text-stone-400 text-xs">vs</div>
-        <div className="text-sm text-stone-500">{loserName}</div>
-        <div className="text-xl font-bold mt-2">{score}</div>
-      </div>
-      <div className="flex gap-2">
-        <button onClick={reset}
-          className="flex-1 py-3 rounded-lg border border-stone-300 text-stone-600 hover:bg-stone-100 text-sm font-medium transition-all">
-          ← 다시 입력
-        </button>
-        <button
-          onClick={() => onSubmit(match.id, winnerId, score)}
-          disabled={submitting}
-          className="flex-1 py-3 rounded-lg bg-red-500 text-white font-bold hover:bg-red-600 disabled:opacity-50 text-sm transition-all">
-          {submitting ? '제출 중...' : '✅ 결과 확정'}
-        </button>
+    <div className={`bg-white rounded-xl border shadow-sm overflow-hidden ${isLive ? 'border-red-300 shadow-red-100' : isDone ? 'opacity-70' : ''}`}>
+      {isLive && (
+        <div className="bg-red-500 text-white px-4 py-1.5 flex items-center gap-2 text-xs font-bold">
+          <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+          LIVE
+          {t.started_at && <span className="ml-auto font-normal">{formatDuration(t.started_at)} 경과</span>}
+        </div>
+      )}
+      <div className="p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            {t.court_number && (
+              <span className={`px-2 py-0.5 rounded font-medium ${isLive ? 'bg-red-100 text-red-700' : isDone ? 'bg-green-100 text-green-700' : 'bg-gray-100'}`}>
+                코트 {t.court_number}
+              </span>
+            )}
+            <span>단체전 #{t.tie_order}</span>
+          </div>
+          {isDone && t.ended_at && (
+            <span className="text-xs text-gray-400">
+              종료 {formatTime(t.ended_at)}
+              {t.started_at && ` (${formatDuration(t.started_at, t.ended_at)})`}
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center">
+          <div className="flex-1 font-medium">{t.club_a?.name || 'TBD'}</div>
+          <div className="px-4 text-center">
+            {isDone || isLive ? (
+              <span className={`text-xl font-black ${isLive ? 'text-red-600' : ''}`}>
+                {t.club_a_rubbers_won} - {t.club_b_rubbers_won}
+              </span>
+            ) : (
+              <span className="text-sm text-gray-400">vs</span>
+            )}
+          </div>
+          <div className="flex-1 text-right font-medium">{t.club_b?.name || 'TBD'}</div>
+        </div>
       </div>
     </div>
   )

@@ -1,8 +1,8 @@
 // ============================================================
-// 대전 관리 페이지 (운영본부용)
+// 팀대회 tie 관리 페이지 (대시보드용)
 // src/app/dashboard/teams/ties/page.tsx
-// + 코트 배정, 점수 표시
-// ★ 수정: 승자 팀 강조 표시 (배경색 + 트로피)
+// BUG#1 수정: selectedDiv 'all' 제거 → 항상 첫번째 부서 자동선택
+// + 경기 시작/종료 시간 기록 및 표시
 // ============================================================
 'use client';
 
@@ -31,8 +31,9 @@ export default function TiesPage() {
   const [saveError, setSaveError] = useState('');
   const [copiedTieId, setCopiedTieId] = useState<string | null>(null);
 
+  // BUG#1: 'all' 대신 '' 초기값, loadData에서 첫번째 부서로 자동설정
   const [divisions, setDivisions] = useState<any[]>([]);
-  const [selectedDiv, setSelectedDiv] = useState<string>('all');
+  const [selectedDiv, setSelectedDiv] = useState<string>('');
 
   const [courtCount, setCourtCount] = useState(20);
   const [editingCourt, setEditingCourt] = useState<string | null>(null);
@@ -41,18 +42,23 @@ export default function TiesPage() {
   const loadData = useCallback(async () => {
     if (!eventId) return;
     setLoading(true);
-    // ✅ config + ties + groups 병렬 fetch
-    const [cfg, tieList, grpsRes, divsRes] = await Promise.all([
-      fetchEventTeamConfig(eventId),
-      fetchTies(eventId),
-      supabase.from('groups').select('*').eq('event_id', eventId).order('division_id').order('group_num'),
-      supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
-    ]);
-    setConfig(cfg);
-    setTies(tieList);
-    setGroups(grpsRes.data || []);
-    setDivisions(divsRes.data || []);
-    setLoading(false);
+    try {
+      const [cfg, tieList, grpsRes, divsRes] = await Promise.all([
+        fetchEventTeamConfig(eventId),
+        fetchTies(eventId),
+        supabase.from('groups').select('*').eq('event_id', eventId).order('division_id').order('group_num'),
+        supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
+      ]);
+      setConfig(cfg);
+      setTies(tieList);
+      setGroups(grpsRes.data || []);
+      const divList = divsRes.data || [];
+      setDivisions(divList);
+      // BUG#1: 첫번째 부서 자동선택 (현재 선택 없을 때만)
+      setSelectedDiv(prev => prev || (divList[0]?.id ?? ''));
+    } finally {
+      setLoading(false);
+    }
   }, [eventId]);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -61,7 +67,6 @@ export default function TiesPage() {
     if (selectedTie?.id === tie.id) { setSelectedTie(null); setRubbers([]); setTieLineups([]); return; }
     setSelectedTie(tie); setRubbersLoading(true); setEditingRubber(null);
 
-    // ✅ rubbers, lineups, 클럽A 멤버, 클럽B 멤버 4개 동시 fetch
     const [rubberData, lineupData, membersA, membersB] = await Promise.all([
       fetchRubbers(tie.id),
       fetchRevealedLineups(tie.id),
@@ -109,44 +114,64 @@ export default function TiesPage() {
     await loadData();
   }
 
+  // 경기 시작 → started_at 기록
+  async function handleStartTie(tieId: string) {
+    await supabase.from('ties')
+      .update({ status: 'in_progress', started_at: new Date().toISOString() })
+      .eq('id', tieId);
+    await loadData();
+  }
+
   function copyLineupUrl(tieId: string) {
     navigator.clipboard.writeText(`${window.location.origin}/lineup/${tieId}`);
     setCopiedTieId(tieId); setTimeout(() => setCopiedTieId(null), 2000);
   }
 
+  // BUG#1: 'all' 분기 완전 제거 → selectedDiv로만 필터
   function getTiesByGroup() {
     if (groups.length === 0) {
       const rg: Record<string, TieWithClubs[]> = {};
-      ties.forEach(t => { const k=t.round||'etc'; if(!rg[k])rg[k]=[]; rg[k].push(t); });
+      const filtered = selectedDiv ? ties.filter(t => (t as any).division_id === selectedDiv || !selectedDiv) : ties;
+      filtered.forEach(t => { const k=t.round||'etc'; if(!rg[k])rg[k]=[]; rg[k].push(t); });
       return Object.entries(rg).map(([r,tl]) => ({ groupName:{full_league:'풀리그',group:'조별리그',round_of_16:'16강',quarter:'8강',semi:'4강',final:'결승',etc:'기타'}[r]||r, groupId:null, divisionId:null, ties:tl }));
     }
-    // ✅ 선택된 division으로 그룹 필터링
-    const filteredGroups = selectedDiv === 'all'
-      ? groups
-      : groups.filter(g => g.division_id === selectedDiv);
+
+    const filteredGroups = selectedDiv
+      ? groups.filter(g => g.division_id === selectedDiv)
+      : groups;
 
     const result: {groupName:string;groupId:string|null;divisionId:string|null;ties:TieWithClubs[]}[] = [];
     for (const g of filteredGroups) {
       const gt = ties.filter(t => t.group_id === g.id);
       if (gt.length > 0) {
-        // ✅ group_num을 A,B,C... 로 변환
         const groupNumLabel = g.group_num ? String.fromCharCode(64 + g.group_num) + '조' : '';
         result.push({ groupName: g.group_label || groupNumLabel || g.group_name || g.id, groupId: g.id, divisionId: g.division_id, ties: gt });
       }
     }
-    // 토너먼트(group_id 없는 ties)는 division 필터 없이 표시
-    if (selectedDiv === 'all') {
-      const ug = ties.filter(t => !t.group_id);
-      if (ug.length > 0) result.push({ groupName: '토너먼트', groupId: null, divisionId: null, ties: ug });
-    }
+    // 토너먼트(group_id 없는 ties)도 해당 division으로 필터
+    const ug = ties.filter(t => !t.group_id && (!selectedDiv || (t as any).division_id === selectedDiv));
+    if (ug.length > 0) result.push({ groupName: '토너먼트', groupId: null, divisionId: null, ties: ug });
     return result;
   }
 
-  if (loading) return <div className="p-8 text-center text-gray-500">로딩중...</div>;
+  function formatTime(isoStr: string | null | undefined): string {
+    if (!isoStr) return '';
+    const d = new Date(isoStr);
+    return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function calcDuration(start: string | null | undefined, end: string | null | undefined): string {
+    if (!start || !end) return '';
+    const ms = new Date(end).getTime() - new Date(start).getTime();
+    const mins = Math.round(ms / 60000);
+    return `${mins}분`;
+  }
+
+  if (loading) return <div className="p-8 text-center text-gray-500">불러오는 중...</div>;
   if (ties.length===0) return (
     <div className="max-w-5xl mx-auto p-6">
-      <h1 className="text-2xl font-bold mb-4">🎾 대전 관리</h1>
-      <div className="bg-gray-50 rounded-lg border border-dashed p-8 text-center text-gray-400">대전이 없습니다. 먼저 조편성에서 대전을 생성해주세요.</div>
+      <h1 className="text-2xl font-bold mb-4"> 대전 관리</h1>
+      <div className="bg-gray-50 rounded-lg border border-dashed p-8 text-center text-gray-400">타이가 없습니다. 먼저 조편성에서 타이를 생성하세요.</div>
     </div>
   );
 
@@ -156,17 +181,13 @@ export default function TiesPage() {
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">🎾 대전 관리</h1>
-        <span className="text-sm text-gray-500">총 {ties.length}대전 · 완료 {ties.filter(t=>t.status==='completed').length}</span>
+        <h1 className="text-2xl font-bold"> 대전 관리</h1>
+        <span className="text-sm text-gray-500">전체 {ties.length}타이 · 완료 {ties.filter(t=>t.status==='completed').length}</span>
       </div>
 
-      {/* ✅ Division 탭 */}
+      {/* Division 탭 - BUG#1: '전체' 버튼 제거 */}
       {divisions.length > 0 && (
         <div className="flex gap-1 overflow-x-auto">
-          <button onClick={() => setSelectedDiv('all')}
-            className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-              selectedDiv === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}>전체</button>
           {divisions.map(d => (
             <button key={d.id} onClick={() => setSelectedDiv(d.id)}
               className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
@@ -185,12 +206,13 @@ export default function TiesPage() {
             const aWin = tie.club_a_rubbers_won>=maj && tie.status==='completed';
             const bWin = tie.club_b_rubbers_won>=maj && tie.status==='completed';
             const isEditingThisCourt = editingCourt === tie.id;
+            const tieAny = tie as any;
             return (
               <div key={tie.id} className={`bg-white rounded-lg border overflow-hidden ${
-                tie.status==='completed' ? 'border-green-300' : ''
+                tie.status==='completed' ? 'border-green-300' : tie.status==='in_progress' ? 'border-red-300' : ''
               }`}>
                 <div onClick={() => handleSelectTie(tie)} className={`p-4 cursor-pointer hover:bg-gray-50 transition ${
-                  tie.status==='completed' ? 'bg-green-50/30' : ''
+                  tie.status==='completed' ? 'bg-green-50/30' : tie.status==='in_progress' ? 'bg-red-50/20' : ''
                 }`}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3 flex-wrap">
@@ -198,13 +220,13 @@ export default function TiesPage() {
                       <span className={`font-semibold px-2 py-0.5 rounded ${
                         aWin ? 'bg-blue-100 text-blue-700' : bWin ? 'text-gray-400' : ''
                       }`}>
-                        {aWin && '🏆 '}{tie.club_a?.name||'TBD'}
+                        {aWin && ' '}{tie.club_a?.name||'TBD'}
                       </span>
                       <span className="text-gray-400 text-sm">vs</span>
                       <span className={`font-semibold px-2 py-0.5 rounded ${
                         bWin ? 'bg-blue-100 text-blue-700' : aWin ? 'text-gray-400' : ''
                       }`}>
-                        {bWin && '🏆 '}{tie.club_b?.name||'TBD'}
+                        {bWin && ' '}{tie.club_b?.name||'TBD'}
                       </span>
                       {tie.court_number && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">코트 {tie.court_number}</span>}
                     </div>
@@ -220,10 +242,22 @@ export default function TiesPage() {
                       <span className="text-gray-400 text-sm">{isSelected?'▲':'▼'}</span>
                     </div>
                   </div>
+
+                  {/* 시작/종료 시간 표시 */}
+                  {(tieAny.started_at || tieAny.ended_at) && (
+                    <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
+                      {tieAny.started_at && <span> 시작 {formatTime(tieAny.started_at)}</span>}
+                      {tieAny.ended_at && <span> 종료 {formatTime(tieAny.ended_at)}</span>}
+                      {tieAny.started_at && tieAny.ended_at && (
+                        <span className="text-blue-500">⏱ {calcDuration(tieAny.started_at, tieAny.ended_at)}</span>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
-                    <span>{tie.club_a?.name?.slice(0,6)}: {tie.club_a_lineup_submitted?<span className="text-green-600 ml-1">봉제출</span>:<span className="text-orange-500 ml-1">대기중</span>}</span>
-                    <span>{tie.club_b?.name?.slice(0,6)}: {tie.club_b_lineup_submitted?<span className="text-green-600 ml-1">봉제출</span>:<span className="text-orange-500 ml-1">대기중</span>}</span>
-                    {tie.lineup_revealed && <span className="text-blue-600">🔓공개완료</span>}
+                    <span>{tie.club_a?.name?.slice(0,6)}: {tie.club_a_lineup_submitted?<span className="text-green-600 ml-1">제출완료</span>:<span className="text-orange-500 ml-1">미제출</span>}</span>
+                    <span>{tie.club_b?.name?.slice(0,6)}: {tie.club_b_lineup_submitted?<span className="text-green-600 ml-1">제출완료</span>:<span className="text-orange-500 ml-1">미제출</span>}</span>
+                    {tie.lineup_revealed && <span className="text-blue-600">라인업공개완료</span>}
                   </div>
                 </div>
 
@@ -231,12 +265,20 @@ export default function TiesPage() {
                   <div className="border-t bg-gray-50 p-4 space-y-4">
                     <div className="flex gap-2 flex-wrap">
                       <button onClick={e => {e.stopPropagation();copyLineupUrl(tie.id);}} className="text-xs bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-200">
-                        {copiedTieId===tie.id?'✅복사됨':'📋 라인업 URL 복사'}</button>
+                        {copiedTieId===tie.id?'복사됨':' 라인업 URL 복사'}</button>
+
+                      {/* 시작 버튼 */}
+                      {tie.status === 'pending' || tie.status === 'lineup_phase' ? (
+                        <button onClick={e => { e.stopPropagation(); handleStartTie(tie.id); }}
+                          className="text-xs bg-red-500 text-white px-3 py-1.5 rounded-lg hover:bg-red-600">
+                          ▶ 경기 시작
+                        </button>
+                      ) : null}
 
                       {!isEditingThisCourt ? (
                         <button onClick={e => { e.stopPropagation(); setEditingCourt(tie.id); setCourtInput(tie.court_number?.toString()||''); }}
                           className="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-lg hover:bg-green-200">
-                          {tie.court_number ? `코트 ${tie.court_number} (변경)` : '🏟 코트 배정'}</button>
+                          {tie.court_number ? `코트 ${tie.court_number} (변경)` : ' 코트 배정'}</button>
                       ) : (
                         <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
                           <select value={courtInput} onChange={e => setCourtInput(e.target.value)} className="border rounded px-2 py-1 text-xs">
@@ -244,39 +286,28 @@ export default function TiesPage() {
                             {Array.from({length:courtCount},(_,i)=>i+1).map(n => <option key={n} value={n}>코트 {n}</option>)}
                           </select>
                           <button onClick={() => handleCourtAssign(tie.id, courtInput ? parseInt(courtInput) : null)}
-                            className="text-xs bg-green-600 text-white px-2 py-1 rounded">확인</button>
-                          <button onClick={() => setEditingCourt(null)} className="text-xs bg-gray-200 px-2 py-1 rounded">취소</button>
+                            className="text-xs bg-green-600 text-white px-2 py-1 rounded hover:bg-green-700">확인</button>
+                          <button onClick={() => setEditingCourt(null)} className="text-xs text-gray-400 px-1">취소</button>
                         </div>
                       )}
                     </div>
 
-                    {rubbersLoading ? <div className="text-center text-gray-400 py-4">로딩중...</div> :
-                    rubbers.length===0 ? <div className="text-center text-gray-400 py-4">러버가 없습니다.</div> : (
+                    {rubbersLoading ? (
+                      <p className="text-center text-gray-400 text-sm">로딩...</p>
+                    ) : (
                       <div className="space-y-3">
                         {rubbers.map(r => {
-                          const isEditing = editingRubber===r.id;
-                          const hasScore = r.set1_a!==null;
+                          const isEditing = editingRubber === r.id;
+                          const hasScore = r.set1_a !== null;
+                          const rubberWinA = hasScore && (r.set1_a??0) > (r.set1_b??0);
+                          const rubberWinB = hasScore && (r.set1_b??0) > (r.set1_a??0);
                           const laA = tieLineups.find(l => l.rubber_number===r.rubber_number && l.club_id===tie.club_a_id);
                           const laB = tieLineups.find(l => l.rubber_number===r.rubber_number && l.club_id===tie.club_b_id);
-                          const rubberWinA = r.winning_club_id === tie.club_a_id;
-                          const rubberWinB = r.winning_club_id === tie.club_b_id;
                           return (
-                            <div key={r.id} className={`bg-white rounded-lg border p-4 ${
-                              r.status==='completed' ? 'border-green-200' : ''
-                            }`}>
+                            <div key={r.id} className={`bg-white rounded-lg border p-3 ${rubberWinA?'border-blue-200':rubberWinB?'border-blue-200':''}`}>
                               <div className="flex items-center justify-between mb-2">
-                                <span className="font-medium text-sm">
-                                  복식 {r.rubber_number}
-                                  {r.status==='completed' && r.winning_club_id && (
-                                    <span className="ml-2 text-xs text-blue-600 font-normal">
-                                      🏆 {r.winning_club_id===tie.club_a_id?tie.club_a?.name:tie.club_b?.name} 승
-                                    </span>
-                                  )}
-                                </span>
-                                <div className="flex items-center gap-2">
-                                  {r.status==='completed' && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">완료</span>}
-                                  {r.pin_code && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono">PIN: {r.pin_code}</span>}
-                                </div>
+                                <span className="text-xs font-bold text-gray-600">러버 {r.rubber_number}</span>
+                                {hasScore && <span className="text-xs text-gray-400">{rubberWinA?tie.club_a?.name:rubberWinB?tie.club_b?.name:''}승</span>}
                               </div>
                               {(laA||laB) && (
                                 <div className="grid grid-cols-5 items-center gap-1 mb-3 text-xs">
@@ -312,7 +343,7 @@ export default function TiesPage() {
                                   <div className="flex gap-2">
                                     <button onClick={() => {setEditingRubber(null);setSaveError('');}} className="flex-1 bg-gray-100 py-2 rounded-lg text-sm">취소</button>
                                     <button onClick={() => handleSaveScore(r.id)} disabled={saving} className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50">
-                                      {saving?'저장중...':'점수 확정'}</button>
+                                      {saving?'저장...':'점수 확정'}</button>
                                   </div>
                                 </div>
                               )}

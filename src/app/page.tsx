@@ -8,15 +8,15 @@ const MEMBER_CARDS = [
     href: '/events',
     emoji: '📺',
     title: '대회 보기',
-    desc: '조 게시 · 토너먼트 · 경기결과 · 코트현황',
+    desc: '조별리그 · 토너먼트 · 경기결과 · 이벤트현황',
     color: 'bg-gradient-to-br from-emerald-50 to-green-100 border-green-200 hover:border-green-400',
     iconBg: 'bg-white/70',
     badge: 'LIVE',
   },
   {
     href: '/pin',
-    emoji: '🔑',
-    title: '참가자 입력',
+    emoji: '📋',
+    title: '점수 직접입력',
     desc: 'PIN으로 내 경기 결과 직접 입력',
     color: 'bg-gradient-to-br from-amber-50 to-yellow-100 border-amber-200 hover:border-amber-400',
     iconBg: 'bg-white/70',
@@ -28,24 +28,24 @@ const ADMIN_CARDS = [
   {
     href: '/venue',
     emoji: '🏟',
-    title: '부설 경기장',
-    desc: '경기장 PIN으로 코트 관리',
+    title: '현장 경기관리',
+    desc: '경기장 PIN으로 이벤트 관리',
     color: 'bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200 hover:border-orange-400',
     wide: false,
   },
   {
     href: '/admin-pin',
-    emoji: '🛡',
-    title: '관리자 도구',
-    desc: '마스터PIN으로 잠금해제/수정',
+    emoji: '🔑',
+    title: '관리자 모드',
+    desc: '마스터PIN으로 점수조정/설정',
     color: 'bg-gradient-to-br from-red-50 to-rose-100 border-red-200 hover:border-red-400',
     wide: false,
   },
   {
     href: '/dashboard',
-    emoji: '⚙️',
-    title: '운영 대시보드',
-    desc: '팀관리 · 조편성 · 경기 · 코트배정 전체 관리',
+    emoji: '📊',
+    title: '대회 운영 대시보드',
+    desc: '팀관리 · 조편성 · 경기 · 이벤트설정 전체 관리',
     color: 'bg-gradient-to-br from-blue-50 to-sky-100 border-blue-200 hover:border-blue-400',
     wide: true,
   },
@@ -65,7 +65,6 @@ export default function HomePage() {
   useEffect(() => {
     async function fetchStats() {
       try {
-        // 1. active 이벤트 찾기
         const { data: activeEvents } = await supabase
           .from('events')
           .select('id')
@@ -78,31 +77,46 @@ export default function HomePage() {
 
         const eventIds = activeEvents.map(e => e.id)
 
-        // 2. 진행중 경기 수
-        const { count: inProgress } = await supabase
+        const matchInProgressPromise = supabase
           .from('matches')
           .select('*', { count: 'exact', head: true })
           .in('event_id', eventIds)
           .eq('status', 'IN_PROGRESS')
 
-        // 3. 사용중 코트 수 (IN_PROGRESS 중 court 값이 있는 것)
-        const { data: courtMatches } = await supabase
+        const tieInProgressPromise = supabase
+          .from('ties')
+          .select('*', { count: 'exact', head: true })
+          .in('event_id', eventIds)
+          .eq('status', 'in_progress')
+
+        const courtMatchesPromise = supabase
           .from('matches')
           .select('court')
           .in('event_id', eventIds)
           .eq('status', 'IN_PROGRESS')
           .not('court', 'is', null)
 
-        const activeCourts = new Set(courtMatches?.map(m => m.court)).size
-
-        // 4. 참가팀 수
-        const { count: totalTeams } = await supabase
+        const totalTeamsPromise = supabase
           .from('teams')
           .select('*', { count: 'exact', head: true })
           .in('event_id', eventIds)
 
+        const [
+          { count: matchInProgress },
+          { count: tieInProgress },
+          { data: courtMatches },
+          { count: totalTeams },
+        ] = await Promise.all([
+          matchInProgressPromise,
+          tieInProgressPromise,
+          courtMatchesPromise,
+          totalTeamsPromise,
+        ])
+
+        const activeCourts = new Set(courtMatches?.map(m => m.court)).size
+
         setStats({
-          inProgress: inProgress ?? 0,
+          inProgress: (matchInProgress ?? 0) + (tieInProgress ?? 0),
           activeCourts,
           totalTeams: totalTeams ?? 0,
         })
@@ -114,8 +128,6 @@ export default function HomePage() {
     }
 
     fetchStats()
-
-    // 30초마다 자동 갱신
     const timer = setInterval(fetchStats, 30000)
     return () => clearInterval(timer)
   }, [])
@@ -128,14 +140,13 @@ export default function HomePage() {
         <div className="rounded-3xl overflow-hidden mb-4 shadow-lg"
           style={{ background: 'linear-gradient(135deg, #1a2e1a 0%, #2d5016 50%, #3d6b1e 100%)' }}>
           <div className="px-6 py-7 flex items-center gap-4 relative overflow-hidden">
-            {/* decorative circles */}
             <div className="absolute -top-8 -right-8 w-36 h-36 rounded-full bg-white/5" />
             <div className="absolute -bottom-6 -left-6 w-24 h-24 rounded-full bg-white/5" />
             <div className="relative z-10 w-14 h-14 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center text-3xl backdrop-blur-sm flex-shrink-0">
               🎾
             </div>
             <div className="relative z-10">
-              <h1 className="text-white text-xl font-black tracking-tight leading-tight">테니스 대회 운영</h1>
+              <h1 className="text-white text-xl font-black tracking-tight leading-tight">제주테니스 대회</h1>
               <p className="text-white/50 text-xs tracking-widest uppercase mt-0.5">Tennis Tournament Manager</p>
             </div>
           </div>
@@ -150,7 +161,7 @@ export default function HomePage() {
                 ? 'bg-green-600 text-white shadow-md shadow-green-200'
                 : 'text-stone-400 hover:text-stone-600'}`}
           >
-            <span className="text-base">👥</span>
+            <span className="text-base">🎾</span>
             회원
           </button>
           <button
@@ -160,15 +171,15 @@ export default function HomePage() {
                 ? 'bg-stone-700 text-white shadow-md shadow-stone-300'
                 : 'text-stone-400 hover:text-stone-600'}`}
           >
-            <span className="text-base">🔐</span>
-            운영진
+            <span className="text-base">⚙️</span>
+            관리자
           </button>
         </div>
 
         {/* Member Tab */}
         {activeTab === 'member' && (
           <div className="flex flex-col gap-3">
-            <p className="text-xs font-bold tracking-widest uppercase text-stone-400 px-1">회원 서비스</p>
+            <p className="text-xs font-bold tracking-widest uppercase text-stone-400 px-1">회원 메뉴</p>
 
             {MEMBER_CARDS.map(card => (
               <Link
@@ -195,16 +206,16 @@ export default function HomePage() {
             {/* Quick Stats */}
             <div className="bg-white rounded-2xl p-4 shadow-sm mt-1">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-bold text-stone-400">오늘의 대회 현황</p>
+                <p className="text-xs font-bold text-stone-400">현재 진행 현황</p>
                 {statsLoading && (
                   <span className="text-[10px] text-stone-300 animate-pulse">불러오는 중...</span>
                 )}
               </div>
               <div className="grid grid-cols-3 gap-2">
                 {[
-                  { num: statsLoading ? '…' : String(stats.inProgress), label: '진행중 경기' },
-                  { num: statsLoading ? '…' : String(stats.activeCourts), label: '사용 코트' },
-                  { num: statsLoading ? '…' : String(stats.totalTeams), label: '참가팀' },
+                  { num: statsLoading ? '·' : String(stats.inProgress), label: '진행중 경기' },
+                  { num: statsLoading ? '·' : String(stats.activeCourts), label: '사용 코트' },
+                  { num: statsLoading ? '·' : String(stats.totalTeams), label: '참가팀' },
                 ].map(s => (
                   <div key={s.label} className="bg-stone-50 rounded-xl py-3 text-center">
                     <div className="text-xl font-black text-green-700">{s.num}</div>
@@ -219,7 +230,7 @@ export default function HomePage() {
         {/* Admin Tab */}
         {activeTab === 'admin' && (
           <div className="flex flex-col gap-3">
-            <p className="text-xs font-bold tracking-widest uppercase text-stone-400 px-1">운영진 전용</p>
+            <p className="text-xs font-bold tracking-widest uppercase text-stone-400 px-1">관리자 기능</p>
 
             <div className="grid grid-cols-2 gap-3">
               {ADMIN_CARDS.filter(c => !c.wide).map(card => (
@@ -261,7 +272,7 @@ export default function HomePage() {
         )}
 
         {/* Footer */}
-        <p className="text-center text-[11px] text-stone-400 mt-6">🎾 제주시 테니스 협회</p>
+        <p className="text-center text-[11px] text-stone-400 mt-6">🎾 제주테니스 협회</p>
       </div>
     </div>
   )

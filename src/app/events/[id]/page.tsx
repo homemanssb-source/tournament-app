@@ -1,7 +1,8 @@
 // ============================================================
-// 대회보기 페이지
+// 대회 상세 공개뷰
 // src/app/events/[id]/page.tsx
-// ✅ 단체전 부서별 탭 필터 수정
+// P7: LIVE 경기 최상단 고정 + 강조
+// P9: 접속 로그 기록
 // ============================================================
 'use client'
 import { useEffect, useState, useCallback } from 'react'
@@ -17,6 +18,19 @@ import type { Club, TieWithClubs, StandingWithClub, EventTeamConfig } from '@/ty
 type Mode = 'individual' | 'team'
 type IndividualTab = 'groups' | 'tournament' | 'results' | 'courts'
 type TeamTab = 'standings' | 'matches' | 'bracket' | 'courts'
+
+// P9: 접속 로그 기록 함수
+async function logAccess(eventId: string, page: string, tab?: string) {
+  try {
+    const device = window.innerWidth < 768 ? 'mobile' : 'desktop'
+    await supabase.from('access_logs').insert({
+      event_id: eventId,
+      page,
+      tab: tab || null,
+      device,
+    })
+  } catch {}
+}
 
 export default function EventDetailPage() {
   const { id } = useParams()
@@ -38,7 +52,7 @@ export default function EventDetailPage() {
   const [groups, setGroups] = useState<any[]>([])
   const [standingsMap, setStandingsMap] = useState<Record<string, StandingWithClub[]>>({})
 
-  // ✅ 단체전 부서 탭
+  // 단체전 부서 탭
   const [teamDivisions, setTeamDivisions] = useState<Division[]>([])
   const [selectedTeamDiv, setSelectedTeamDiv] = useState<string>('')
 
@@ -50,33 +64,42 @@ export default function EventDetailPage() {
       if (ev?.event_type === 'team') setMode('team')
       else setMode('individual')
 
-      // 개인전 부서
       const { data: divs } = await supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order')
       setDivisions(divs || [])
       if (divs?.length) setActiveDivision(divs[0].id)
 
-      // 단체전 부서
       setTeamDivisions(divs || [])
       if (divs?.length) setSelectedTeamDiv(divs[0].id)
 
       await loadTeamData(divs?.[0]?.id)
       setLoading(false)
+
+      // P9: 접속 로그 기록
+      logAccess(eventId, 'event_detail')
     })()
   }, [eventId])
 
-  // ✅ divisionId 파라미터 추가
+  // 탭 변경 시 로그 기록
+  useEffect(() => {
+    if (!eventId || loading) return
+    if (mode === 'individual') logAccess(eventId, 'event_detail', iTab)
+  }, [iTab, mode, eventId, loading])
+
+  useEffect(() => {
+    if (!eventId || loading) return
+    if (mode === 'team') logAccess(eventId, 'event_detail', `team_${tTab}`)
+  }, [tTab, mode, eventId, loading])
+
   const loadTeamData = useCallback(async (divisionId?: string) => {
     const divId = divisionId || selectedTeamDiv || undefined
 
     const [cfg, clubList, tieList] = await Promise.all([
       fetchEventTeamConfig(eventId),
-      // ✅ 부서 필터 적용
       fetchClubs(eventId, divId || null),
       fetchTies(eventId),
     ])
     setTeamConfig(cfg)
     setClubs(clubList)
-    // ✅ ties도 부서 필터
     const filteredTies = divId
       ? tieList.filter(t => (t as any).division_id === divId)
       : tieList
@@ -100,7 +123,6 @@ export default function EventDetailPage() {
     setStandingsMap(map)
   }, [eventId, selectedTeamDiv])
 
-  // ✅ 부서 탭 변경 시 데이터 재로드
   async function handleTeamDivChange(divId: string) {
     setSelectedTeamDiv(divId)
     await loadTeamData(divId)
@@ -123,12 +145,13 @@ export default function EventDetailPage() {
     { key: 'courts', label: '코트현황', emoji: '🎾' },
   ]
   const teamTabs: { key: TeamTab; label: string; emoji: string }[] = [
-    { key: 'standings', label: '순위', emoji: '🏅' },
+    { key: 'standings', label: '순위', emoji: '📊' },
     { key: 'matches', label: '경기결과', emoji: '📋' },
     { key: 'bracket', label: '토너먼트', emoji: '🏆' },
     { key: 'courts', label: '코트현황', emoji: '🎾' },
   ]
 
+  // P7: LIVE tie 추출 (최상단 고정용)
   const liveTies = ties.filter(t => t.status === 'in_progress')
 
   return (
@@ -142,7 +165,7 @@ export default function EventDetailPage() {
           </div>
         </div>
 
-        {/* 개인전 / 단체전 모드 선택 */}
+        {/* 개인전/단체전 모드 선택 */}
         {(!event.event_type || event.event_type === 'both') && (
           <div className="max-w-5xl mx-auto px-4 flex gap-2 pb-2">
             <button onClick={() => setMode('individual')}
@@ -151,16 +174,16 @@ export default function EventDetailPage() {
             </button>
             <button onClick={() => setMode('team')}
               className={`px-4 py-1.5 rounded-full text-sm font-medium transition ${mode === 'team' ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'}`}>
-              🏅 단체전
+              🏆 단체전
             </button>
           </div>
         )}
 
-        {/* 단일 타입 표시 */}
+        {/* 단일 이벤트 타입 표시 */}
         {event.event_type && event.event_type !== 'both' && (
           <div className="max-w-5xl mx-auto px-4 pb-2">
             <span className="px-4 py-1.5 rounded-full text-sm font-medium bg-white text-[#2d5016]">
-              {event.event_type === 'team' ? '🏅 단체전' : '🎾 개인전'}
+              {event.event_type === 'team' ? '🏆 단체전' : '🎾 개인전'}
             </span>
           </div>
         )}
@@ -177,7 +200,7 @@ export default function EventDetailPage() {
           </div>
         )}
 
-        {/* ✅ 단체전 부서 탭 */}
+        {/* 단체전 부서 탭 */}
         {mode === 'team' && teamDivisions.length > 1 && tTab !== 'courts' && (
           <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
             {teamDivisions.map(d => (
@@ -189,7 +212,7 @@ export default function EventDetailPage() {
           </div>
         )}
 
-        {/* 탭 */}
+        {/* 탭 바 */}
         <div className="max-w-5xl mx-auto px-4 flex border-t border-white/10">
           {mode === 'individual' ? (
             individualTabs.map(t => (
@@ -220,25 +243,34 @@ export default function EventDetailPage() {
 
         {/* 단체전 */}
         {mode === 'team' && (<>
+          {/* P7: LIVE 경기 최상단 고정 + 강조 */}
           {liveTies.length > 0 && (
-            <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-6">
-              <h2 className="font-semibold text-green-800 mb-2">🔴 진행중</h2>
+            <div className="bg-gradient-to-r from-red-50 to-orange-50 border-2 border-red-300 rounded-xl p-4 mb-6 shadow-sm">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="inline-flex items-center gap-1.5 bg-red-500 text-white text-xs font-bold px-3 py-1 rounded-full animate-pulse">
+                  🔴 LIVE
+                </span>
+                <h2 className="font-bold text-red-800">지금 진행 중인 경기</h2>
+                <span className="text-xs text-red-500 ml-auto">{liveTies.length}경기</span>
+              </div>
               <div className="space-y-2">
                 {liveTies.map(tie => (
-                  <div key={tie.id} className="bg-white rounded-lg p-3 flex items-center justify-between">
+                  <div key={tie.id} className="bg-white rounded-xl p-3 flex items-center justify-between shadow-sm border border-red-100">
                     <div>
-                      <span className="font-medium">{tie.club_a?.name}</span>
-                      <span className="text-gray-400 mx-2">vs</span>
-                      <span className="font-medium">{tie.club_b?.name}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm">{tie.club_a?.name}</span>
+                        <span className="text-gray-400 text-xs">vs</span>
+                        <span className="font-bold text-sm">{tie.club_b?.name}</span>
+                      </div>
                       {tie.court_number && (
-                        <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded ml-2">
+                        <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded mt-1 inline-block">
                           코트 {tie.court_number}
                         </span>
                       )}
                     </div>
-                    <span className="text-lg font-bold text-green-700">
+                    <div className="text-2xl font-black text-red-600">
                       {tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}
-                    </span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -308,7 +340,9 @@ function TournamentView({ eventId, divisionId }: { eventId: string; divisionId: 
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     setLoading(true)
-    supabase.from('v_bracket_with_details').select('*').eq('event_id', eventId).eq('division_id', divisionId).order('slot')
+    supabase.from('matches').select('*')
+      .eq('event_id', eventId).eq('division_id', divisionId).eq('stage', 'FINALS')
+      .order('round').order('match_num')
       .then(({ data }) => { setMatches(data || []); setLoading(false) })
   }, [eventId, divisionId])
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
@@ -321,55 +355,28 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     setLoading(true)
-    supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId).eq('division_id', divisionId).order('slot')
+    supabase.from('v_matches_with_teams').select('*')
+      .eq('event_id', eventId).eq('division_id', divisionId).eq('status', 'FINISHED')
+      .neq('score', 'BYE').order('updated_at', { ascending: false }).limit(50)
       .then(({ data }) => { setMatches(data || []); setLoading(false) })
   }, [eventId, divisionId])
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
-  const grouped = {
-    GROUP: matches.filter(m => m.stage === 'GROUP'),
-    FINALS: matches.filter(m => m.stage === 'FINALS'),
-  }
+  if (!matches.length) return <p className="text-center py-10 text-stone-400">완료된 경기가 없습니다.</p>
   return (
-    <div className="space-y-8">
-      {grouped.GROUP.length > 0 && (
-        <section>
-          <h3 className="font-bold text-lg mb-3">📋 조별 (예선)</h3>
-          <div className="space-y-2">{grouped.GROUP.map(m => <MatchRow key={m.id} m={m} />)}</div>
-        </section>
-      )}
-      {grouped.FINALS.length > 0 && (
-        <section>
-          <h3 className="font-bold text-lg mb-3">🏆 본선</h3>
-          <div className="space-y-2">{grouped.FINALS.filter(m => m.score !== 'BYE').map(m => <MatchRow key={m.id} m={m} />)}</div>
-        </section>
-      )}
-      {matches.length === 0 && <p className="text-center py-10 text-stone-400">경기 결과가 없습니다.</p>}
-    </div>
-  )
-}
-
-function MatchRow({ m }: { m: Match }) {
-  const done = m.status === 'FINISHED'
-  return (
-    <div className="bg-white rounded-xl border p-3 flex items-center gap-3">
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 text-sm">
-          <span className={`font-bold truncate ${m.winner_team_id === m.team_a_id ? 'text-tennis-700' : ''}`}>{m.team_a_name || 'TBD'}</span>
-          <span className="text-stone-300 flex-shrink-0">vs</span>
-          <span className={`font-bold truncate ${m.winner_team_id === m.team_b_id ? 'text-tennis-700' : ''}`}>{m.team_b_name || 'TBD'}</span>
+    <div className="space-y-2">
+      {(matches as any[]).map((m: any) => (
+        <div key={m.id} className="bg-white rounded-xl border p-3">
+          <div className="flex items-center justify-between text-xs text-stone-400 mb-1">
+            <span>{m.round} · {m.match_num}</span>
+            {m.court && <span className="text-green-700 font-medium">{m.court}</span>}
+          </div>
+          <div className="flex items-center justify-between">
+            <span className={`font-medium ${m.winner_team_id === m.team_a_id ? 'text-green-700 font-bold' : ''}`}>{m.team_a_name}</span>
+            <span className="text-xl font-black mx-4">{m.score}</span>
+            <span className={`font-medium ${m.winner_team_id === m.team_b_id ? 'text-green-700 font-bold' : ''}`}>{m.team_b_name}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2 mt-1 text-xs text-stone-400">
-          <span>{m.round}</span>
-          {m.group_label && <span>· {m.group_label}</span>}
-          {m.court && <span className="px-1.5 py-0.5 rounded bg-[#2d5016]/10 text-[#2d5016] font-medium">{m.court}</span>}
-        </div>
-      </div>
-      <div className="flex-shrink-0 text-right">
-        {m.score && m.score !== 'BYE' && <div className="text-sm font-bold">{m.score}</div>}
-        <span className={`text-xs px-2 py-0.5 rounded-full ${done ? 'bg-tennis-100 text-tennis-700' : 'bg-stone-100 text-stone-500'}`}>
-          {done ? (m.score === 'BYE' ? 'BYE' : '완료') : '대기'}
-        </span>
-      </div>
+      ))}
     </div>
   )
 }
@@ -378,13 +385,15 @@ function MatchRow({ m }: { m: Match }) {
 // 단체전 뷰
 // =====================================
 function TeamStandingsView({ standingsMap, groups }: { standingsMap: Record<string, StandingWithClub[]>; groups: any[] }) {
-  const entries = Object.entries(standingsMap)
-  if (entries.length === 0) return <div className="text-center text-gray-400 py-8">아직 순위 데이터가 없습니다.</div>
+  if (Object.keys(standingsMap).length === 0) {
+    return <p className="text-center py-10 text-stone-400">아직 순위 데이터가 없습니다.</p>
+  }
   return (
     <div className="space-y-4">
-      {entries.map(([key, standings]) => {
-        const group = groups.find(g => g.id === key)
-        const title = key === 'full' ? '풀리그 순위' : (group?.group_label || group?.group_name || key)
+      {Object.entries(standingsMap).map(([key, standings]) => {
+        const title = key === 'full'
+          ? '풀리그 순위'
+          : groups.find(g => g.id === key)?.group_name || ''
         return (
           <div key={key} className="bg-white rounded-xl border overflow-hidden">
             <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">{title}</div>
@@ -402,7 +411,7 @@ function TeamStandingsView({ standingsMap, groups }: { standingsMap: Record<stri
                 {standings.map(s => (
                   <tr key={s.id} className={s.is_tied ? 'bg-yellow-50' : ''}>
                     <td className="px-3 py-2 font-bold">
-                      {s.rank ?? <span className="text-yellow-500 text-xs">동률</span>}
+                      {s.rank ?? <span className="text-yellow-500 text-xs">동점</span>}
                     </td>
                     <td className="px-3 py-2 font-medium">
                       {s.club?.name}
@@ -429,7 +438,7 @@ function TeamStandingsView({ standingsMap, groups }: { standingsMap: Record<stri
 }
 
 function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
-  if (ties.length === 0) return <div className="text-center text-gray-400 py-8">경기가 없습니다.</div>
+  if (ties.length === 0) return <div className="text-center text-gray-400 py-8">타이가 없습니다.</div>
   return (
     <div className="space-y-2">
       {ties.map(tie => (
@@ -437,12 +446,12 @@ function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
           <div className="flex items-center justify-between mb-1">
             <span className="text-xs text-gray-400">
               {getRoundLabel(tie.round || '')} #{tie.tie_order}
-              {tie.court_number && <span className="ml-2 text-green-700 font-medium">코트 {tie.court_number}</span>}
             </span>
             <span className={`text-xs px-2 py-0.5 rounded ${getTieStatusColor(tie.status)}`}>
               {getTieStatusLabel(tie.status)}
             </span>
           </div>
+
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <span className={`font-medium ${tie.winning_club_id === tie.club_a_id ? 'text-green-700' : ''}`}>
@@ -450,10 +459,15 @@ function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
               </span>
             </div>
             <div className="text-center px-4">
-              {tie.status === 'completed' || tie.status === 'in_progress'
-                ? <span className="text-xl font-bold">{tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}</span>
-                : tie.is_bye ? <span className="text-sm text-gray-400">BYE</span>
-                : <span className="text-sm text-gray-400">vs</span>}
+              {tie.status === 'completed' || tie.status === 'in_progress' ? (
+                <span className={`text-xl font-bold ${tie.status === 'in_progress' ? 'text-red-600' : ''}`}>
+                  {tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}
+                </span>
+              ) : tie.is_bye ? (
+                <span className="text-sm text-gray-400">BYE</span>
+              ) : (
+                <span className="text-sm text-gray-400">vs</span>
+              )}
             </div>
             <div className="flex-1 text-right">
               <span className={`font-medium ${tie.winning_club_id === tie.club_b_id ? 'text-green-700' : ''}`}>
@@ -461,9 +475,18 @@ function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
               </span>
             </div>
           </div>
+
+          {/* 코트 정보 */}
+          {tie.court_number && (
+            <div className="text-xs text-center text-green-600 mt-2">코트 {tie.court_number}</div>
+          )}
+
+          {/* 라인업 상태 */}
           {tie.status === 'lineup_phase' && (
             <div className="text-xs text-center text-yellow-600 mt-2">
-              라인업: {tie.club_a_lineup_submitted ? '✅' : '⏳'} {tie.club_a?.name} · {tie.club_b_lineup_submitted ? '✅' : '⏳'} {tie.club_b?.name}
+              라인업: {tie.club_a_lineup_submitted ? '✅' : '⏳'} {tie.club_a?.name}
+              {' · '}
+              {tie.club_b_lineup_submitted ? '✅' : '⏳'} {tie.club_b?.name}
             </div>
           )}
         </div>
@@ -473,21 +496,28 @@ function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
 }
 
 function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
-  const tournamentTies = ties.filter(t => ['round_of_16', 'quarter', 'semi', 'final'].includes(t.round || ''))
-  if (tournamentTies.length === 0) return <div className="text-center text-gray-400 py-8">토너먼트가 아직 시작되지 않았습니다.</div>
-  const rounds = [...new Set(tournamentTies.map(t => t.round))].sort((a, b) => {
-    const order = ['round_of_16', 'quarter', 'semi', 'final']
-    return order.indexOf(a || '') - order.indexOf(b || '')
-  })
-  const finalTie = tournamentTies.find(t => t.round === 'final')
-  const winner = finalTie?.winning_club_id
-    ? (finalTie.winning_club_id === finalTie.club_a_id ? finalTie.club_a?.name : finalTie.club_b?.name)
-    : null
+  const tournamentTies = ties.filter(t =>
+    ['round_of_16', 'quarter', 'semi', 'final'].includes(t.round || '')
+  )
+
+  if (tournamentTies.length === 0) {
+    return <div className="text-center text-gray-400 py-8">토너먼트가 아직 시작되지 않았습니다.</div>
+  }
+
+  const rounds = [...new Set(tournamentTies.map(t => t.round))].sort(
+    (a, b) => {
+      const order = ['round_of_16', 'quarter', 'semi', 'final'];
+      return order.indexOf(a || '') - order.indexOf(b || '');
+    }
+  );
+
   return (
     <div className="space-y-4">
       {rounds.map(round => (
         <div key={round} className="bg-white rounded-xl border overflow-hidden">
-          <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">{getRoundLabel(round || '')}</div>
+          <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">
+            {getRoundLabel(round || '')}
+          </div>
           <div className="divide-y">
             {tournamentTies
               .filter(t => t.round === round)
@@ -496,34 +526,48 @@ function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
                 <div key={tie.id} className="p-3">
                   <div className="flex items-center">
                     <div className={`flex-1 ${tie.winning_club_id === tie.club_a_id ? 'font-bold' : ''}`}>
-                      {tie.club_a?.seed_number && <span className="text-xs text-yellow-600 mr-1">[{tie.club_a.seed_number}]</span>}
+                      {tie.club_a?.seed_number && (
+                        <span className="text-xs text-yellow-600 mr-1">[{tie.club_a.seed_number}]</span>
+                      )}
                       {tie.club_a?.name || (tie.is_bye ? 'BYE' : 'TBD')}
                     </div>
                     <div className="px-4 font-bold">
                       {tie.status === 'completed' || tie.status === 'in_progress'
                         ? `${tie.club_a_rubbers_won} - ${tie.club_b_rubbers_won}`
-                        : tie.is_bye ? 'BYE' : 'vs'}
+                        : tie.is_bye ? 'BYE' : 'vs'
+                      }
                     </div>
                     <div className={`flex-1 text-right ${tie.winning_club_id === tie.club_b_id ? 'font-bold' : ''}`}>
                       {tie.club_b?.name || (tie.is_bye ? 'BYE' : 'TBD')}
-                      {tie.club_b?.seed_number && <span className="text-xs text-yellow-600 ml-1">[{tie.club_b.seed_number}]</span>}
+                      {tie.club_b?.seed_number && (
+                        <span className="text-xs text-yellow-600 ml-1">[{tie.club_b.seed_number}]</span>
+                      )}
                     </div>
                   </div>
-                  {tie.court_number && (
-                    <div className="text-xs text-center text-green-600 mt-1">코트 {tie.court_number}</div>
-                  )}
                 </div>
-              ))}
+              ))
+            }
           </div>
         </div>
       ))}
-      {winner && (
-        <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-6 text-center">
-          <div className="text-4xl mb-2">🏆</div>
-          <div className="text-2xl font-bold">{winner}</div>
-          <div className="text-sm text-yellow-700 mt-1">우승!</div>
-        </div>
-      )}
+
+      {/* 우승자 */}
+      {(() => {
+        const finalTie = tournamentTies.find(t => t.round === 'final');
+        if (finalTie?.winning_club_id) {
+          const winner = finalTie.winning_club_id === finalTie.club_a_id
+            ? finalTie.club_a?.name
+            : finalTie.club_b?.name;
+          return (
+            <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-6 text-center">
+              <div className="text-4xl mb-2">🏆</div>
+              <div className="text-2xl font-bold">{winner}</div>
+              <div className="text-sm text-yellow-700 mt-1">우승!</div>
+            </div>
+          );
+        }
+        return null;
+      })()}
     </div>
   )
 }
