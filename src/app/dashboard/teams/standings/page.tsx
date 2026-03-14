@@ -29,7 +29,7 @@ export default function StandingsPage() {
   const [savingManual, setSavingManual] = useState(false);
 
   const [divisions, setDivisions] = useState<Division[]>([]);
-  const [selectedDiv, setSelectedDiv] = useState<string>('all');
+  const [selectedDiv, setSelectedDiv] = useState<string>('');
 
   const loadData = useCallback(async () => {
     if (!eventId) return;
@@ -44,7 +44,8 @@ export default function StandingsPage() {
     setConfig(cfg);
     const divList = divsRes.data || [];
     setDivisions(divList);
-    if (divList.length > 0 && selectedDiv === 'all') setSelectedDiv(divList[0].id);
+    // 첫 번째 division 자동 선택 (이미 선택된 게 있으면 유지)
+    if (divList.length > 0) setSelectedDiv(prev => prev || divList[0].id);
 
     const map: Record<string, StandingWithClub[]> = {};
 
@@ -118,15 +119,13 @@ export default function StandingsPage() {
         <h1 className="text-2xl font-bold">🏆 순위표</h1>
         <button onClick={handleRecalculate} disabled={recalculating}
           className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded text-sm disabled:opacity-50">
-          {recalculating ? '계산중..' : '🔄 순위 재계산'}</button>
+          {recalculating ? '계산중..' : '🔄 순위 재계산'}
+        </button>
       </div>
 
+      {/* Division 탭 — 전체 없이 각 부문만 */}
       {divisions.length > 0 && (
         <div className="flex gap-1 overflow-x-auto">
-          <button onClick={() => setSelectedDiv('all')}
-            className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-              selectedDiv === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}>전체</button>
           {divisions.map(d => (
             <button key={d.id} onClick={() => setSelectedDiv(d.id)}
               className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
@@ -139,15 +138,18 @@ export default function StandingsPage() {
       {hasTied && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
           <span className="text-yellow-500 text-xl">⚠️</span>
-          <div><p className="font-medium text-yellow-800">동률 팀이 있습니다</p>
-          <p className="text-sm text-yellow-700 mt-1">해당 팀을 클릭하여 수동 결정으로 순위를 직접 지정해주세요.</p></div>
+          <div>
+            <p className="font-medium text-yellow-800">동률 팀이 있습니다</p>
+            <p className="text-sm text-yellow-700 mt-1">해당 팀을 클릭하여 수동 결정으로 순위를 직접 지정해주세요.</p>
+          </div>
         </div>
       )}
 
       {allEntries.map(([key, standings]) => {
         const group = groups.find(g => g.id === key);
 
-        if (selectedDiv !== 'all') {
+        // selectedDiv 가 있으면 해당 division 그룹만 표시
+        if (selectedDiv) {
           if (!group) return null;
           if (!group.division_id || group.division_id !== selectedDiv) return null;
         }
@@ -176,15 +178,15 @@ export default function StandingsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {standings.length === 0 && <tr><td colSpan={9} className="px-4 py-6 text-center text-gray-400">데이터 없음</td></tr>}
+                  {standings.length === 0 && (
+                    <tr><td colSpan={9} className="px-4 py-6 text-center text-gray-400">데이터 없음</td></tr>
+                  )}
                   {standings.map(s => {
                     const isTied = s.is_tied;
                     const rs = getRankStyle(s.rank);
                     return (
-                      <tr key={s.id} className={`${
-                        isTied ? 'bg-yellow-50 cursor-pointer hover:bg-yellow-100' :
-                        rs.bg ? rs.bg + ' ' : ''
-                      }`}
+                      <tr key={s.id}
+                        className={`${isTied ? 'bg-yellow-50 cursor-pointer hover:bg-yellow-100' : rs.bg ? rs.bg + ' ' : ''}`}
                         onClick={isTied ? () => openManualRank(s, standings) : undefined}>
                         <td className="px-4 py-3">
                           {s.rank !== null ? (
@@ -196,7 +198,9 @@ export default function StandingsPage() {
                         </td>
                         <td className="px-4 py-3">
                           <span className={`font-medium ${rs.text}`}>{s.club?.name || '-'}</span>
-                          {s.club?.seed_number && <span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">{s.club.seed_number}시드</span>}
+                          {s.club?.seed_number && (
+                            <span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">{s.club.seed_number}시드</span>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-center">{s.played}</td>
                         <td className="px-4 py-3 text-center font-bold">
@@ -207,13 +211,20 @@ export default function StandingsPage() {
                         </td>
                         <td className="px-4 py-3 text-center">{s.rubbers_for}</td>
                         <td className="px-4 py-3 text-center">{s.rubbers_against}</td>
-                        <td className="px-4 py-3 text-center font-bold"><span className={s.rubber_diff > 0 ? 'text-green-600' : s.rubber_diff < 0 ? 'text-red-600' : ''}>
-                          {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}</span></td>
+                        <td className="px-4 py-3 text-center font-bold">
+                          <span className={s.rubber_diff > 0 ? 'text-green-600' : s.rubber_diff < 0 ? 'text-red-600' : ''}>
+                            {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}
+                          </span>
+                        </td>
                         <td className="px-4 py-3 text-center">
-                          {s.rank_locked ? <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">확정 ✓</span>
-                          : isTied ? <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded">동률 ⚠️</span>
-                          : s.played > 0 ? <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">자동</span>
-                          : <span className="text-xs text-gray-400">대기</span>}</td>
+                          {s.rank_locked
+                            ? <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">확정 ✓</span>
+                            : isTied
+                            ? <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded">동률 ⚠️</span>
+                            : s.played > 0
+                            ? <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">자동</span>
+                            : <span className="text-xs text-gray-400">대기</span>}
+                        </td>
                       </tr>
                     );
                   })}
@@ -224,8 +235,11 @@ export default function StandingsPage() {
         );
       })}
 
-      {allEntries.length === 0 && <div className="text-center text-gray-400 py-8">순위 데이터가 없습니다. 그룹을 먼저 진행해주세요.</div>}
+      {allEntries.length === 0 && (
+        <div className="text-center text-gray-400 py-8">순위 데이터가 없습니다. 그룹을 먼저 진행해주세요.</div>
+      )}
 
+      {/* 동률 수동 순위 모달 */}
       {manualModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setManualModal(null)}>
           <div className="bg-white rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
@@ -246,12 +260,18 @@ export default function StandingsPage() {
                 </div>
               ))}
             </div>
-            <div><label className="block text-sm text-gray-600 mb-1">사유 (선택)</label>
-              <input value={manualNotes} onChange={e => setManualNotes(e.target.value)} placeholder="수동 결정 이유" className="w-full border rounded px-3 py-2 text-sm" /></div>
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">사유 (선택)</label>
+              <input value={manualNotes} onChange={e => setManualNotes(e.target.value)}
+                placeholder="수동 결정 이유" className="w-full border rounded px-3 py-2 text-sm" />
+            </div>
             <div className="flex gap-3 pt-2">
-              <button onClick={handleSaveManualRanks} disabled={savingManual} className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50">
-                {savingManual ? '저장중...' : '순위 확정'}</button>
-              <button onClick={() => setManualModal(null)} className="flex-1 bg-gray-100 py-3 rounded-lg font-medium hover:bg-gray-200">취소</button>
+              <button onClick={handleSaveManualRanks} disabled={savingManual}
+                className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50">
+                {savingManual ? '저장중...' : '순위 확정'}
+              </button>
+              <button onClick={() => setManualModal(null)}
+                className="flex-1 bg-gray-100 py-3 rounded-lg font-medium hover:bg-gray-200">취소</button>
             </div>
           </div>
         </div>
