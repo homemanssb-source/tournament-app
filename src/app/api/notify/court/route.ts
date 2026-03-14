@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
     let targetId = ''
 
     if (match_id) {
-      // match_id가 있으면 개인전 경기
+      // match_id 명시 → 개인전 경기 직접 조회
       const { data } = await supabaseAdmin
         .from('v_matches_with_teams')
         .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name')
@@ -48,24 +48,30 @@ export async function POST(req: NextRequest) {
         targetId = data.id
       }
     } else {
-      // 1. 단체전 ties에서 해당 코트 다음 경기 조회
+      // 1. 단체전 ties에서 해당 코트 대기 경기 조회 (join 없이 id만)
       const { data: tieList } = await supabaseAdmin
         .from('ties')
-        .select('id, club_a_id, club_b_id, status, tie_order, clubs!ties_club_a_id_fkey(name), clubs!ties_club_b_id_fkey(name)')
+        .select('id, club_a_id, club_b_id, status, tie_order')
         .eq('event_id', event_id)
         .eq('court_number', courtNum)
         .neq('status', 'completed')
         .order('tie_order')
 
       if (tieList && tieList.length > 0) {
-        // 진행중이거나 첫 번째 대기 경기
         const activeTie = tieList.find(t => t.status === 'in_progress') || tieList[0]
         teamAId = activeTie.club_a_id
         teamBId = activeTie.club_b_id
-        teamAName = (activeTie as any).clubs?.name || ''
-        teamBName = (activeTie as any).clubs?.name || ''
-        divisionName = '단체전'
         targetId = activeTie.id
+        divisionName = '단체전'
+
+        // club 이름 별도 조회
+        const [{ data: clubA }, { data: clubB }] = await Promise.all([
+          supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_a_id).single(),
+          supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_b_id).single(),
+        ])
+        teamAName = clubA?.name || ''
+        teamBName = clubB?.name || ''
+
       } else {
         // 2. 개인전 matches에서 해당 코트 다음 PENDING 경기 조회
         const { data: courtMatches } = await supabaseAdmin
@@ -96,22 +102,6 @@ export async function POST(req: NextRequest) {
 
     if (!teamAId && !teamBId) {
       return NextResponse.json({ sent: 0, message: '대기 중인 경기가 없습니다' })
-    }
-
-    // 단체전: club_a, club_b 이름 별도 조회
-    if (divisionName === '단체전' && targetId) {
-      const { data: tie } = await supabaseAdmin
-        .from('ties')
-        .select(`
-          club_a:clubs!ties_club_a_id_fkey(name),
-          club_b:clubs!ties_club_b_id_fkey(name)
-        `)
-        .eq('id', targetId)
-        .single()
-      if (tie) {
-        teamAName = (tie.club_a as any)?.name || teamAName
-        teamBName = (tie.club_b as any)?.name || teamBName
-      }
     }
 
     // 구독자 조회
