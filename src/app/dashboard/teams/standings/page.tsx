@@ -205,8 +205,8 @@ export default function StandingsPage() {
                         <td className="px-4 py-3 text-center">{s.played}</td>
                         <td className="px-4 py-3 text-center font-medium text-green-700">{s.won}</td>
                         <td className="px-4 py-3 text-center text-red-500">{s.lost}</td>
-                        <td className="px-4 py-3 text-center">{s.rubbers_for}</td>
-                        <td className="px-4 py-3 text-center">{s.rubbers_against}</td>
+                        <td className="px-4 py-3 text-center">{s.rubbers_won}</td>
+                        <td className="px-4 py-3 text-center">{s.rubbers_lost}</td>
                         <td className="px-4 py-3 text-center">
                           <span className={s.rubber_diff > 0 ? 'text-green-600 font-medium' : s.rubber_diff < 0 ? 'text-red-500' : ''}>
                             {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}</span></td>
