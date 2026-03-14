@@ -44,6 +44,7 @@ export default function StandingsPage() {
     setConfig(cfg);
     const divList = divsRes.data || [];
     setDivisions(divList);
+    if (divList.length > 0 && selectedDiv === 'all') setSelectedDiv(divList[0].id);
 
     const map: Record<string, StandingWithClub[]> = {};
 

@@ -134,7 +134,7 @@ export default function CourtsPage() {
         score: (t.status === 'completed' || t.status === 'in_progress') ? `${t.club_a_rubbers_won}-${t.club_b_rubbers_won}` : null,
         winner_team_id: t.winning_club_id || null,
         division_name: '단체전',
-        division_id: 'TEAM',
+        division_id: t.division_id || 'TEAM',
         locked_by_participant: false,
         group_label: null,
         is_team_tie: true,
