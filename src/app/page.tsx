@@ -146,7 +146,7 @@ export default function HomePage() {
               🎾
             </div>
             <div className="relative z-10">
-              <h1 className="text-white text-xl font-black tracking-tight leading-tight">제주테니스 대회</h1>
+              <h1 className="text-white text-xl font-black tracking-tight leading-tight">제주시테니스대회</h1>
               <p className="text-white/50 text-xs tracking-widest uppercase mt-0.5">Tennis Tournament Manager</p>
             </div>
           </div>
@@ -272,7 +272,7 @@ export default function HomePage() {
         )}
 
         {/* Footer */}
-        <p className="text-center text-[11px] text-stone-400 mt-6">🎾 제주테니스 협회</p>
+        <p className="text-center text-[11px] text-stone-400 mt-6">🎾 제주시테니스협회</p>
       </div>
     </div>
   )
