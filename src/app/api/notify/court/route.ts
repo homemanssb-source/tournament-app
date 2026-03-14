@@ -22,41 +22,100 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'event_id, court 필수' }, { status: 400 })
     }
 
-    // 1. 다음 PENDING 경기 조회
-    let targetMatch: any = null
+    // 코트 번호 추출 (예: "코트 1" → 1)
+    const courtNum = parseInt(court.replace(/[^0-9]/g, ''))
+
+    let teamAId: string | null = null
+    let teamBId: string | null = null
+    let teamAName = ''
+    let teamBName = ''
+    let divisionName = ''
+    let targetId = ''
 
     if (match_id) {
+      // match_id가 있으면 개인전 경기
       const { data } = await supabaseAdmin
         .from('v_matches_with_teams')
-        .select('id, team_a_id, team_b_id, team_a_name, team_b_name, court, court_order, division_name')
+        .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name')
         .eq('id', match_id)
         .single()
-      targetMatch = data
-    } else {
-      const { data: courtMatches } = await supabaseAdmin
-        .from('v_matches_with_teams')
-        .select('id, team_a_id, team_b_id, team_a_name, team_b_name, court, court_order, division_name, status')
-        .eq('event_id', event_id)
-        .eq('court', court)
-        .neq('score', 'BYE')
-        .order('court_order')
-
-      if (!courtMatches?.length) {
-        return NextResponse.json({ sent: 0, message: '해당 코트에 경기가 없습니다' })
+      if (data) {
+        teamAId = data.team_a_id
+        teamBId = data.team_b_id
+        teamAName = data.team_a_name
+        teamBName = data.team_b_name
+        divisionName = data.division_name
+        targetId = data.id
       }
+    } else {
+      // 1. 단체전 ties에서 해당 코트 다음 경기 조회
+      const { data: tieList } = await supabaseAdmin
+        .from('ties')
+        .select('id, club_a_id, club_b_id, status, tie_order, clubs!ties_club_a_id_fkey(name), clubs!ties_club_b_id_fkey(name)')
+        .eq('event_id', event_id)
+        .eq('court_number', courtNum)
+        .neq('status', 'completed')
+        .order('tie_order')
 
-      const activeIdx = courtMatches.findIndex((m: any) => m.status === 'IN_PROGRESS')
-      const searchFrom = activeIdx >= 0 ? activeIdx + 1 : 0
-      targetMatch = courtMatches.slice(searchFrom).find((m: any) => m.status === 'PENDING')
-        ?? courtMatches.find((m: any) => m.status === 'PENDING')
+      if (tieList && tieList.length > 0) {
+        // 진행중이거나 첫 번째 대기 경기
+        const activeTie = tieList.find(t => t.status === 'in_progress') || tieList[0]
+        teamAId = activeTie.club_a_id
+        teamBId = activeTie.club_b_id
+        teamAName = (activeTie as any).clubs?.name || ''
+        teamBName = (activeTie as any).clubs?.name || ''
+        divisionName = '단체전'
+        targetId = activeTie.id
+      } else {
+        // 2. 개인전 matches에서 해당 코트 다음 PENDING 경기 조회
+        const { data: courtMatches } = await supabaseAdmin
+          .from('v_matches_with_teams')
+          .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status')
+          .eq('event_id', event_id)
+          .eq('court', court)
+          .neq('score', 'BYE')
+          .order('court_order')
+
+        if (courtMatches && courtMatches.length > 0) {
+          const activeIdx = courtMatches.findIndex(m => m.status === 'IN_PROGRESS')
+          const searchFrom = activeIdx >= 0 ? activeIdx + 1 : 0
+          const target = courtMatches.slice(searchFrom).find(m => m.status === 'PENDING')
+            ?? courtMatches.find(m => m.status === 'PENDING')
+
+          if (target) {
+            teamAId = target.team_a_id
+            teamBId = target.team_b_id
+            teamAName = target.team_a_name
+            teamBName = target.team_b_name
+            divisionName = target.division_name
+            targetId = target.id
+          }
+        }
+      }
     }
 
-    if (!targetMatch) {
+    if (!teamAId && !teamBId) {
       return NextResponse.json({ sent: 0, message: '대기 중인 경기가 없습니다' })
     }
 
-    // 2. 양팀 구독 조회
-    const teamIds = [targetMatch.team_a_id, targetMatch.team_b_id].filter(Boolean)
+    // 단체전: club_a, club_b 이름 별도 조회
+    if (divisionName === '단체전' && targetId) {
+      const { data: tie } = await supabaseAdmin
+        .from('ties')
+        .select(`
+          club_a:clubs!ties_club_a_id_fkey(name),
+          club_b:clubs!ties_club_b_id_fkey(name)
+        `)
+        .eq('id', targetId)
+        .single()
+      if (tie) {
+        teamAName = (tie.club_a as any)?.name || teamAName
+        teamBName = (tie.club_b as any)?.name || teamBName
+      }
+    }
+
+    // 구독자 조회
+    const teamIds = [teamAId, teamBId].filter(Boolean) as string[]
     const { data: subscriptions, error: subError } = await supabaseAdmin
       .from('push_subscriptions')
       .select('endpoint, p256dh, auth')
@@ -67,17 +126,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ sent: 0, message: '구독자가 없습니다 (알림 동의 안 함)' })
     }
 
-    // 3. 알림 메시지
+    // 알림 메시지
     const triggerLabel = trigger === 'court_changed' ? '코트가 변경되었습니다!' : '경기 준비하세요!'
     const payload = JSON.stringify({
-      title: `🎾 ${targetMatch.court} - ${triggerLabel}`,
-      body: `${targetMatch.team_a_name} vs ${targetMatch.team_b_name} (${targetMatch.division_name})`,
+      title: `🎾 ${court} - ${triggerLabel}`,
+      body: `${teamAName} vs ${teamBName} (${divisionName})`,
       icon: '/icon-192x192.png',
-      tag: `court-${court}-${targetMatch.id}`,
-      data: { court, match_id: targetMatch.id },
+      tag: `court-${court}-${targetId}`,
+      data: { court, match_id: targetId },
     })
 
-    // 4. 발송
+    // 발송
     let sent = 0
     const failedEndpoints: string[] = []
 
@@ -104,7 +163,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       sent,
-      match: { court: targetMatch.court, team_a: targetMatch.team_a_name, team_b: targetMatch.team_b_name },
+      match: { court, team_a: teamAName, team_b: teamBName },
     })
   } catch (err: any) {
     console.error('[notify/court]', err)
