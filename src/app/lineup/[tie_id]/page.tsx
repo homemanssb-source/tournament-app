@@ -15,6 +15,7 @@ import { supabase } from '@/lib/supabase';
 import { fetchClubMembers, fetchLineups, fetchRevealedLineups, submitLineup, fetchRubbers } from '@/lib/team-api';
 import { getGenderLabel, formatSetScore, getMatchTypeShort } from '@/lib/team-utils';
 import type { Tie, Club, ClubMember, TeamLineup, LineupEntry, TieRubber } from '@/types/team';
+import PinSubscribeButton from '@/components/PinSubscribeButton'
 
 type Step = 'pin' | 'edit' | 'submitted' | 'revealed';
 
@@ -246,8 +247,12 @@ export default function LineupPage() {
         )}
 
         {step === 'edit' && myClub && tie && (
-          <div className="space-y-4">
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
+         <div className="space-y-4">
+
+          {/* 🔔 알림 구독 버튼 */}
+           <PinSubscribeButton pin={pinInput} />
+
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
               <p className="font-medium text-blue-800">📋 {myClub.name} 라인업 작성</p>
               <p className="text-sm text-blue-600 mt-1">
                 상대: {opponentClub?.name} · {tie.rubber_count}복식 · 제출 후 봉인됩니다.
