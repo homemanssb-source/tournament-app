@@ -1,75 +1,65 @@
-﻿// ============================================================
-// ?????쒖쐞 ?섏씠吏 (??쒕낫?쒖슜)
-// src/app/dashboard/teams/standings/page.tsx
-// BUG#1 ?섏젙: selectedDiv 'all' ?쒓굅 ????긽 泥ル쾲吏?遺???먮룞?좏깮
-// ============================================================
-'use client';
+﻿'use client';
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { fetchStandings, fetchEventTeamConfig, calculateStandings, setManualRank } from '@/lib/team-api';
 import { supabase } from '@/lib/supabase';
-import type { EventTeamConfig, StandingWithClub } from '@/types/team';
+import { fetchStandings, fetchEventTeamConfig, calculateStandings, setManualRank } from '@/lib/team-api';
+import type { StandingWithClub, EventTeamConfig } from '@/types/team';
+
+interface Division { id: string; name: string; sort_order: number; }
 
 function getRankStyle(rank: number | null) {
-  if (rank === 1) return { emoji: '', bg: 'bg-yellow-50' };
-  if (rank === 2) return { emoji: '', bg: 'bg-gray-50' };
-  if (rank === 3) return { emoji: '', bg: 'bg-orange-50' };
-  return { emoji: '', bg: '' };
+  if (rank === 1) return { bg: 'bg-yellow-50', text: 'text-yellow-700', badge: 'bg-yellow-400 text-white', icon: '🥇' };
+  if (rank === 2) return { bg: 'bg-gray-50', text: 'text-gray-600', badge: 'bg-gray-400 text-white', icon: '🥈' };
+  if (rank === 3) return { bg: 'bg-orange-50', text: 'text-orange-600', badge: 'bg-orange-400 text-white', icon: '🥉' };
+  return { bg: '', text: '', badge: '', icon: '' };
 }
 
 export default function StandingsPage() {
   const searchParams = useSearchParams();
   const eventId = searchParams.get('event_id') || '';
-
   const [config, setConfig] = useState<EventTeamConfig | null>(null);
   const [groups, setGroups] = useState<any[]>([]);
   const [standingsMap, setStandingsMap] = useState<Record<string, StandingWithClub[]>>({});
   const [loading, setLoading] = useState(true);
   const [recalculating, setRecalculating] = useState(false);
-
   const [manualModal, setManualModal] = useState<{ club: StandingWithClub; tiedWith: StandingWithClub[] } | null>(null);
   const [manualRanks, setManualRanks] = useState<Record<string, string>>({});
   const [manualNotes, setManualNotes] = useState('');
   const [savingManual, setSavingManual] = useState(false);
 
-  const [divisions, setDivisions] = useState<any[]>([]);
-  // BUG#1: 'all' ???'' 珥덇린媛?
-  const [selectedDiv, setSelectedDiv] = useState<string>('');
+  const [divisions, setDivisions] = useState<Division[]>([]);
+  const [selectedDiv, setSelectedDiv] = useState<string>('all');
 
   const loadData = useCallback(async () => {
     if (!eventId) return;
     setLoading(true);
-    try {
-      const [cfg, divsRes, grpsRes] = await Promise.all([
-        fetchEventTeamConfig(eventId),
-        supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
-        supabase.from('groups').select('*').eq('event_id', eventId).order('division_id').order('group_num'),
-      ]);
 
-      setConfig(cfg);
-      const divList = divsRes.data || [];
-      setDivisions(divList);
-      // BUG#1: 泥ル쾲吏?遺???먮룞?좏깮
-      setSelectedDiv(prev => prev || (divList[0]?.id ?? ''));
+    const [cfg, divsRes, grpsRes] = await Promise.all([
+      fetchEventTeamConfig(eventId),
+      supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
+      supabase.from('groups').select('*').eq('event_id', eventId).order('division_id').order('group_num'),
+    ]);
 
-      const map: Record<string, StandingWithClub[]> = {};
+    setConfig(cfg);
+    const divList = divsRes.data || [];
+    setDivisions(divList);
 
-      if (cfg?.team_format === 'full_league') {
-        map['full'] = await fetchStandings(eventId, null);
-      } else {
-        const grps = grpsRes.data || [];
-        setGroups(grps);
-        const standingsResults = await Promise.all(
-          grps.map(g => fetchStandings(eventId, g.id))
-        );
-        grps.forEach((g, i) => { map[g.id] = standingsResults[i]; });
-      }
+    const map: Record<string, StandingWithClub[]> = {};
 
-      setStandingsMap(map);
-    } finally {
-      setLoading(false);
+    if (cfg?.team_format === 'full_league') {
+      map['full'] = await fetchStandings(eventId, null);
+    } else {
+      const grps = grpsRes.data || [];
+      setGroups(grps);
+      const standingsResults = await Promise.all(
+        grps.map(g => fetchStandings(eventId, g.id))
+      );
+      grps.forEach((g, i) => { map[g.id] = standingsResults[i]; });
     }
+
+    setStandingsMap(map);
+    setLoading(false);
   }, [eventId]);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -83,7 +73,7 @@ export default function StandingsPage() {
         await Promise.all(groups.map(g => calculateStandings(eventId, g.id)));
       }
       await loadData();
-    } catch (err: any) { alert(err.message || '?쒖쐞 ?ш퀎???ㅽ뙣'); }
+    } catch (err: any) { alert(err.message || '순위 재계산 실패'); }
     finally { setRecalculating(false); }
   }
 
@@ -104,19 +94,19 @@ export default function StandingsPage() {
     if (!manualModal) return;
     const all = [manualModal.club, ...manualModal.tiedWith];
     for (const s of all) {
-      if (!manualRanks[s.club_id] || isNaN(parseInt(manualRanks[s.club_id]))) { alert('紐⑤뱺 ?대읇???쒖쐞瑜??낅젰?섏꽭??'); return; }
+      if (!manualRanks[s.club_id] || isNaN(parseInt(manualRanks[s.club_id]))) { alert('모든 팀의 순위를 입력해주세요.'); return; }
     }
     const rv = Object.values(manualRanks).map(Number);
-    if (new Set(rv).size !== rv.length) { alert('?숈씪???쒖쐞媛 ?덉뒿?덈떎.'); return; }
+    if (new Set(rv).size !== rv.length) { alert('동일한 순위가 있습니다.'); return; }
     setSavingManual(true);
     try {
-      for (const s of all) { await setManualRank(eventId, s.club_id, parseInt(manualRanks[s.club_id]), manualNotes || '?섎룞 寃곗젙'); }
+      for (const s of all) { await setManualRank(eventId, s.club_id, parseInt(manualRanks[s.club_id]), manualNotes || '수동 결정'); }
       setManualModal(null); await loadData();
-    } catch (err: any) { alert(err.message || '?쒖쐞 ????ㅽ뙣'); }
+    } catch (err: any) { alert(err.message || '순위 저장 실패'); }
     finally { setSavingManual(false); }
   }
 
-  if (loading) return <div className="p-8 text-center text-gray-500">遺덈윭?ㅻ뒗 以?..</div>;
+  if (loading) return <div className="p-8 text-center text-gray-500">불러오는 중..</div>;
 
   const allEntries = Object.entries(standingsMap);
   const hasTied = allEntries.some(([, list]) => list.some(s => s.is_tied));
@@ -124,15 +114,18 @@ export default function StandingsPage() {
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold"> ?쒖쐞??/h1>
+        <h1 className="text-2xl font-bold">🏆 순위표</h1>
         <button onClick={handleRecalculate} disabled={recalculating}
           className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded text-sm disabled:opacity-50">
-          {recalculating ? '怨꾩궛以?..' : ' ?쒖쐞 ?ш퀎??}</button>
+          {recalculating ? '계산중..' : '🔄 순위 재계산'}</button>
       </div>
 
-      {/* Division ??- BUG#1: '?꾩껜' 踰꾪듉 ?쒓굅 */}
       {divisions.length > 0 && (
         <div className="flex gap-1 overflow-x-auto">
+          <button onClick={() => setSelectedDiv('all')}
+            className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+              selectedDiv === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}>전체</button>
           {divisions.map(d => (
             <button key={d.id} onClick={() => setSelectedDiv(d.id)}
               className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
@@ -144,26 +137,23 @@ export default function StandingsPage() {
 
       {hasTied && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-start gap-3">
-          <span className="text-yellow-500 text-xl">?좑툘</span>
-          <div><p className="font-medium text-yellow-800">?숈젏 ?대읇???덉뒿?덈떎</p>
-          <p className="text-sm text-yellow-700 mt-1">?대떦 ?대읇???대┃?섏뿬 ?섎룞 寃곗젙?쇰줈 ?쒖쐞瑜?吏곸젒 吏?뺥븯?몄슂.</p></div>
+          <span className="text-yellow-500 text-xl">⚠️</span>
+          <div><p className="font-medium text-yellow-800">동률 팀이 있습니다</p>
+          <p className="text-sm text-yellow-700 mt-1">해당 팀을 클릭하여 수동 결정으로 순위를 직접 지정해주세요.</p></div>
         </div>
       )}
 
       {allEntries.map(([key, standings]) => {
         const group = groups.find(g => g.id === key);
 
-        // division ?꾪꽣: ?좏깮??遺?쒖뿉 ?랁븳 洹몃９留??쒖떆
-        if (selectedDiv) {
-          if (key !== 'full') {
-            if (!group) return null;
-            if (!group.division_id || group.division_id !== selectedDiv) return null;
-          }
+        if (selectedDiv !== 'all') {
+          if (!group) return null;
+          if (!group.division_id || group.division_id !== selectedDiv) return null;
         }
 
-        const groupNumLabel = group?.group_num ? String.fromCharCode(64 + group.group_num) + '議? : '';
+        const groupNumLabel = group?.group_num ? String.fromCharCode(64 + group.group_num) + '조' : '';
         const groupName = key === 'full'
-          ? '?由ш렇 ?쒖쐞??
+          ? '리그 순위표'
           : group?.group_label || groupNumLabel || group?.group_name || key;
 
         return (
@@ -173,19 +163,19 @@ export default function StandingsPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-t">
                   <tr>
-                    <th className="px-4 py-3 text-left w-16">?쒖쐞</th>
-                    <th className="px-4 py-3 text-left">?대읇紐?/th>
-                    <th className="px-4 py-3 text-center w-16">寃쎄린</th>
-                    <th className="px-4 py-3 text-center w-16">??/th>
-                    <th className="px-4 py-3 text-center w-16">??/th>
-                    <th className="px-4 py-3 text-center w-20">?щ쾭??/th>
-                    <th className="px-4 py-3 text-center w-20">?щ쾭??/th>
-                    <th className="px-4 py-3 text-center w-20">?앹떎李?/th>
-                    <th className="px-4 py-3 text-center w-24">?곹깭</th>
+                    <th className="px-4 py-3 text-left w-16">순위</th>
+                    <th className="px-4 py-3 text-left">팀명</th>
+                    <th className="px-4 py-3 text-center w-16">경기</th>
+                    <th className="px-4 py-3 text-center w-16">승</th>
+                    <th className="px-4 py-3 text-center w-16">패</th>
+                    <th className="px-4 py-3 text-center w-20">러버승</th>
+                    <th className="px-4 py-3 text-center w-20">러버패</th>
+                    <th className="px-4 py-3 text-center w-20">득실차</th>
+                    <th className="px-4 py-3 text-center w-24">상태</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {standings.length === 0 && <tr><td colSpan={9} className="px-4 py-6 text-center text-gray-400">?곗씠???놁쓬</td></tr>}
+                  {standings.length === 0 && <tr><td colSpan={9} className="px-4 py-6 text-center text-gray-400">데이터 없음</td></tr>}
                   {standings.map(s => {
                     const isTied = s.is_tied;
                     const rs = getRankStyle(s.rank);
@@ -195,26 +185,34 @@ export default function StandingsPage() {
                         rs.bg ? rs.bg + ' ' : ''
                       }`}
                         onClick={isTied ? () => openManualRank(s, standings) : undefined}>
-                        <td className="px-4 py-3 font-bold">
-                          {s.rank ? <span>{rs.emoji} {s.rank}</span> : <span className="text-yellow-500 text-xs">?숈젏</span>}
+                        <td className="px-4 py-3">
+                          {s.rank !== null ? (
+                            <span className="flex items-center gap-1">
+                              {rs.icon && <span className="text-base">{rs.icon}</span>}
+                              <span className={`font-bold text-lg ${rs.text}`}>{s.rank}</span>
+                            </span>
+                          ) : <span className="text-yellow-600 font-medium">-</span>}
                         </td>
-                        <td className="px-4 py-3 font-medium">
-                          {s.club?.name}
-                          {s.club?.seed_number && <span className="ml-1 text-xs text-yellow-600">[{s.club.seed_number}]</span>}
+                        <td className="px-4 py-3">
+                          <span className={`font-medium ${rs.text}`}>{s.club?.name || '-'}</span>
+                          {s.club?.seed_number && <span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">{s.club.seed_number}시드</span>}
                         </td>
                         <td className="px-4 py-3 text-center">{s.played}</td>
-                        <td className="px-4 py-3 text-center font-medium text-green-700">{s.won}</td>
-                        <td className="px-4 py-3 text-center text-red-500">{s.lost}</td>
+                        <td className="px-4 py-3 text-center font-bold">
+                          <span className={s.won > 0 ? 'text-blue-600' : ''}>{s.won}</span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={s.lost > 0 ? 'text-red-500' : ''}>{s.lost}</span>
+                        </td>
                         <td className="px-4 py-3 text-center">{s.rubbers_for}</td>
                         <td className="px-4 py-3 text-center">{s.rubbers_against}</td>
+                        <td className="px-4 py-3 text-center font-bold"><span className={s.rubber_diff > 0 ? 'text-green-600' : s.rubber_diff < 0 ? 'text-red-600' : ''}>
+                          {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}</span></td>
                         <td className="px-4 py-3 text-center">
-                          <span className={s.rubber_diff > 0 ? 'text-green-600 font-medium' : s.rubber_diff < 0 ? 'text-red-500' : ''}>
-                            {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}</span></td>
-                        <td className="px-4 py-3 text-center">
-                          {s.rank_locked ? <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">?뺤젙 ??/span>
-                          : isTied ? <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded">?숈젏 ?좑툘</span>
-                          : s.played > 0 ? <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">?먮룞</span>
-                          : <span className="text-xs text-gray-400">誘멸꼍湲?/span>}</td>
+                          {s.rank_locked ? <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">확정 ✓</span>
+                          : isTied ? <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded">동률 ⚠️</span>
+                          : s.played > 0 ? <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">자동</span>
+                          : <span className="text-xs text-gray-400">대기</span>}</td>
                       </tr>
                     );
                   })}
@@ -225,14 +223,14 @@ export default function StandingsPage() {
         );
       })}
 
-      {allEntries.length === 0 && <div className="text-center text-gray-400 py-8">?쒖쐞 ?곗씠?곌? ?놁뒿?덈떎. 議고렪?깆쓣 癒쇱? 吏꾪뻾?섏꽭??</div>}
+      {allEntries.length === 0 && <div className="text-center text-gray-400 py-8">순위 데이터가 없습니다. 그룹을 먼저 진행해주세요.</div>}
 
       {manualModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setManualModal(null)}>
           <div className="bg-white rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-bold">?숈젏 ?쒖쐞 吏??/h3>
+            <h3 className="text-lg font-bold">동률 순위 결정</h3>
             <div className="bg-yellow-50 rounded p-3 text-sm">
-              <p className="text-yellow-800">?뱀닔: {manualModal.club.won}??쨌 ?앹떎李? {manualModal.club.rubber_diff > 0 ? '+' : ''}{manualModal.club.rubber_diff}</p>
+              <p className="text-yellow-800">승수: {manualModal.club.won}승 · 득실차: {manualModal.club.rubber_diff > 0 ? '+' : ''}{manualModal.club.rubber_diff}</p>
             </div>
             <div className="space-y-3">
               {[manualModal.club, ...manualModal.tiedWith].map(s => (
@@ -241,18 +239,18 @@ export default function StandingsPage() {
                   <div className="flex items-center gap-1">
                     <input type="number" min={1} value={manualRanks[s.club_id] || ''}
                       onChange={e => setManualRanks(prev => ({ ...prev, [s.club_id]: e.target.value }))}
-                      placeholder="?쒖쐞" className="border rounded px-3 py-2 w-20 text-center" />
-                    <span className="text-sm text-gray-400">??/span>
+                      placeholder="순위" className="border rounded px-3 py-2 w-20 text-center" />
+                    <span className="text-sm text-gray-400">위</span>
                   </div>
                 </div>
               ))}
             </div>
-            <div><label className="block text-sm text-gray-600 mb-1">?ъ쑀 (?좏깮)</label>
-              <input value={manualNotes} onChange={e => setManualNotes(e.target.value)} placeholder="?섎룞 寃곗젙 ?ъ쑀" className="w-full border rounded px-3 py-2 text-sm" /></div>
+            <div><label className="block text-sm text-gray-600 mb-1">사유 (선택)</label>
+              <input value={manualNotes} onChange={e => setManualNotes(e.target.value)} placeholder="수동 결정 이유" className="w-full border rounded px-3 py-2 text-sm" /></div>
             <div className="flex gap-3 pt-2">
               <button onClick={handleSaveManualRanks} disabled={savingManual} className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50">
-                {savingManual ? '???..' : '?쒖쐞 ?뺤젙'}</button>
-              <button onClick={() => setManualModal(null)} className="flex-1 bg-gray-100 py-3 rounded-lg font-medium hover:bg-gray-200">痍⑥냼</button>
+                {savingManual ? '저장중...' : '순위 확정'}</button>
+              <button onClick={() => setManualModal(null)} className="flex-1 bg-gray-100 py-3 rounded-lg font-medium hover:bg-gray-200">취소</button>
             </div>
           </div>
         </div>
