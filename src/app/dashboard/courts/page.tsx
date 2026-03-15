@@ -39,6 +39,9 @@ export default function CourtsPage() {
   const [autoStage, setAutoStage] = useState<'GROUP' | 'FINALS'>('GROUP')
 
   const [dragMatch, setDragMatch] = useState<string | null>(null)
+  // ✅ 모바일 터치 드래그용
+  const [touchDragId, setTouchDragId] = useState<string | null>(null)
+  const [touchOver, setTouchOver] = useState<string | null>(null)  // 'court:코트 1' or 'unassigned'
 
   const [editMatch, setEditMatch] = useState<MatchSlim | null>(null)
   const [editScore, setEditScore] = useState('')
@@ -192,8 +195,15 @@ export default function CourtsPage() {
       await supabase.from('ties').update({ court_number: courtNum }).eq('id', tieId)
       sendCourtNotify(court, 'court_changed'); loadTies()
     } else {
-      const courtMatches = allItems.filter(m => m.court === court)
-      const nextOrder = courtMatches.length + 1
+      // ✅ DB에서 직접 최대 court_order 조회 후 +1 (state 동기화 문제 방지)
+      const { data: existing } = await supabase
+        .from('matches')
+        .select('court_order')
+        .eq('court', court)
+        .not('court_order', 'is', null)
+        .order('court_order', { ascending: false })
+        .limit(1)
+      const nextOrder = (existing?.[0]?.court_order ?? 0) + 1
       await supabase.from('matches').update({ court, court_order: nextOrder }).eq('id', itemId)
       sendCourtNotify(court, 'court_changed', itemId); loadMatches()
     }
@@ -317,6 +327,27 @@ export default function CourtsPage() {
   function handleDropOnCourt(court: string) { if (dragMatch) assignItemToCourt(dragMatch, court); setDragMatch(null) }
   function handleDropOnUnassigned() { if (dragMatch) unassignItem(dragMatch); setDragMatch(null) }
 
+  // ✅ 모바일 터치 드래그 핸들러
+  function handleTouchStart(id: string) { setTouchDragId(id) }
+
+  function handleTouchMove(e: React.TouchEvent) {
+    e.preventDefault()
+    const touch = e.touches[0]
+    const el = document.elementFromPoint(touch.clientX, touch.clientY)
+    const courtEl = el?.closest('[data-court]') as HTMLElement | null
+    const unassignedEl = el?.closest('[data-unassigned]') as HTMLElement | null
+    if (courtEl) setTouchOver('court:' + courtEl.dataset.court)
+    else if (unassignedEl) setTouchOver('unassigned')
+    else setTouchOver(null)
+  }
+
+  function handleTouchEnd() {
+    if (!touchDragId || !touchOver) { setTouchDragId(null); setTouchOver(null); return }
+    if (touchOver === 'unassigned') unassignItem(touchDragId)
+    else if (touchOver.startsWith('court:')) assignItemToCourt(touchDragId, touchOver.slice(6))
+    setTouchDragId(null); setTouchOver(null)
+  }
+
   if (!eventId) return <p className="text-stone-400">설정에서 대회를 선택해주세요.</p>
   if (loading) return <p className="text-stone-400">불러오는 중..</p>
 
@@ -421,7 +452,7 @@ export default function CourtsPage() {
       {/* 코트 배정 그리드 */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
         {/* 미배정 */}
-        <div className="lg:col-span-1" onDragOver={handleDragOver} onDrop={handleDropOnUnassigned}>
+        <div className="lg:col-span-1" data-unassigned="true" onDragOver={handleDragOver} onDrop={handleDropOnUnassigned}>
           <div className="bg-white rounded-xl border overflow-hidden">
             <div className="bg-stone-500 text-white px-3 py-2 font-bold text-sm">미배정 ({unassigned.length})</div>
             <div className="p-1.5 max-h-[65vh] overflow-y-auto space-y-1">
@@ -429,7 +460,10 @@ export default function CourtsPage() {
                 ? <p className="text-xs text-stone-400 text-center py-4">모두 배정됨</p>
                 : unassigned.map(m => (
                   <MatchChip key={m.id} m={m} divColor={divColors[m.division_id]}
-                    onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)} />
+                    onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
+                    onTouchStart={() => handleTouchStart(m.id)}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd} />
                 ))}
             </div>
           </div>
@@ -446,8 +480,11 @@ export default function CourtsPage() {
             const isLive = activeIdx >= 0
             const hasPending = courtItems.some(m => m.status === 'PENDING')
             return (
-              <div key={court} onDragOver={handleDragOver} onDrop={() => handleDropOnCourt(court)}
-                className="bg-white rounded-xl border overflow-hidden min-h-[100px]">
+              <div key={court}
+                data-court={court}
+                onDragOver={handleDragOver}
+                onDrop={() => handleDropOnCourt(court)}
+                className={`bg-white rounded-xl border overflow-hidden min-h-[100px] transition-all ${touchOver === 'court:' + court ? 'ring-2 ring-tennis-400 bg-tennis-50' : ''}`}>
                 <div className={`px-3 py-2 font-bold text-sm flex items-center justify-between ${isLive ? 'bg-red-700' : 'bg-[#2d5016]'} text-white`}>
                   <span>
                     {court}
@@ -489,6 +526,9 @@ export default function CourtsPage() {
                         onClickUnassign={() => unassignItem(m.id)}
                         onMoveUp={!m.is_team_tie && i > 0 ? () => moveMatchOrder(m.id, 'up') : undefined}
                         onMoveDown={!m.is_team_tie && i < courtItems.length - 1 ? () => moveMatchOrder(m.id, 'down') : undefined}
+                        onTouchStart={() => handleTouchStart(m.id)}
+                        onTouchMove={handleTouchMove}
+                        onTouchEnd={handleTouchEnd}
                       />
                     )
                   })}
@@ -588,17 +628,21 @@ export default function CourtsPage() {
 
 // ===== MatchChip 컴포넌트 =====
 // ✅ FINISHED 경기도 수정 버튼 항상 표시
-function MatchChip({ m, order, badge, divColor, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown }: {
+function MatchChip({ m, order, badge, divColor, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
   m: MatchSlim; order?: number; badge?: string; divColor?: string
   onDragStart: (id: string) => void; onClickScore: () => void
   onClickStart?: () => void; onClickUnassign?: () => void
   onMoveUp?: () => void; onMoveDown?: () => void
+  onTouchStart?: () => void; onTouchMove?: (e: React.TouchEvent) => void; onTouchEnd?: () => void
 }) {
   const done = m.status === 'FINISHED'
   const live = m.status === 'IN_PROGRESS'
   const isTeam = m.is_team_tie
   return (
     <div draggable onDragStart={() => onDragStart(m.id)}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
       className={`rounded-lg border p-2 text-xs cursor-grab active:cursor-grabbing transition-all ${
         isTeam
           ? (live ? 'bg-blue-50 border-blue-300' : done ? 'bg-blue-50 border-blue-200' : 'bg-white border-blue-200 hover:border-blue-400')
