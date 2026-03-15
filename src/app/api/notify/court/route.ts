@@ -1,13 +1,9 @@
-// src/app/api/notify/court/route.ts
+﻿// src/app/api/notify/court/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import webpush from 'web-push'
 import { createClient } from '@supabase/supabase-js'
 
-webpush.setVapidDetails(
-  'mailto:admin@jeju-tournament.com',
-  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!,
-  process.env.VAPID_PRIVATE_KEY!
-)
+// VAPID configured inside handler
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -16,6 +12,14 @@ const supabaseAdmin = createClient(
 
 export async function POST(req: NextRequest) {
   try {
+    if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+      return NextResponse.json({ sent: 0, message: 'VAPID not configured' })
+    }
+    webpush.setVapidDetails(
+      'mailto:admin@jeju-tournament.com',
+      process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+      process.env.VAPID_PRIVATE_KEY
+    )
     const { event_id, court, match_id, trigger } = await req.json()
 
     if (!event_id || !court) {
