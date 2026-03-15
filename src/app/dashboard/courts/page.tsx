@@ -6,7 +6,7 @@
 //    - submitResult: RPC 실패 시 matches 직접 update로 폴백
 //    - MatchChip: FINISHED 경기도 수정 버튼 표시
 // ============================================================
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useEventId, useDivisions } from '@/components/useDashboard'
 // fetchTies는 court_order 미포함으로 직접 쿼리로 대체
@@ -40,6 +40,8 @@ export default function CourtsPage() {
 
   const [dragMatch, setDragMatch] = useState<string | null>(null)
   const [assigning, setAssigning] = useState(false)  // ✅ 드래그 처리 중 중복 방지
+  // ✅ 코트별 court_order 로컬 카운터 (드래그 연속 시 순서 보장)
+  const courtOrderRef = React.useRef<Record<string, number>>({})
   // ✅ 모바일 터치 드래그용
   const [touchDragId, setTouchDragId] = useState<string | null>(null)
   const [touchOver, setTouchOver] = useState<string | null>(null)  // 'court:코트 1' or 'unassigned'
@@ -77,6 +79,24 @@ export default function CourtsPage() {
     }
   }
 
+  // ✅ 데이터 로드 후 court_order 카운터 동기화
+  function syncCourtOrderRef(matchList: MatchSlim[], tieList: TieWithClubs[]) {
+    const counter: Record<string, number> = {}
+    for (const m of matchList) {
+      if (m.court && m.court_order) {
+        counter[m.court] = Math.max(counter[m.court] || 0, m.court_order)
+      }
+    }
+    for (const t of tieList) {
+      const court = (t as any).court_number ? `코트 ${(t as any).court_number}` : null
+      const order = (t as any).court_order
+      if (court && order) {
+        counter[court] = Math.max(counter[court] || 0, order)
+      }
+    }
+    courtOrderRef.current = counter
+  }
+
   async function loadAll(showLoading = false) {
     if (showLoading) setLoading(true)
     try {
@@ -90,8 +110,11 @@ export default function CourtsPage() {
           .eq('event_id', eventId)
           .order('court_order', { ascending: true, nullsFirst: false }),
       ])
-      setMatches((matchRes.data || []).filter((m: any) => m.score !== 'BYE'))
-      setTies((tieData.data || []) as any)
+      const matchList = (matchRes.data || []).filter((m: any) => m.score !== 'BYE')
+      const tieList = (tieData.data || []) as any
+      setMatches(matchList)
+      setTies(tieList)
+      syncCourtOrderRef(matchList, tieList)
     } catch {}
     if (showLoading) setLoading(false)
   }
@@ -202,29 +225,16 @@ export default function CourtsPage() {
     if (itemId.startsWith('tie_')) {
       const tieId = itemId.replace('tie_', '')
       const courtNum = parseInt(court.replace('코트 ', ''))
-      // ✅ court_order: DB에서 해당 코트 최대값 조회 후 +1
-      const { data: existingTies } = await supabase
-        .from('ties')
-        .select('court_order')
-        .eq('event_id', eventId)
-        .eq('court_number', courtNum)
-        .not('court_order', 'is', null)
-        .order('court_order', { ascending: false })
-        .limit(1)
-      const nextTieOrder = (existingTies?.[0]?.court_order ?? 0) + 1
+      // ✅ 로컬 카운터로 court_order 결정 (연속 드래그 순서 보장)
+      const courtKey = `코트 ${courtNum}`
+      const nextTieOrder = (courtOrderRef.current[courtKey] || 0) + 1
+      courtOrderRef.current[courtKey] = nextTieOrder  // 즉시 업데이트
       await supabase.from('ties').update({ court_number: courtNum, court_order: nextTieOrder }).eq('id', tieId)
       sendCourtNotify(court, 'court_changed'); loadTies()
     } else {
-      // ✅ DB에서 직접 최대 court_order 조회 후 +1 (event_id 조건 추가)
-      const { data: existing } = await supabase
-        .from('matches')
-        .select('court_order')
-        .eq('event_id', eventId)
-        .eq('court', court)
-        .not('court_order', 'is', null)
-        .order('court_order', { ascending: false })
-        .limit(1)
-      const nextOrder = (existing?.[0]?.court_order ?? 0) + 1
+      // ✅ 로컬 카운터로 court_order 결정 (연속 드래그 순서 보장)
+      const nextOrder = (courtOrderRef.current[court] || 0) + 1
+      courtOrderRef.current[court] = nextOrder  // 즉시 업데이트
       await supabase.from('matches').update({ court, court_order: nextOrder }).eq('id', itemId)
       sendCourtNotify(court, 'court_changed', itemId); loadMatches()
     }
@@ -345,19 +355,15 @@ export default function CourtsPage() {
   }
 
   function handleDragOver(e: React.DragEvent) { e.preventDefault() }
-  async function handleDropOnCourt(court: string) {
-    if (!dragMatch || assigning) { setDragMatch(null); return }
-    setAssigning(true)
-    await assignItemToCourt(dragMatch, court)
+  function handleDropOnCourt(court: string) {
+    if (!dragMatch) { setDragMatch(null); return }
+    assignItemToCourt(dragMatch, court)  // 비동기지만 카운터는 즉시 업데이트됨
     setDragMatch(null)
-    setAssigning(false)
   }
-  async function handleDropOnUnassigned() {
-    if (!dragMatch || assigning) { setDragMatch(null); return }
-    setAssigning(true)
-    await unassignItem(dragMatch)
+  function handleDropOnUnassigned() {
+    if (!dragMatch) { setDragMatch(null); return }
+    unassignItem(dragMatch)
     setDragMatch(null)
-    setAssigning(false)
   }
 
   // ✅ 모바일 터치 드래그 핸들러
@@ -374,13 +380,11 @@ export default function CourtsPage() {
     else setTouchOver(null)
   }
 
-  async function handleTouchEnd() {
-    if (!touchDragId || !touchOver || assigning) { setTouchDragId(null); setTouchOver(null); return }
-    setAssigning(true)
-    if (touchOver === 'unassigned') await unassignItem(touchDragId)
-    else if (touchOver.startsWith('court:')) await assignItemToCourt(touchDragId, touchOver.slice(6))
+  function handleTouchEnd() {
+    if (!touchDragId || !touchOver) { setTouchDragId(null); setTouchOver(null); return }
+    if (touchOver === 'unassigned') unassignItem(touchDragId)
+    else if (touchOver.startsWith('court:')) assignItemToCourt(touchDragId, touchOver.slice(6))
     setTouchDragId(null); setTouchOver(null)
-    setAssigning(false)
   }
 
   if (!eventId) return <p className="text-stone-400">설정에서 대회를 선택해주세요.</p>
