@@ -9,7 +9,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useEventId, useDivisions } from '@/components/useDashboard'
-import { fetchTies } from '@/lib/team-api'
+// fetchTies는 court_order 미포함으로 직접 쿼리로 대체
 import { getTieStatusLabel } from '@/lib/team-utils'
 import type { TieWithClubs } from '@/types/team'
 
@@ -85,10 +85,13 @@ export default function CourtsPage() {
           .eq('event_id', eventId)
           .order('court', { ascending: true, nullsFirst: false })
           .order('court_order', { ascending: true, nullsFirst: true }),
-        fetchTies(eventId),
+        supabase.from('ties')
+          .select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)')
+          .eq('event_id', eventId)
+          .order('court_order', { ascending: true, nullsFirst: false }),
       ])
       setMatches((matchRes.data || []).filter((m: any) => m.score !== 'BYE'))
-      setTies(tieData)
+      setTies((tieData.data || []) as any)
     } catch {}
     if (showLoading) setLoading(false)
   }
@@ -102,7 +105,13 @@ export default function CourtsPage() {
   }
 
   async function loadTies() {
-    try { const data = await fetchTies(eventId); setTies(data) } catch {}
+    try {
+      const { data } = await supabase.from('ties')
+        .select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)')
+        .eq('event_id', eventId)
+        .order('court_order', { ascending: true, nullsFirst: false })
+      setTies((data || []) as any)
+    } catch {}
   }
 
   useEffect(() => { if (!eventId) return; loadAll(true) }, [eventId])
@@ -126,7 +135,7 @@ export default function CourtsPage() {
         team_a_id: t.club_a_id || '',
         team_b_id: t.club_b_id || '',
         court: t.court_number ? `코트 ${t.court_number}` : null,
-        court_order: t.court_number ? 100 + (t.tie_order || 0) : null,
+        court_order: t.court_number ? ((t as any).court_order ?? (100 + (t.tie_order || 0))) : null,
         status: statusMap[t.status] || 'PENDING',
         score: (t.status === 'completed' || t.status === 'in_progress') ? `${t.club_a_rubbers_won}-${t.club_b_rubbers_won}` : null,
         winner_team_id: t.winning_club_id || null,
@@ -193,7 +202,17 @@ export default function CourtsPage() {
     if (itemId.startsWith('tie_')) {
       const tieId = itemId.replace('tie_', '')
       const courtNum = parseInt(court.replace('코트 ', ''))
-      await supabase.from('ties').update({ court_number: courtNum }).eq('id', tieId)
+      // ✅ court_order: DB에서 해당 코트 최대값 조회 후 +1
+      const { data: existingTies } = await supabase
+        .from('ties')
+        .select('court_order')
+        .eq('event_id', eventId)
+        .eq('court_number', courtNum)
+        .not('court_order', 'is', null)
+        .order('court_order', { ascending: false })
+        .limit(1)
+      const nextTieOrder = (existingTies?.[0]?.court_order ?? 0) + 1
+      await supabase.from('ties').update({ court_number: courtNum, court_order: nextTieOrder }).eq('id', tieId)
       sendCourtNotify(court, 'court_changed'); loadTies()
     } else {
       // ✅ DB에서 직접 최대 court_order 조회 후 +1 (event_id 조건 추가)
@@ -213,7 +232,7 @@ export default function CourtsPage() {
 
   async function unassignItem(itemId: string) {
     if (itemId.startsWith('tie_')) {
-      await supabase.from('ties').update({ court_number: null }).eq('id', itemId.replace('tie_', '')); loadTies()
+      await supabase.from('ties').update({ court_number: null, court_order: null }).eq('id', itemId.replace('tie_', '')); loadTies()
     } else {
       await supabase.from('matches').update({ court: null, court_order: null }).eq('id', itemId); loadMatches()
     }
