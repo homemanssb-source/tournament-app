@@ -158,21 +158,7 @@ export default function TiesPage() {
       setRubbers(updatedRubbers);
       setEditingRubber(null);
 
-      // ✅ tie가 완료됐는지 확인 후 토너먼트 자동 진출
-      const isTournament = ['round_of_16', 'quarter', 'semi', 'final'].includes(selectedTie?.round || '');
-      if (isTournament && selectedTie) {
-        // rpc_admin_record_score가 tie를 completed로 만들었으면 자동 진출 호출
-        // loadData 전에 tie 상태 재조회
-        const { data: tieData } = await supabase
-          .from('ties').select('status, winning_club_id').eq('id', selectedTie.id).single();
-        if (tieData?.status === 'completed' && tieData?.winning_club_id) {
-          try {
-            await advanceTournamentWinner(selectedTie.id);
-          } catch (e) {
-            console.warn('[advance] 자동 진출 실패 (이미 처리됐을 수 있음):', e);
-          }
-        }
-      }
+      // ✅ 토너먼트 자동 진출은 SQL(rpc_calculate_tie_result)에서 자동 처리
 
       await loadData();
       // 조별리그면 순위 계산

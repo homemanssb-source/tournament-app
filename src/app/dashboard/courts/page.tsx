@@ -349,7 +349,6 @@ export default function CourtsPage() {
     const isFinished = editMatch.status === 'FINISHED'
 
     try {
-      // 1차: RPC 시도
       const { error: rpcError } = await supabase.rpc('rpc_submit_match_result', {
         p_match_id: editMatch.id,
         p_score: editScore,
@@ -357,26 +356,17 @@ export default function CourtsPage() {
       })
 
       if (rpcError) {
-        // 2차: 완료 경기면 직접 update (운영자 강제 수정)
         if (isFinished) {
-          const { error: updateError } = await supabase
-            .from('matches')
-            .update({
-              score: editScore,
-              winner_team_id: winnerId,
-              status: 'FINISHED',
-              ended_at: new Date().toISOString(),
-            })
-            .eq('id', editMatch.id)
-
-          if (updateError) {
-            setMsg('❌ ' + updateError.message)
-            return
-          }
+          const { error: updateError } = await supabase.from('matches').update({
+            score: editScore,
+            winner_team_id: winnerId,
+            status: 'FINISHED',
+            ended_at: new Date().toISOString(),
+          }).eq('id', editMatch.id)
+          if (updateError) { setMsg('❌ ' + updateError.message); return }
           setMsg('✅ 결과 강제 수정됨 (운영자 모드)')
         } else {
-          setMsg('❌ ' + rpcError.message)
-          return
+          setMsg('❌ ' + rpcError.message); return
         }
       } else {
         setMsg('✅ 결과 저장됨')
