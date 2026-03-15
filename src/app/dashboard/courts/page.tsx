@@ -39,6 +39,7 @@ export default function CourtsPage() {
   const [autoStage, setAutoStage] = useState<'GROUP' | 'FINALS'>('GROUP')
 
   const [dragMatch, setDragMatch] = useState<string | null>(null)
+  const [assigning, setAssigning] = useState(false)  // ✅ 드래그 처리 중 중복 방지
   // ✅ 모바일 터치 드래그용
   const [touchDragId, setTouchDragId] = useState<string | null>(null)
   const [touchOver, setTouchOver] = useState<string | null>(null)  // 'court:코트 1' or 'unassigned'
@@ -195,10 +196,11 @@ export default function CourtsPage() {
       await supabase.from('ties').update({ court_number: courtNum }).eq('id', tieId)
       sendCourtNotify(court, 'court_changed'); loadTies()
     } else {
-      // ✅ DB에서 직접 최대 court_order 조회 후 +1 (state 동기화 문제 방지)
+      // ✅ DB에서 직접 최대 court_order 조회 후 +1 (event_id 조건 추가)
       const { data: existing } = await supabase
         .from('matches')
         .select('court_order')
+        .eq('event_id', eventId)
         .eq('court', court)
         .not('court_order', 'is', null)
         .order('court_order', { ascending: false })
@@ -324,8 +326,20 @@ export default function CourtsPage() {
   }
 
   function handleDragOver(e: React.DragEvent) { e.preventDefault() }
-  function handleDropOnCourt(court: string) { if (dragMatch) assignItemToCourt(dragMatch, court); setDragMatch(null) }
-  function handleDropOnUnassigned() { if (dragMatch) unassignItem(dragMatch); setDragMatch(null) }
+  async function handleDropOnCourt(court: string) {
+    if (!dragMatch || assigning) { setDragMatch(null); return }
+    setAssigning(true)
+    await assignItemToCourt(dragMatch, court)
+    setDragMatch(null)
+    setAssigning(false)
+  }
+  async function handleDropOnUnassigned() {
+    if (!dragMatch || assigning) { setDragMatch(null); return }
+    setAssigning(true)
+    await unassignItem(dragMatch)
+    setDragMatch(null)
+    setAssigning(false)
+  }
 
   // ✅ 모바일 터치 드래그 핸들러
   function handleTouchStart(id: string) { setTouchDragId(id) }
@@ -341,11 +355,13 @@ export default function CourtsPage() {
     else setTouchOver(null)
   }
 
-  function handleTouchEnd() {
-    if (!touchDragId || !touchOver) { setTouchDragId(null); setTouchOver(null); return }
-    if (touchOver === 'unassigned') unassignItem(touchDragId)
-    else if (touchOver.startsWith('court:')) assignItemToCourt(touchDragId, touchOver.slice(6))
+  async function handleTouchEnd() {
+    if (!touchDragId || !touchOver || assigning) { setTouchDragId(null); setTouchOver(null); return }
+    setAssigning(true)
+    if (touchOver === 'unassigned') await unassignItem(touchDragId)
+    else if (touchOver.startsWith('court:')) await assignItemToCourt(touchDragId, touchOver.slice(6))
     setTouchDragId(null); setTouchOver(null)
+    setAssigning(false)
   }
 
   if (!eventId) return <p className="text-stone-400">설정에서 대회를 선택해주세요.</p>
