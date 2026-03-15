@@ -1,8 +1,6 @@
 // ============================================================
-// 대회 상세 공개뷰
 // src/app/events/[id]/page.tsx
-// P7: LIVE 경기 최상단 고정 + 강조
-// P9: 접속 로그 기록
+// ✅ TeamBracketView: 가로 브래킷 형태로 교체 (운영자와 동일)
 // ============================================================
 'use client'
 import { useEffect, useState, useCallback } from 'react'
@@ -19,16 +17,10 @@ type Mode = 'individual' | 'team'
 type IndividualTab = 'groups' | 'tournament' | 'results' | 'courts'
 type TeamTab = 'standings' | 'matches' | 'bracket' | 'courts'
 
-// P9: 접속 로그 기록 함수
 async function logAccess(eventId: string, page: string, tab?: string) {
   try {
     const device = window.innerWidth < 768 ? 'mobile' : 'desktop'
-    await supabase.from('access_logs').insert({
-      event_id: eventId,
-      page,
-      tab: tab || null,
-      device,
-    })
+    await supabase.from('access_logs').insert({ event_id: eventId, page, tab: tab || null, device })
   } catch {}
 }
 
@@ -39,12 +31,10 @@ export default function EventDetailPage() {
   const [loading, setLoading] = useState(true)
   const [mode, setMode] = useState<Mode>('individual')
 
-  // 개인전
   const [divisions, setDivisions] = useState<Division[]>([])
   const [activeDivision, setActiveDivision] = useState('')
   const [iTab, setITab] = useState<IndividualTab>('groups')
 
-  // 단체전
   const [tTab, setTTab] = useState<TeamTab>('standings')
   const [teamConfig, setTeamConfig] = useState<EventTeamConfig | null>(null)
   const [clubs, setClubs] = useState<Club[]>([])
@@ -52,7 +42,6 @@ export default function EventDetailPage() {
   const [groups, setGroups] = useState<any[]>([])
   const [standingsMap, setStandingsMap] = useState<Record<string, StandingWithClub[]>>({})
 
-  // 단체전 부서 탭
   const [teamDivisions, setTeamDivisions] = useState<Division[]>([])
   const [selectedTeamDiv, setSelectedTeamDiv] = useState<string>('')
 
@@ -60,26 +49,21 @@ export default function EventDetailPage() {
     (async () => {
       const { data: ev } = await supabase.from('events').select('*').eq('id', eventId).single()
       setEvent(ev)
-
       if (ev?.event_type === 'team') setMode('team')
       else setMode('individual')
 
       const { data: divs } = await supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order')
       setDivisions(divs || [])
       if (divs?.length) setActiveDivision(divs[0].id)
-
       setTeamDivisions(divs || [])
       if (divs?.length) setSelectedTeamDiv(divs[0].id)
 
       await loadTeamData(divs?.[0]?.id)
       setLoading(false)
-
-      // P9: 접속 로그 기록
       logAccess(eventId, 'event_detail')
     })()
   }, [eventId])
 
-  // 탭 변경 시 로그 기록
   useEffect(() => {
     if (!eventId || loading) return
     if (mode === 'individual') logAccess(eventId, 'event_detail', iTab)
@@ -92,7 +76,6 @@ export default function EventDetailPage() {
 
   const loadTeamData = useCallback(async (divisionId?: string) => {
     const divId = divisionId || selectedTeamDiv || undefined
-
     const [cfg, clubList, tieList] = await Promise.all([
       fetchEventTeamConfig(eventId),
       fetchClubs(eventId, divId || null),
@@ -100,21 +83,15 @@ export default function EventDetailPage() {
     ])
     setTeamConfig(cfg)
     setClubs(clubList)
-    const filteredTies = divId
-      ? tieList.filter(t => (t as any).division_id === divId)
-      : tieList
+    const filteredTies = divId ? tieList.filter(t => (t as any).division_id === divId) : tieList
     setTies(filteredTies)
 
     const map: Record<string, StandingWithClub[]> = {}
     if (cfg?.team_format === 'full_league') {
       map['full'] = await fetchStandings(eventId, null)
     } else {
-      const { data: grps } = await supabase
-        .from('groups').select('*').eq('event_id', eventId)
-        .order('group_num')
-      const filteredGrps = divId
-        ? (grps || []).filter((g: any) => g.division_id === divId)
-        : (grps || [])
+      const { data: grps } = await supabase.from('groups').select('*').eq('event_id', eventId).order('group_num')
+      const filteredGrps = divId ? (grps || []).filter((g: any) => g.division_id === divId) : (grps || [])
       setGroups(filteredGrps)
       for (const g of filteredGrps) {
         map[g.id] = await fetchStandings(eventId, g.id)
@@ -128,7 +105,6 @@ export default function EventDetailPage() {
     await loadTeamData(divId)
   }
 
-  // 단체전 30초 자동 갱신
   useEffect(() => {
     if (mode !== 'team') return
     const interval = setInterval(() => loadTeamData(), 30000)
@@ -151,7 +127,6 @@ export default function EventDetailPage() {
     { key: 'courts', label: '코트현황', emoji: '🎾' },
   ]
 
-  // P7: LIVE tie 추출 (최상단 고정용)
   const liveTies = ties.filter(t => t.status === 'in_progress')
 
   return (
@@ -165,7 +140,6 @@ export default function EventDetailPage() {
           </div>
         </div>
 
-        {/* 개인전/단체전 모드 선택 */}
         {(!event.event_type || event.event_type === 'both') && (
           <div className="max-w-5xl mx-auto px-4 flex gap-2 pb-2">
             <button onClick={() => setMode('individual')}
@@ -179,7 +153,6 @@ export default function EventDetailPage() {
           </div>
         )}
 
-        {/* 단일 이벤트 타입 표시 */}
         {event.event_type && event.event_type !== 'both' && (
           <div className="max-w-5xl mx-auto px-4 pb-2">
             <span className="px-4 py-1.5 rounded-full text-sm font-medium bg-white text-[#2d5016]">
@@ -188,7 +161,6 @@ export default function EventDetailPage() {
           </div>
         )}
 
-        {/* 개인전 부서 탭 */}
         {mode === 'individual' && divisions.length > 1 && iTab !== 'courts' && (
           <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
             {divisions.map(d => (
@@ -200,7 +172,6 @@ export default function EventDetailPage() {
           </div>
         )}
 
-        {/* 단체전 부서 탭 */}
         {mode === 'team' && teamDivisions.length > 1 && tTab !== 'courts' && (
           <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
             {teamDivisions.map(d => (
@@ -212,7 +183,6 @@ export default function EventDetailPage() {
           </div>
         )}
 
-        {/* 탭 바 */}
         <div className="max-w-5xl mx-auto px-4 flex border-t border-white/10">
           {mode === 'individual' ? (
             individualTabs.map(t => (
@@ -233,17 +203,14 @@ export default function EventDetailPage() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-6">
-        {/* 개인전 */}
         {mode === 'individual' && (<>
-          {iTab === 'groups' && <GroupsView eventId={eventId} divisionId={activeDivision} />}
+          {iTab === 'groups'     && <GroupsView eventId={eventId} divisionId={activeDivision} />}
           {iTab === 'tournament' && <TournamentView eventId={eventId} divisionId={activeDivision} />}
-          {iTab === 'results' && <ResultsView eventId={eventId} divisionId={activeDivision} />}
-          {iTab === 'courts' && <CourtBoard eventId={eventId} />}
+          {iTab === 'results'    && <ResultsView eventId={eventId} divisionId={activeDivision} />}
+          {iTab === 'courts'     && <CourtBoard eventId={eventId} />}
         </>)}
 
-        {/* 단체전 */}
         {mode === 'team' && (<>
-          {/* P7: LIVE 경기 최상단 고정 + 강조 */}
           {liveTies.length > 0 && (
             <div className="bg-gradient-to-r from-red-50 to-orange-50 border-2 border-red-300 rounded-xl p-4 mb-6 shadow-sm">
               <div className="flex items-center gap-2 mb-3">
@@ -278,9 +245,9 @@ export default function EventDetailPage() {
           )}
 
           {tTab === 'standings' && <TeamStandingsView standingsMap={standingsMap} groups={groups} />}
-          {tTab === 'matches' && <TeamMatchesView ties={ties} />}
-          {tTab === 'bracket' && <TeamBracketView ties={ties} />}
-          {tTab === 'courts' && <CourtBoard eventId={eventId} />}
+          {tTab === 'matches'   && <TeamMatchesView ties={ties} />}
+          {tTab === 'bracket'   && <TeamBracketView ties={ties} />}
+          {tTab === 'courts'    && <CourtBoard eventId={eventId} />}
 
           <div className="text-center mt-6">
             <button onClick={() => loadTeamData()} className="text-sm text-gray-400 hover:text-gray-600">
@@ -391,9 +358,7 @@ function TeamStandingsView({ standingsMap, groups }: { standingsMap: Record<stri
   return (
     <div className="space-y-4">
       {Object.entries(standingsMap).map(([key, standings]) => {
-        const title = key === 'full'
-          ? '풀리그 순위'
-          : groups.find(g => g.id === key)?.group_name || ''
+        const title = key === 'full' ? '풀리그 순위' : groups.find(g => g.id === key)?.group_name || ''
         return (
           <div key={key} className="bg-white rounded-xl border overflow-hidden">
             <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">{title}</div>
@@ -410,14 +375,10 @@ function TeamStandingsView({ standingsMap, groups }: { standingsMap: Record<stri
               <tbody className="divide-y">
                 {standings.map(s => (
                   <tr key={s.id} className={s.is_tied ? 'bg-yellow-50' : ''}>
-                    <td className="px-3 py-2 font-bold">
-                      {s.rank ?? <span className="text-yellow-500 text-xs">동점</span>}
-                    </td>
+                    <td className="px-3 py-2 font-bold">{s.rank ?? <span className="text-yellow-500 text-xs">동점</span>}</td>
                     <td className="px-3 py-2 font-medium">
                       {s.club?.name}
-                      {s.club?.seed_number && (
-                        <span className="ml-1 text-xs text-yellow-600">[{s.club.seed_number}]</span>
-                      )}
+                      {s.club?.seed_number && <span className="ml-1 text-xs text-yellow-600">[{s.club.seed_number}]</span>}
                     </td>
                     <td className="px-3 py-2 text-center font-medium">{s.won}</td>
                     <td className="px-3 py-2 text-center">{s.lost}</td>
@@ -444,14 +405,9 @@ function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
       {ties.map(tie => (
         <div key={tie.id} className={`bg-white rounded-xl border p-4 ${tie.is_bye ? 'opacity-50' : ''}`}>
           <div className="flex items-center justify-between mb-1">
-            <span className="text-xs text-gray-400">
-              {getRoundLabel(tie.round || '')} #{tie.tie_order}
-            </span>
-            <span className={`text-xs px-2 py-0.5 rounded ${getTieStatusColor(tie.status)}`}>
-              {getTieStatusLabel(tie.status)}
-            </span>
+            <span className="text-xs text-gray-400">{getRoundLabel(tie.round || '')} #{tie.tie_order}</span>
+            <span className={`text-xs px-2 py-0.5 rounded ${getTieStatusColor(tie.status)}`}>{getTieStatusLabel(tie.status)}</span>
           </div>
-
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <span className={`font-medium ${tie.winning_club_id === tie.club_a_id ? 'text-green-700' : ''}`}>
@@ -475,13 +431,7 @@ function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
               </span>
             </div>
           </div>
-
-          {/* 코트 정보 */}
-          {tie.court_number && (
-            <div className="text-xs text-center text-green-600 mt-2">코트 {tie.court_number}</div>
-          )}
-
-          {/* 라인업 상태 */}
+          {tie.court_number && <div className="text-xs text-center text-green-600 mt-2">코트 {tie.court_number}</div>}
           {tie.status === 'lineup_phase' && (
             <div className="text-xs text-center text-yellow-600 mt-2">
               라인업: {tie.club_a_lineup_submitted ? '✅' : '⏳'} {tie.club_a?.name}
@@ -495,17 +445,7 @@ function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
   )
 }
 
-// ============================================================
-// 이 파일은 src/app/events/[id]/page.tsx 안의
-// TeamBracketView 함수를 교체하는 내용입니다.
-//
-// 기존 TeamBracketView (라운드별 리스트)를
-// 운영자 대시보드와 동일한 가로 브래킷 형태로 변경
-// ============================================================
-
-// src/app/events/[id]/page.tsx 에서
-// 기존 TeamBracketView 함수 전체를 아래로 교체하세요:
-
+// ✅ 가로 브래킷 형태 (운영자 대시보드와 동일)
 function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
   const ROUND_ORDER = ['round_of_16', 'quarter', 'semi', 'final']
   const roundLabels: Record<string, string> = {
@@ -535,7 +475,6 @@ function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
 
   return (
     <div className="space-y-4">
-      {/* 우승자 표시 */}
       {winner && (
         <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-4 text-center">
           <div className="text-3xl mb-1">🏆</div>
@@ -543,8 +482,6 @@ function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
           <div className="text-sm text-yellow-700 mt-1">우승!</div>
         </div>
       )}
-
-      {/* 가로 브래킷 */}
       <div className="overflow-x-auto">
         <div className="flex gap-4 min-w-max pb-2">
           {sortedRounds.map((round, roundIdx) => {
@@ -552,79 +489,45 @@ function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
               (a, b) => (a.bracket_position || 0) - (b.bracket_position || 0)
             )
             const gap = Math.pow(2, roundIdx) * 12
-
             return (
               <div key={round} className="flex flex-col" style={{ minWidth: 180 }}>
-                {/* 라운드 레이블 */}
                 <div className="text-center mb-3">
                   <span className="text-xs font-semibold text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
                     {roundLabels[round] || round}
                   </span>
                 </div>
-
                 <div className="flex flex-col justify-around flex-1" style={{ gap }}>
                   {roundTies.map(tie => {
                     const aWin = tie.winning_club_id === tie.club_a_id
                     const bWin = tie.winning_club_id === tie.club_b_id
-
                     return (
-                      <div key={tie.id}
-                        className={`border rounded-xl overflow-hidden shadow-sm ${
-                          tie.status === 'completed' ? 'border-green-300' :
-                          tie.status === 'in_progress' ? 'border-red-300 shadow-red-100' :
-                          tie.is_bye ? 'border-gray-100 bg-gray-50' : 'border-gray-200'
-                        }`}
-                        style={{ minHeight: 68 }}>
-
-                        {/* 진행중 표시 */}
+                      <div key={tie.id} className={`border rounded-xl overflow-hidden shadow-sm ${
+                        tie.status === 'completed' ? 'border-green-300' :
+                        tie.status === 'in_progress' ? 'border-red-300' :
+                        tie.is_bye ? 'border-gray-100 bg-gray-50' : 'border-gray-200'
+                      }`} style={{ minHeight: 68 }}>
                         {tie.status === 'in_progress' && (
                           <div className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                            LIVE
+                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />LIVE
                           </div>
                         )}
-
-                        {/* 클럽 A */}
-                        <div className={`flex items-center justify-between px-3 py-2 text-sm ${
-                          aWin ? 'bg-green-50 font-bold' : ''
-                        }`}>
-                          <span className={`truncate ${tie.is_bye && !tie.club_a_id ? 'text-gray-300' : ''}`}>
-                            {tie.club_a?.name || (tie.is_bye && !tie.club_a_id ? 'BYE' : 'TBD')}
-                          </span>
-                          {tie.status === 'completed' && (
-                            <span className={`ml-2 font-bold text-sm flex-shrink-0 ${aWin ? 'text-green-700' : 'text-gray-400'}`}>
-                              {tie.club_a_rubbers_won}
-                            </span>
-                          )}
-                          {tie.status === 'in_progress' && (
-                            <span className="ml-2 font-bold text-sm text-red-600 flex-shrink-0">
+                        <div className={`flex items-center justify-between px-3 py-2 text-sm ${aWin ? 'bg-green-50 font-bold' : ''}`}>
+                          <span className="truncate">{tie.club_a?.name || (tie.is_bye && !tie.club_a_id ? 'BYE' : 'TBD')}</span>
+                          {(tie.status === 'completed' || tie.status === 'in_progress') && (
+                            <span className={`ml-2 font-bold flex-shrink-0 ${aWin ? 'text-green-700' : tie.status === 'in_progress' ? 'text-red-600' : 'text-gray-400'}`}>
                               {tie.club_a_rubbers_won}
                             </span>
                           )}
                         </div>
-
                         <div className="border-t border-gray-100" />
-
-                        {/* 클럽 B */}
-                        <div className={`flex items-center justify-between px-3 py-2 text-sm ${
-                          bWin ? 'bg-green-50 font-bold' : ''
-                        }`}>
-                          <span className={`truncate ${tie.is_bye && !tie.club_b_id ? 'text-gray-300' : ''}`}>
-                            {tie.club_b?.name || (tie.is_bye && !tie.club_b_id ? 'BYE' : 'TBD')}
-                          </span>
-                          {tie.status === 'completed' && (
-                            <span className={`ml-2 font-bold text-sm flex-shrink-0 ${bWin ? 'text-green-700' : 'text-gray-400'}`}>
-                              {tie.club_b_rubbers_won}
-                            </span>
-                          )}
-                          {tie.status === 'in_progress' && (
-                            <span className="ml-2 font-bold text-sm text-red-600 flex-shrink-0">
+                        <div className={`flex items-center justify-between px-3 py-2 text-sm ${bWin ? 'bg-green-50 font-bold' : ''}`}>
+                          <span className="truncate">{tie.club_b?.name || (tie.is_bye && !tie.club_b_id ? 'BYE' : 'TBD')}</span>
+                          {(tie.status === 'completed' || tie.status === 'in_progress') && (
+                            <span className={`ml-2 font-bold flex-shrink-0 ${bWin ? 'text-green-700' : tie.status === 'in_progress' ? 'text-red-600' : 'text-gray-400'}`}>
                               {tie.club_b_rubbers_won}
                             </span>
                           )}
                         </div>
-
-                        {/* 부전승 */}
                         {tie.is_bye && (
                           <div className="text-center py-0.5 border-t border-gray-100 bg-gray-50">
                             <span className="text-[10px] text-gray-400">부전승</span>
@@ -637,8 +540,6 @@ function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
               </div>
             )
           })}
-
-          {/* 최종 우승 칸 */}
           <div className="flex flex-col justify-center" style={{ minWidth: 120 }}>
             <div className="text-center mb-3">
               <span className="text-xs font-semibold text-yellow-600 bg-yellow-50 px-3 py-1 rounded-full">🏆 우승</span>
@@ -652,67 +553,6 @@ function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
           </div>
         </div>
       </div>
-    </div>
-  )
-}
-
-  return (
-    <div className="space-y-4">
-      {rounds.map(round => (
-        <div key={round} className="bg-white rounded-xl border overflow-hidden">
-          <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">
-            {getRoundLabel(round || '')}
-          </div>
-          <div className="divide-y">
-            {tournamentTies
-              .filter(t => t.round === round)
-              .sort((a, b) => (a.bracket_position || 0) - (b.bracket_position || 0))
-              .map(tie => (
-                <div key={tie.id} className="p-3">
-                  <div className="flex items-center">
-                    <div className={`flex-1 ${tie.winning_club_id === tie.club_a_id ? 'font-bold' : ''}`}>
-                      {tie.club_a?.seed_number && (
-                        <span className="text-xs text-yellow-600 mr-1">[{tie.club_a.seed_number}]</span>
-                      )}
-                      {tie.club_a?.name || (tie.is_bye ? 'BYE' : 'TBD')}
-                    </div>
-                    <div className="px-4 font-bold">
-                      {tie.status === 'completed' || tie.status === 'in_progress'
-                        ? `${tie.club_a_rubbers_won} - ${tie.club_b_rubbers_won}`
-                        : tie.is_bye ? 'BYE' : 'vs'
-                      }
-                    </div>
-                    <div className={`flex-1 text-right ${tie.winning_club_id === tie.club_b_id ? 'font-bold' : ''}`}>
-                      {tie.club_b?.name || (tie.is_bye ? 'BYE' : 'TBD')}
-                      {tie.club_b?.seed_number && (
-                        <span className="text-xs text-yellow-600 ml-1">[{tie.club_b.seed_number}]</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))
-            }
-          </div>
-        </div>
-      ))}
-
-      {/* 우승자 */}
-      {(() => {
-        const finalTie = tournamentTies.find(t => t.round === 'final');
-        if (finalTie?.winning_club_id) {
-          const winner = finalTie.winning_club_id === finalTie.club_a_id
-            ? finalTie.club_a?.name
-            : finalTie.club_b?.name;
-          return (
-            <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-6 text-center">
-              <div className="text-4xl mb-2">🏆</div>
-              <div className="text-2xl font-bold">{winner}</div>
-              <div className="text-sm text-yellow-700 mt-1">우승!</div>
-            </div>
-          );
-        }
-        return null;
-      })()}
     </div>
   )
 }
