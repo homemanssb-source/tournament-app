@@ -1,85 +1,88 @@
 // ============================================================
-// 단체전 클럽 등록/관리 페이지 - 부서 탭 필터 수정본
 // src/app/dashboard/teams/clubs/page.tsx
+// ✅ PIN 인라인 편집 추가 (시드 편집과 동일한 UX)
+// ✅ 시드 편집 유지
+// ✅ 부서 탭 필터 유지
 // ============================================================
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useEventId, useDivisions, DivisionTabs } from '@/components/useDashboard';
 import {
-  fetchClubs, fetchClubMembers, createClub, updateClub, deleteClub,
+  fetchClubs, fetchClubMembers, updateClub, deleteClub,
   addClubMember, addClubMembersBatch, deleteClubMember, fetchEventTeamConfig,
 } from '@/lib/team-api';
-import { generatePin, getGenderLabel, getSeedBadge } from '@/lib/team-utils';
+import { generatePin, getGenderLabel } from '@/lib/team-utils';
 import type { Club, ClubMember, EventTeamConfig } from '@/types/team';
 
 export default function ClubsPage() {
   const eventId = useEventId();
-
-  // ✅ useDivisions 훅으로 부서 탭 관리
   const { divisions, selected, setSelected, loading: divLoading } = useDivisions(eventId);
 
-  const [clubs, setClubs] = useState<Club[]>([]);
-  const [config, setConfig] = useState<EventTeamConfig | null>(null);
+  const [clubs, setClubs]               = useState<Club[]>([]);
+  const [config, setConfig]             = useState<EventTeamConfig | null>(null);
   const [selectedClub, setSelectedClub] = useState<Club | null>(null);
-  const [members, setMembers] = useState<ClubMember[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [members, setMembers]           = useState<ClubMember[]>([]);
+  const [loading, setLoading]           = useState(true);
 
-  // 클럽 추가 폼
-  const [newName, setNewName] = useState('');
+  // ── 클럽 추가 폼 ──
+  const [newName, setNewName]       = useState('');
   const [newCaptain, setNewCaptain] = useState('');
-  const [newPin, setNewPin] = useState('');
-  const [newSeed, setNewSeed] = useState<string>('');
+  const [newPin, setNewPin]         = useState('');
+  const [newSeed, setNewSeed]       = useState('');
 
-  // 선수 추가 폼
-  const [memberName, setMemberName] = useState('');
+  // ── 선수 추가 폼 ──
+  const [memberName, setMemberName]     = useState('');
   const [memberGender, setMemberGender] = useState<'M' | 'F'>('M');
-  const [memberGrade, setMemberGrade] = useState('');
+  const [memberGrade, setMemberGrade]   = useState('');
+  const [csvMode, setCsvMode]           = useState(false);
+  const [csvText, setCsvText]           = useState('');
 
-  // CSV 입력
-  const [csvMode, setCsvMode] = useState(false);
-  const [csvText, setCsvText] = useState('');
+  // ── 인라인 편집 상태 ──
+  const [editingPin, setEditingPin]   = useState<string | null>(null);  // club.id
+  const [pinInput, setPinInput]       = useState('');
+  const [editingSeed, setEditingSeed] = useState<string | null>(null);  // club.id
+  const [seedInput, setSeedInput]     = useState('');
+  const [saving, setSaving]           = useState(false);
 
-  // 시드 편집
-  const [editingSeed, setEditingSeed] = useState<string | null>(null);
-  const [seedInput, setSeedInput] = useState('');
-
-  // ✅ loadClubs: selected(부서ID) 바뀔 때마다 해당 부서 클럽만 로드
+  // ── 데이터 로드 ──
   const loadClubs = useCallback(async () => {
     if (!eventId || !selected) return;
     setLoading(true);
-    const data = await fetchClubs(eventId, selected); // ← division_id 필터 추가
-    setClubs(data);
-    const cfg = await fetchEventTeamConfig(eventId);
-    setConfig(cfg);
-    setLoading(false);
-  }, [eventId, selected]); // ← selected 의존성 추가
+    try {
+      const [data, cfg] = await Promise.all([
+        fetchClubs(eventId, selected),
+        fetchEventTeamConfig(eventId),
+      ]);
+      setClubs(data);
+      setConfig(cfg);
+    } finally {
+      setLoading(false);
+    }
+  }, [eventId, selected]);
 
   useEffect(() => { loadClubs(); }, [loadClubs]);
 
-  // 클럽 선택 시 선수 목록 로드
   async function loadMembers(club: Club) {
     setSelectedClub(club);
     const data = await fetchClubMembers(club.id);
     setMembers(data);
   }
 
-  // 새 클럽 추가
+  // ── 클럽 추가 ──
   async function handleAddClub() {
     if (!newName.trim()) return alert('클럽명을 입력해주세요');
     if (!selected) return alert('부서를 먼저 선택해주세요');
     try {
-      // ✅ division_id 포함하여 클럽 생성
-      const { data, error } = await supabase.from('clubs').insert({
+      const { error } = await supabase.from('clubs').insert({
         event_id: eventId,
         division_id: selected,
         name: newName.trim(),
         captain_name: newCaptain.trim() || null,
         captain_pin: newPin.trim() || generatePin(),
         seed_number: newSeed ? Number(newSeed) : null,
-      }).select().single();
+      });
       if (error) throw error;
       setNewName(''); setNewCaptain(''); setNewPin(''); setNewSeed('');
       await loadClubs();
@@ -88,7 +91,7 @@ export default function ClubsPage() {
     }
   }
 
-  // 클럽 삭제
+  // ── 클럽 삭제 ──
   async function handleDeleteClub(clubId: string) {
     if (!confirm('이 클럽과 소속 선수를 모두 삭제합니다. 계속하시겠습니까?')) return;
     await deleteClub(clubId);
@@ -96,18 +99,46 @@ export default function ClubsPage() {
     await loadClubs();
   }
 
-  // 시드 저장
-  async function handleSeedSave(clubId: string) {
-    const val = seedInput.trim() === '' ? null : Number(seedInput);
-    await updateClub(clubId, { seed_number: val });
-    setEditingSeed(null);
-    await loadClubs();
+  // ── PIN 저장 ──
+  async function handlePinSave(clubId: string) {
+    const pin = pinInput.trim();
+    if (pin && !/^\d{6}$/.test(pin)) {
+      alert('PIN은 숫자 6자리여야 합니다.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const finalPin = pin || generatePin();
+      await updateClub(clubId, { captain_pin: finalPin });
+      // 현재 선택된 클럽이면 로컬 상태도 업데이트
+      if (selectedClub?.id === clubId) {
+        setSelectedClub(prev => prev ? { ...prev, captain_pin: finalPin } : prev);
+      }
+      setEditingPin(null);
+      await loadClubs();
+    } catch (err: any) {
+      alert(err.message || 'PIN 변경 실패');
+    } finally {
+      setSaving(false);
+    }
   }
 
-  // 선수 개별 추가
+  // ── 시드 저장 ──
+  async function handleSeedSave(clubId: string) {
+    const val = seedInput.trim() === '' ? null : Number(seedInput);
+    setSaving(true);
+    try {
+      await updateClub(clubId, { seed_number: val });
+      setEditingSeed(null);
+      await loadClubs();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ── 선수 추가 ──
   async function handleAddMember() {
-    if (!selectedClub) return;
-    if (!memberName.trim()) return alert('선수 이름을 입력해주세요');
+    if (!selectedClub || !memberName.trim()) return alert('선수 이름을 입력해주세요');
     if (config?.team_member_limit && members.length >= config.team_member_limit) {
       return alert(`선수 제한(${config.team_member_limit}명)을 초과했습니다.`);
     }
@@ -116,37 +147,36 @@ export default function ClubsPage() {
     await loadMembers(selectedClub);
   }
 
-  // CSV 일괄 추가 (형식: 이름,성별(M/F),등급)
+  // ── CSV 일괄 추가 ──
   async function handleCsvImport() {
     if (!selectedClub) return;
     const lines = csvText.trim().split('\n').filter(Boolean);
     const parsed = lines.map((line, idx) => {
-      const parts = line.split(',').map((s) => s.trim());
+      const parts = line.split(',').map(s => s.trim());
       return {
         name: parts[0] || '',
         gender: (parts[1]?.toUpperCase() === 'F' ? 'F' : 'M') as 'M' | 'F',
         grade: parts[2] || undefined,
         member_order: idx + 1 + members.length,
       };
-    }).filter((m) => m.name);
+    }).filter(m => m.name);
 
     if (!parsed.length) return alert('유효한 데이터가 없습니다.');
     if (config?.team_member_limit && members.length + parsed.length > config.team_member_limit) {
-      return alert(`선수 제한(${config.team_member_limit}명) 초과. 현재 ${members.length}명 + ${parsed.length}명 = ${members.length + parsed.length}명`);
+      return alert(`선수 제한(${config.team_member_limit}명) 초과`);
     }
     await addClubMembersBatch(selectedClub.id, parsed);
     setCsvText(''); setCsvMode(false);
     await loadMembers(selectedClub);
   }
 
-  // 선수 삭제
+  // ── 선수 삭제 ──
   async function handleDeleteMember(memberId: string) {
-    if (!selectedClub) return;
     await deleteClubMember(memberId);
-    await loadMembers(selectedClub);
+    if (selectedClub) await loadMembers(selectedClub);
   }
 
-  // 주장 설정
+  // ── 주장 설정 ──
   async function handleSetCaptain(member: ClubMember) {
     if (!selectedClub) return;
     await supabase.from('club_members').update({ is_captain: false }).eq('club_id', selectedClub.id);
@@ -169,46 +199,51 @@ export default function ClubsPage() {
         </span>
       </div>
 
-      {/* ✅ 부서 탭 */}
+      {/* 부서 탭 */}
       <DivisionTabs divisions={divisions} selected={selected} onSelect={(id) => {
         setSelected(id);
-        setSelectedClub(null); // 부서 바뀌면 선택 클럽 초기화
+        setSelectedClub(null);
         setMembers([]);
+        setEditingPin(null);
+        setEditingSeed(null);
       }} />
 
       {loading ? (
         <div className="p-8 text-center text-gray-500">불러오는 중...</div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* 왼쪽: 클럽 목록 */}
+
+          {/* ── 왼쪽: 클럽 목록 ── */}
           <div className="space-y-4">
-            {/* 클럽 추가 폼 */}
+
+            {/* 새 클럽 추가 폼 */}
             <div className="bg-white rounded-lg border p-4 space-y-3">
               <h3 className="font-semibold text-sm text-gray-600">➕ 새 클럽 추가</h3>
               <div className="grid grid-cols-2 gap-2">
                 <input
                   placeholder="클럽명 *"
                   value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
+                  onChange={e => setNewName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAddClub()}
                   className="border rounded px-3 py-2 text-sm col-span-2"
                 />
                 <input
                   placeholder="주장 이름"
                   value={newCaptain}
-                  onChange={(e) => setNewCaptain(e.target.value)}
+                  onChange={e => setNewCaptain(e.target.value)}
                   className="border rounded px-3 py-2 text-sm"
                 />
                 <input
                   placeholder="PIN 6자리 (없으면 자동)"
                   value={newPin}
-                  onChange={(e) => setNewPin(e.target.value)}
+                  onChange={e => setNewPin(e.target.value.replace(/\D/g, ''))}
                   maxLength={6}
-                  className="border rounded px-3 py-2 text-sm"
+                  className="border rounded px-3 py-2 text-sm font-mono"
                 />
                 <input
                   placeholder="시드 번호 (선택)"
                   value={newSeed}
-                  onChange={(e) => setNewSeed(e.target.value)}
+                  onChange={e => setNewSeed(e.target.value)}
                   type="number"
                   min={1}
                   className="border rounded px-3 py-2 text-sm"
@@ -229,53 +264,122 @@ export default function ClubsPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                {clubs.map((club) => (
+                {clubs.map(club => (
                   <div
                     key={club.id}
-                    onClick={() => loadMembers(club)}
+                    onClick={() => {
+                      if (editingPin === club.id || editingSeed === club.id) return;
+                      loadMembers(club);
+                    }}
                     className={`bg-white rounded-lg border p-4 cursor-pointer transition hover:border-blue-300 ${
                       selectedClub?.id === club.id ? 'border-blue-500 ring-2 ring-blue-100' : ''
                     }`}
                   >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="font-semibold">{club.name}</span>
+                    {/* 클럽명 + 시드 + 삭제 */}
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-semibold truncate">{club.name}</span>
                         {club.seed_number && (
-                          <span className="ml-2 text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded">
+                          <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded flex-shrink-0">
                             {club.seed_number}시드
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-2">
-                        {editingSeed === club.id ? (
-                          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="number" min={1} value={seedInput}
-                              onChange={(e) => setSeedInput(e.target.value)}
-                              placeholder="시드" className="border rounded px-2 py-1 w-16 text-xs"
-                            />
-                            <button onClick={() => handleSeedSave(club.id)} className="text-blue-600 text-xs">✓</button>
-                            <button onClick={() => setEditingSeed(null)} className="text-gray-400 text-xs">✕</button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setEditingSeed(club.id); setSeedInput(String(club.seed_number || '')); }}
-                            className="text-xs text-gray-400 hover:text-blue-600"
-                          >
-                            시드
-                          </button>
-                        )}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDeleteClub(club.id); }}
-                          className="text-xs text-red-400 hover:text-red-600"
-                        >
-                          삭제
-                        </button>
-                      </div>
+                      <button
+                        onClick={e => { e.stopPropagation(); handleDeleteClub(club.id); }}
+                        className="text-xs text-red-400 hover:text-red-600 flex-shrink-0 ml-2"
+                      >
+                        삭제
+                      </button>
                     </div>
-                    <div className="text-sm text-gray-500 mt-1">
+
+                    {/* 주장 행 */}
+                    <div className="text-sm text-gray-500 mb-2">
                       주장: {club.captain_name || '-'}
-                      {club.captain_pin && <span className="ml-2">PIN: {club.captain_pin}</span>}
+                    </div>
+
+                    {/* PIN + 시드 인라인 편집 행 */}
+                    <div className="flex items-center gap-2 flex-wrap" onClick={e => e.stopPropagation()}>
+
+                      {/* PIN 편집 */}
+                      {editingPin === club.id ? (
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={pinInput}
+                            onChange={e => setPinInput(e.target.value.replace(/\D/g, ''))}
+                            placeholder="6자리"
+                            maxLength={6}
+                            autoFocus
+                            className="border rounded px-2 py-1 w-24 text-xs font-mono"
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') handlePinSave(club.id);
+                              if (e.key === 'Escape') setEditingPin(null);
+                            }}
+                          />
+                          <button
+                            onClick={() => handlePinSave(club.id)}
+                            disabled={saving}
+                            className="text-xs text-blue-600 hover:text-blue-800 px-1.5 py-1 rounded hover:bg-blue-50 disabled:opacity-50"
+                          >✓</button>
+                          <button
+                            onClick={() => setEditingPin(null)}
+                            className="text-xs text-gray-400 hover:text-gray-600 px-1.5 py-1 rounded hover:bg-gray-50"
+                          >✕</button>
+                          <span className="text-xs text-gray-400">빈칸=자동생성</span>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setEditingSeed(null);
+                            setEditingPin(club.id);
+                            setPinInput(club.captain_pin || '');
+                          }}
+                          className="text-xs font-mono bg-gray-100 hover:bg-blue-50 hover:text-blue-700 text-gray-600 px-2 py-1 rounded transition"
+                        >
+                          PIN: {club.captain_pin || '없음'} ✏️
+                        </button>
+                      )}
+
+                      {/* 시드 편집 */}
+                      {editingSeed === club.id ? (
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min={1}
+                            value={seedInput}
+                            onChange={e => setSeedInput(e.target.value)}
+                            placeholder="시드"
+                            autoFocus
+                            className="border rounded px-2 py-1 w-16 text-xs"
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') handleSeedSave(club.id);
+                              if (e.key === 'Escape') setEditingSeed(null);
+                            }}
+                          />
+                          <button
+                            onClick={() => handleSeedSave(club.id)}
+                            disabled={saving}
+                            className="text-xs text-blue-600 hover:text-blue-800 px-1.5 py-1 rounded hover:bg-blue-50 disabled:opacity-50"
+                          >✓</button>
+                          <button
+                            onClick={() => setEditingSeed(null)}
+                            className="text-xs text-gray-400 hover:text-gray-600 px-1.5 py-1 rounded hover:bg-gray-50"
+                          >✕</button>
+                          <span className="text-xs text-gray-400">빈칸=삭제</span>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setEditingPin(null);
+                            setEditingSeed(club.id);
+                            setSeedInput(String(club.seed_number || ''));
+                          }}
+                          className="text-xs text-gray-400 hover:text-blue-600 px-2 py-1 rounded hover:bg-blue-50 transition"
+                        >
+                          시드 ✏️
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -283,17 +387,26 @@ export default function ClubsPage() {
             )}
           </div>
 
-          {/* 오른쪽: 선수 명단 */}
+          {/* ── 오른쪽: 선수 명단 ── */}
           <div className="space-y-4">
             {selectedClub ? (
               <div className="bg-white rounded-lg border p-4">
+                {/* 선수 명단 헤더 */}
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-semibold">
-                    {selectedClub.name} 선수 명단
-                    <span className="text-sm text-gray-500 ml-2">
-                      ({members.length}명{config?.team_member_limit ? ` / ${config.team_member_limit}명` : ''})
-                    </span>
-                  </h3>
+                  <div>
+                    <h3 className="font-semibold">
+                      {selectedClub.name} 선수 명단
+                    </h3>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {members.length}명
+                      {config?.team_member_limit ? ` / ${config.team_member_limit}명` : ''}
+                      {selectedClub.captain_pin && (
+                        <span className="ml-2 font-mono bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded">
+                          PIN: {selectedClub.captain_pin}
+                        </span>
+                      )}
+                    </p>
+                  </div>
                   <button
                     onClick={() => setCsvMode(!csvMode)}
                     className="text-xs text-blue-600 hover:underline"
@@ -302,70 +415,91 @@ export default function ClubsPage() {
                   </button>
                 </div>
 
+                {/* 선수 추가 - 개별 */}
                 {!csvMode && (
                   <div className="flex gap-2 mb-3">
                     <input
-                      placeholder="이름 *" value={memberName}
-                      onChange={(e) => setMemberName(e.target.value)}
+                      placeholder="이름 *"
+                      value={memberName}
+                      onChange={e => setMemberName(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleAddMember()}
                       className="border rounded px-3 py-2 text-sm flex-1"
-                      onKeyDown={(e) => e.key === 'Enter' && handleAddMember()}
                     />
                     <select
                       value={memberGender}
-                      onChange={(e) => setMemberGender(e.target.value as 'M' | 'F')}
+                      onChange={e => setMemberGender(e.target.value as 'M' | 'F')}
                       className="border rounded px-2 py-2 text-sm w-16"
                     >
                       <option value="M">남</option>
                       <option value="F">여</option>
                     </select>
                     <input
-                      placeholder="등급" value={memberGrade}
-                      onChange={(e) => setMemberGrade(e.target.value)}
+                      placeholder="등급"
+                      value={memberGrade}
+                      onChange={e => setMemberGrade(e.target.value)}
                       className="border rounded px-3 py-2 text-sm w-20"
                     />
-                    <button onClick={handleAddMember} className="bg-blue-600 text-white rounded px-4 py-2 text-sm hover:bg-blue-700">추가</button>
+                    <button
+                      onClick={handleAddMember}
+                      className="bg-blue-600 text-white rounded px-4 py-2 text-sm hover:bg-blue-700"
+                    >
+                      추가
+                    </button>
                   </div>
                 )}
 
+                {/* 선수 추가 - CSV */}
                 {csvMode && (
                   <div className="space-y-2 mb-3">
                     <p className="text-xs text-gray-500">형식: 이름,성별(M/F),등급 (한 줄에 한 명)</p>
                     <textarea
                       value={csvText}
-                      onChange={(e) => setCsvText(e.target.value)}
+                      onChange={e => setCsvText(e.target.value)}
                       placeholder={`김민준,M,A급\n이서연,F,B급\n박지훈,M,A급`}
                       className="w-full border rounded px-3 py-2 text-sm h-32 font-mono"
                     />
-                    <button onClick={handleCsvImport} className="bg-green-600 text-white rounded px-4 py-2 text-sm hover:bg-green-700">
+                    <button
+                      onClick={handleCsvImport}
+                      className="bg-green-600 text-white rounded px-4 py-2 text-sm hover:bg-green-700"
+                    >
                       일괄 추가
                     </button>
                   </div>
                 )}
 
+                {/* 선수 목록 */}
                 {members.length === 0 ? (
                   <div className="text-center text-gray-400 py-6 text-sm">선수가 없습니다.</div>
                 ) : (
                   <div className="divide-y">
                     {members.map((m, idx) => (
                       <div key={m.id} className="flex items-center justify-between py-2">
-                        <div className="flex items-center gap-3">
-                          <span className="text-xs text-gray-400 w-6 text-right">{idx + 1}</span>
-                          <span className="font-medium text-sm">{m.name}</span>
-                          <span className="text-xs text-gray-500">{getGenderLabel(m.gender)}</span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs text-gray-400 w-5 text-right flex-shrink-0">{idx + 1}</span>
+                          <span className="font-medium text-sm truncate">{m.name}</span>
+                          <span className="text-xs text-gray-500 flex-shrink-0">{getGenderLabel(m.gender)}</span>
                           {m.grade && (
-                            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{m.grade}</span>
+                            <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded flex-shrink-0">{m.grade}</span>
                           )}
                           {m.is_captain && (
-                            <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">주장</span>
+                            <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded flex-shrink-0">주장</span>
                           )}
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-shrink-0">
                           {!m.is_captain && (
-                            <button onClick={() => handleSetCaptain(m)} className="text-xs text-blue-400 hover:text-blue-600">
+                            <button
+                              onClick={() => handleSetCaptain(m)}
+                              className="text-xs text-blue-400 hover:text-blue-600"
+                            >
                               주장 지정
                             </button>
                           )}
-                          <button onClick={() => handleDeleteMember(m.id)} className="text-xs text-red-400 hover:text-red-600">삭제</button>
+                          <button
+                            onClick={() => handleDeleteMember(m.id)}
+                            className="text-xs text-red-400 hover:text-red-600"
+                          >
+                            삭제
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -378,6 +512,7 @@ export default function ClubsPage() {
               </div>
             )}
           </div>
+
         </div>
       )}
     </div>
