@@ -1,32 +1,29 @@
 ﻿// src/app/api/notify/court/route.ts
 import { NextRequest, NextResponse } from 'next/server'
-import webpush from 'web-push'
-import { createClient } from '@supabase/supabase-js'
-
-// VAPID configured inside handler
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+import { getServiceClient } from '@/lib/supabase'
 
 export async function POST(req: NextRequest) {
   try {
+    // ✅ VAPID 키 없으면 조용히 skip (빌드 안전)
     if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
       return NextResponse.json({ sent: 0, message: 'VAPID not configured' })
     }
+
+    // ✅ web-push를 dynamic import로 런타임에만 로드 (빌드 시 VAPID 검증 우회)
+    const webpush = (await import('web-push')).default
     webpush.setVapidDetails(
       'mailto:admin@jeju-tournament.com',
       process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
       process.env.VAPID_PRIVATE_KEY
     )
+
+    const supabaseAdmin = getServiceClient()
     const { event_id, court, match_id, trigger } = await req.json()
 
     if (!event_id || !court) {
       return NextResponse.json({ error: 'event_id, court 필수' }, { status: 400 })
     }
 
-    // 코트 번호 추출 (예: "코트 1" → 1)
     const courtNum = parseInt(court.replace(/[^0-9]/g, ''))
 
     let teamAId: string | null = null
@@ -37,7 +34,6 @@ export async function POST(req: NextRequest) {
     let targetId = ''
 
     if (match_id) {
-      // match_id 명시 → 개인전 경기 직접 조회
       const { data } = await supabaseAdmin
         .from('v_matches_with_teams')
         .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name')
@@ -52,7 +48,7 @@ export async function POST(req: NextRequest) {
         targetId = data.id
       }
     } else {
-      // 1. 단체전 ties에서 해당 코트 대기 경기 조회 (join 없이 id만)
+      // 단체전 ties 먼저 확인
       const { data: tieList } = await supabaseAdmin
         .from('ties')
         .select('id, club_a_id, club_b_id, status, tie_order')
@@ -68,16 +64,14 @@ export async function POST(req: NextRequest) {
         targetId = activeTie.id
         divisionName = '단체전'
 
-        // club 이름 별도 조회
         const [{ data: clubA }, { data: clubB }] = await Promise.all([
           supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_a_id).single(),
           supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_b_id).single(),
         ])
         teamAName = clubA?.name || ''
         teamBName = clubB?.name || ''
-
       } else {
-        // 2. 개인전 matches에서 해당 코트 다음 PENDING 경기 조회
+        // 개인전 matches
         const { data: courtMatches } = await supabaseAdmin
           .from('v_matches_with_teams')
           .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status')
@@ -108,7 +102,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ sent: 0, message: '대기 중인 경기가 없습니다' })
     }
 
-    // 구독자 조회
     const teamIds = [teamAId, teamBId].filter(Boolean) as string[]
     const { data: subscriptions, error: subError } = await supabaseAdmin
       .from('push_subscriptions')
@@ -117,10 +110,9 @@ export async function POST(req: NextRequest) {
 
     if (subError) return NextResponse.json({ error: subError.message }, { status: 500 })
     if (!subscriptions?.length) {
-      return NextResponse.json({ sent: 0, message: '구독자가 없습니다 (알림 동의 안 함)' })
+      return NextResponse.json({ sent: 0, message: '구독자가 없습니다' })
     }
 
-    // 알림 메시지
     const triggerLabel = trigger === 'court_changed' ? '코트가 변경되었습니다!' : '경기 준비하세요!'
     const payload = JSON.stringify({
       title: `🎾 ${court} - ${triggerLabel}`,
@@ -130,7 +122,6 @@ export async function POST(req: NextRequest) {
       data: { court, match_id: targetId },
     })
 
-    // 발송
     let sent = 0
     const failedEndpoints: string[] = []
 
@@ -150,7 +141,6 @@ export async function POST(req: NextRequest) {
       })
     )
 
-    // 만료 구독 정리
     if (failedEndpoints.length > 0) {
       await supabaseAdmin.from('push_subscriptions').delete().in('endpoint', failedEndpoints)
     }
