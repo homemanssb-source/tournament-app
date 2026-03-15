@@ -175,10 +175,11 @@ export default function CourtsPage() {
     : viewFilter === 'TEAM' ? allItems.filter(m => m.is_team_tie)
     : allItems.filter(m => m.division_id === viewFilter)
 
+  // ✅ 미배정 목록만 필터 적용, 코트 표시는 항상 전체 (부서 바꿔도 코트 목록 유지)
   const unassigned = filteredAll.filter(m => !m.court && m.status !== 'FINISHED')
   const byCourt = new Map<string, MatchSlim[]>()
   for (const name of courtNames) byCourt.set(name, [])
-  for (const m of filteredAll) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
+  for (const m of allItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
 
   const divColors: Record<string, string> = { TEAM: '#2563eb' }
   const colors = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#ef4444']
@@ -196,7 +197,11 @@ export default function CourtsPage() {
       if (unTies.length === 0) { setMsg('배정할 단체전 경기가 없습니다.'); return }
       const courtNums = autoCourts.map(c => parseInt(c.replace('코트 ', '')))
       for (let i = 0; i < unTies.length; i++) {
-        await supabase.from('ties').update({ court_number: courtNums[i % courtNums.length] }).eq('id', unTies[i].id)
+        const courtNum = courtNums[i % courtNums.length]
+        const courtKey = `코트 ${courtNum}`
+        const nextOrder = (courtOrderRef.current[courtKey] || 0) + 1
+        courtOrderRef.current[courtKey] = nextOrder
+        await supabase.from('ties').update({ court_number: courtNum, court_order: nextOrder }).eq('id', unTies[i].id)
       }
       setMsg(`✅ [단체전] ${unTies.length}경기 자동 배정 완료`); loadTies(); return
     }
@@ -208,12 +213,14 @@ export default function CourtsPage() {
     const byGroup = new Map<string, MatchSlim[]>()
     for (const m of targetMatches) { const key = m.group_label || 'none'; if (!byGroup.has(key)) byGroup.set(key, []); byGroup.get(key)!.push(m) }
     const updates: { id: string; court: string; court_order: number }[] = []
-    const courtOrders: Record<string, number> = {}
-    for (const c of autoCourts) { courtOrders[c] = (existingCounts[c] || 0) + 1 }
     let courtIdx = 0
     for (const [, groupMatches] of byGroup) {
       const court = sortedCourts[courtIdx % sortedCourts.length]
-      for (const m of groupMatches) { updates.push({ id: m.id, court, court_order: courtOrders[court] }); courtOrders[court]++ }
+      for (const m of groupMatches) {
+        const nextOrder = (courtOrderRef.current[court] || 0) + 1
+        courtOrderRef.current[court] = nextOrder
+        updates.push({ id: m.id, court, court_order: nextOrder })
+      }
       courtIdx++
     }
     for (const u of updates) { await supabase.from('matches').update({ court: u.court, court_order: u.court_order }).eq('id', u.id) }
@@ -274,9 +281,17 @@ export default function CourtsPage() {
     }
     const divName = divisions.find(d => d.id === divId)?.name || ''
     if (!confirm(`[${divName}] 코트 배정을 모두 초기화하시겠습니까?`)) return
-    for (const m of matches.filter(m => m.division_id === divId && m.court)) {
+    const divMatches = matches.filter(m => m.division_id === divId && m.court)
+    for (const m of divMatches) {
       await supabase.from('matches').update({ court: null, court_order: null }).eq('id', m.id)
     }
+    // courtOrderRef 재계산
+    const remaining = allItems.filter(m => m.court && m.division_id !== divId)
+    const counter: Record<string, number> = {}
+    for (const m of remaining) {
+      if (m.court && m.court_order) counter[m.court] = Math.max(counter[m.court] || 0, m.court_order)
+    }
+    courtOrderRef.current = counter
     setMsg(`✅ [${divName}] 코트 배정 초기화 완료`); loadMatches()
   }
 
@@ -286,6 +301,7 @@ export default function CourtsPage() {
     for (const t of ties.filter(t => t.court_number)) {
       await supabase.from('ties').update({ court_number: null }).eq('id', t.id)
     }
+    courtOrderRef.current = {}  // ✅ 카운터 전체 리셋
     setMsg('✅ 전체 코트 배정 초기화'); loadMatches(); loadTies()
   }
 
