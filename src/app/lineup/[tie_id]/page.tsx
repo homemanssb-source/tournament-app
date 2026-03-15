@@ -71,7 +71,7 @@ export default function LineupPage() {
       setSetsPerRubber(ev?.team_sets_per_rubber || 1);
       setTeamMatchType(ev?.team_match_type || null);
       // ✅ lineup_revealed OR 경기 진행중/완료 → 바로 revealed 단계
-      if (t.lineup_revealed || ['round_of_16','quarter','semi','final'].includes(t.round)) {
+      if (t.lineup_revealed || ['round_of_16','quarter','semi','final'].includes(t.round ?? '')) {
         setStep('revealed');
         await loadRevealedData(tieId, ca, cb);
         await loadRubbers(tieId);
@@ -114,7 +114,7 @@ export default function LineupPage() {
     const memberList = await fetchClubMembers(club.id); setMembers(memberList);
     const existing = await fetchLineups(tieId, club.id);
     if (existing.length > 0) {
-      if (t.lineup_revealed || ['round_of_16','quarter','semi','final'].includes(t.round)) {
+      if (t.lineup_revealed || ['round_of_16','quarter','semi','final'].includes(t.round ?? '')) {
         setStep('revealed'); await loadRevealedData(tieId, ca, cb); await loadRubbers(tieId);
       } else {
         setLineups(Array.from({ length: t.rubber_count }, (_, i) => {
