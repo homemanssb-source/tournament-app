@@ -30,6 +30,8 @@ export default function AdminPinManagePage() {
   const [tieLineups, setTieLineups] = useState<TeamLineup[]>([])
   const [memberMap, setMemberMap] = useState<Record<string, ClubMember>>({})
   const [tieRubbers, setTieRubbers] = useState<any[]>([])
+  // ✅ 단체전 검색
+  const [tieSearchQuery, setTieSearchQuery] = useState('')
 
   useEffect(() => {
     const raw = sessionStorage.getItem('admin_pin_session')
@@ -47,19 +49,29 @@ export default function AdminPinManagePage() {
 
   async function loadTies(eventId: string) {
     setTiesLoading(true)
-    try { const data = await fetchTies(eventId); setTies(data); } catch {}
+    try { const data = await fetchTies(eventId); setTies(data) } catch {}
     setTiesLoading(false)
   }
 
   // 개인전 필터
   const filtered = allMatches.filter(m => {
-    if (!searchQuery) return true
+    if (!searchQuery) return false  // 검색어 없으면 빈 결과
     const q = searchQuery.toLowerCase()
     return (m.match_num||'').toLowerCase().includes(q)
       || (m.team_a_name||'').toLowerCase().includes(q)
       || (m.team_b_name||'').toLowerCase().includes(q)
       || (m.division_name||'').toLowerCase().includes(q)
       || (m.round||'').toLowerCase().includes(q)
+  })
+
+  // ✅ 단체전 필터 - 검색어 없으면 빈 결과
+  const filteredTies = ties.filter(tie => {
+    if (!tieSearchQuery) return false
+    const q = tieSearchQuery.toLowerCase()
+    return (tie.club_a?.name || '').toLowerCase().includes(q)
+      || (tie.club_b?.name || '').toLowerCase().includes(q)
+      || (tie.tie_order?.toString() || '').includes(q)
+      || (tie.round || '').toLowerCase().includes(q)
   })
 
   async function selectMatch(m: any) {
@@ -87,7 +99,6 @@ export default function AdminPinManagePage() {
     setMsg('✅ 결과가 수정되었습니다.'); loadAllMatches(session.event_id); setSelectedMatch(null)
   }
 
-  // 단체전 대전 선택 → 라인업 + 러버 로드
   async function handleSelectTie(tie: TieWithClubs) {
     if (selectedTie?.id===tie.id) { setSelectedTie(null); return }
     setSelectedTie(tie)
@@ -98,12 +109,14 @@ export default function AdminPinManagePage() {
     setTieLineups(lineups)
     setTieRubbers(rubbers)
     const mm: Record<string, ClubMember> = {}
-    if (tie.club_a_id) { (await fetchClubMembers(tie.club_a_id)).forEach(m => { mm[m.id]=m; }); }
-    if (tie.club_b_id) { (await fetchClubMembers(tie.club_b_id)).forEach(m => { mm[m.id]=m; }); }
+    if (tie.club_a_id) { (await fetchClubMembers(tie.club_a_id)).forEach(m => { mm[m.id]=m }) }
+    if (tie.club_b_id) { (await fetchClubMembers(tie.club_b_id)).forEach(m => { mm[m.id]=m }) }
     setMemberMap(mm)
   }
 
-  function getMemberName(id: string|null|undefined): string { return id && memberMap[id]? memberMap[id].name : '-'; }
+  function getMemberName(id: string|null|undefined): string {
+    return id && memberMap[id] ? memberMap[id].name : '-'
+  }
 
   function handleLogout() { sessionStorage.removeItem('admin_pin_session'); router.push('/admin-pin') }
 
@@ -124,51 +137,77 @@ export default function AdminPinManagePage() {
       {/* 탭 */}
       <div className="max-w-2xl mx-auto px-4 pt-4">
         <div className="flex gap-2 mb-4">
-          <button onClick={() => {setTab('individual');setSelectedMatch(null)}}
+          <button onClick={() => { setTab('individual'); setSelectedMatch(null) }}
             className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition ${tab==='individual'?'bg-red-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-            🎾 개인전</button>
-          <button onClick={() => {setTab('team');setSelectedTie(null)}}
+            🎾 개인전
+          </button>
+          <button onClick={() => { setTab('team'); setSelectedTie(null) }}
             className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition ${tab==='team'?'bg-blue-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-            📋 단체전</button>
+            📋 단체전
+          </button>
         </div>
       </div>
 
-      <main className="max-w-2xl mx-auto px-4 pb-6">
-        {msg && <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('✅')?'bg-green-50 text-green-700':'bg-red-50 text-red-600'}`}>{msg}</div>}
+      <main className="max-w-2xl mx-auto px-4 pb-8 space-y-3">
+        {msg && (
+          <div className={`p-3 rounded-lg text-sm ${msg.startsWith('✅')?'bg-green-50 text-green-700':'bg-red-50 text-red-600'}`}>
+            {msg}
+          </div>
+        )}
 
         {/* ══════ 개인전 탭 ══════ */}
-        {tab==='individual' && (
+        {tab === 'individual' && (
           <>
-            {!selectedMatch && (
-              <>
-                <input type="text" placeholder="🔍 경기ID, 팀명, 부서, 라운드로 검색..."
-                  value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                  className="w-full border border-stone-300 rounded-xl px-4 py-3 mb-4 focus:outline-none focus:border-red-500" />
-                <div className="space-y-2 max-h-[60vh] overflow-y-auto">
-                  {filtered.slice(0,50).map(m => (
-                    <button key={m.id} onClick={() => selectMatch(m)}
-                      className="w-full text-left bg-white rounded-xl border p-3 hover:border-red-300 transition-all">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-stone-400">{m.match_num} · {m.division_name} · {m.round}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${m.status==='FINISHED'?'bg-green-100 text-green-700':'bg-stone-100 text-stone-500'}`}>
-                          {m.status==='FINISHED'?'완료':'대기'}</span>
-                      </div>
-                      <div className="flex items-center gap-2 mt-1 text-sm">
-                        <span className="font-medium">{m.team_a_name||'TBD'}</span>
-                        <span className="text-stone-300">vs</span>
-                        <span className="font-medium">{m.team_b_name||'TBD'}</span>
-                      </div>
-                      {m.score && <div className="text-xs text-stone-500 mt-1">점수: {m.score} {m.locked_by_participant&&'🔒'}</div>}
-                    </button>
-                  ))}
-                  {filtered.length===0 && <p className="text-center py-6 text-stone-400">검색 결과 없음</p>}
-                </div>
-              </>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="팀명, 경기번호, 부서명 검색..."
+                value={searchQuery}
+                onChange={e => { setSearchQuery(e.target.value); setSelectedMatch(null) }}
+                className="w-full border-2 rounded-xl px-4 py-3 pr-10 focus:border-red-500 outline-none"
+                autoFocus
+              />
+              {searchQuery && (
+                <button onClick={() => { setSearchQuery(''); setSelectedMatch(null) }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">✕</button>
+              )}
+            </div>
+
+            {!searchQuery && (
+              <div className="text-center py-10 text-gray-400">
+                <div className="text-3xl mb-2">🔍</div>
+                <p>팀명 또는 경기번호를 검색하세요</p>
+              </div>
             )}
+
+            {searchQuery && filtered.length === 0 && (
+              <div className="text-center py-8 text-gray-400">검색 결과가 없습니다.</div>
+            )}
+
+            {filtered.map(m => (
+              <div key={m.id} onClick={() => selectMatch(m)}
+                className={`bg-white rounded-xl border p-4 cursor-pointer transition ${selectedMatch?.id===m.id?'border-red-400 bg-red-50':'hover:border-gray-300'}`}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-gray-400">{m.match_num} · {m.division_name} · {m.round}</span>
+                  <div className="flex items-center gap-2">
+                    {m.locked_by_participant && <span className="text-xs text-red-500">🔒</span>}
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${m.status==='FINISHED'?'bg-green-100 text-green-700':m.status==='IN_PROGRESS'?'bg-red-100 text-red-700':'bg-gray-100 text-gray-500'}`}>
+                      {m.status==='FINISHED'?'완료':m.status==='IN_PROGRESS'?'진행중':'대기'}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">{m.team_a_name}</span>
+                  <span className="text-gray-400 font-bold mx-2">{m.score || 'vs'}</span>
+                  <span className="font-medium">{m.team_b_name}</span>
+                </div>
+              </div>
+            ))}
+
             {selectedMatch && (
-              <div className="bg-white rounded-xl border p-5">
-                <button onClick={() => setSelectedMatch(null)} className="text-sm text-stone-400 hover:text-stone-600 mb-4">← 목록으로</button>
-                <div className="text-xs text-stone-400 mb-1">{selectedMatch.match_num} · {selectedMatch.division_name} · {selectedMatch.round}</div>
+              <div className="bg-white rounded-xl border-2 border-red-300 p-5">
+                <h3 className="font-bold text-lg mb-1">경기 수정</h3>
+                <div className="text-xs text-stone-400 mb-4">{selectedMatch.match_num} · {selectedMatch.division_name} · {selectedMatch.round}</div>
                 <div className="flex items-center justify-center gap-4 my-4">
                   <div className="text-center flex-1"><div className="font-bold">{selectedMatch.team_a_name||'TBD'}</div><span className="text-xs text-stone-400">팀 A</span></div>
                   <span className="text-2xl text-stone-300 font-bold">VS</span>
@@ -176,8 +215,9 @@ export default function AdminPinManagePage() {
                 </div>
                 {selectedMatch.score && (
                   <div className="text-center mb-4 text-sm">현재: <strong>{selectedMatch.score}</strong>
-                    {selectedMatch.winner_name&&<span> → 승: {selectedMatch.winner_name}</span>}
-                    {selectedMatch.locked_by_participant&&<span className="ml-2 text-red-500">🔒 참가자잠금</span>}</div>
+                    {selectedMatch.winner_name && <span> → 승: {selectedMatch.winner_name}</span>}
+                    {selectedMatch.locked_by_participant && <span className="ml-2 text-red-500">🔒 참가자잠금</span>}
+                  </div>
                 )}
                 <hr className="my-4" />
                 {selectedMatch.locked_by_participant && (
@@ -185,21 +225,26 @@ export default function AdminPinManagePage() {
                     <p className="text-sm font-bold text-amber-700 mb-2">🔓 잠금 해제</p>
                     <input type="text" placeholder="해제 사유 (선택)" value={reason} onChange={e => setReason(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm mb-2" />
                     <button onClick={handleUnlock} disabled={loading} className="w-full bg-amber-500 text-white py-2 rounded-lg font-medium hover:bg-amber-600 disabled:opacity-50">
-                      {loading?'처리 중...':'잠금 해제 + 결과 초기화'}</button>
+                      {loading?'처리 중...':'잠금 해제 + 결과 초기화'}
+                    </button>
                   </div>
                 )}
                 <div className="p-3 bg-stone-50 rounded-lg">
                   <p className="text-sm font-bold mb-3">✏️ 결과 수정</p>
-                  <div className="mb-3"><label className="text-xs text-stone-500">점수</label>
-                    <input type="text" placeholder="6:4" value={newScore} onChange={e => setNewScore(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-center text-lg font-bold mt-1" /></div>
-                  <div className="mb-3"><label className="text-xs text-stone-500">승자</label>
+                  <div className="mb-3">
+                    <label className="text-xs text-stone-500">점수</label>
+                    <input type="text" placeholder="6:4" value={newScore} onChange={e => setNewScore(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-center text-lg font-bold mt-1" />
+                  </div>
+                  <div className="mb-3">
+                    <label className="text-xs text-stone-500">승자</label>
                     <div className="flex gap-2 mt-1">
                       <button onClick={() => setNewWinner('A')} className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${newWinner==='A'?'bg-red-600 text-white border-red-600':'border-stone-300 hover:border-red-400'}`}>A: {selectedMatch.team_a_name||'TBD'}</button>
                       <button onClick={() => setNewWinner('B')} className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${newWinner==='B'?'bg-red-600 text-white border-red-600':'border-stone-300 hover:border-red-400'}`}>B: {selectedMatch.team_b_name||'TBD'}</button>
                     </div>
                   </div>
                   <button onClick={handleUpdateScore} disabled={loading||!newScore||!newWinner} className="w-full bg-red-600 text-white py-2.5 rounded-lg font-bold hover:bg-red-700 disabled:opacity-50">
-                    {loading?'처리 중...':'결과 저장'}</button>
+                    {loading?'처리 중...':'결과 저장'}
+                  </button>
                 </div>
               </div>
             )}
@@ -207,94 +252,129 @@ export default function AdminPinManagePage() {
         )}
 
         {/* ══════ 단체전 탭 ══════ */}
-        {tab==='team' && (
+        {tab === 'team' && (
           <>
-            {tiesLoading ? <div className="text-center py-8 text-gray-400">로딩중...</div> :
-            ties.length===0 ? <div className="text-center py-8 text-gray-400">단체전 대전이 없습니다.</div> : (
-              <div className="space-y-3">
-                {ties.map(tie => {
-                  const isSelected = selectedTie?.id===tie.id;
-                  const maj = getMajority(tie.rubber_count);
-                  const aWin = tie.club_a_rubbers_won>=maj, bWin = tie.club_b_rubbers_won>=maj;
-                  return (
-                    <div key={tie.id} className="bg-white rounded-xl border overflow-hidden">
-                      <div onClick={() => handleSelectTie(tie)} className="p-4 cursor-pointer hover:bg-gray-50 transition">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs text-gray-400">#{tie.tie_order}</span>
-                            <span className={`font-semibold ${aWin?'text-blue-600':''}`}>{tie.club_a?.name||'TBD'}</span>
-                            <span className="text-gray-400 text-sm">vs</span>
-                            <span className={`font-semibold ${bWin?'text-blue-600':''}`}>{tie.club_b?.name||'TBD'}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {(tie.status==='completed'||tie.status==='in_progress')&&<span className="text-lg font-bold">{tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}</span>}
-                            <span className={`text-xs px-2 py-1 rounded-full ${getTieStatusColor(tie.status)}`}>{getTieStatusLabel(tie.status)}</span>
-                            <span className="text-gray-400 text-xs">{isSelected?'▲':'▼'}</span>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
-                          <span>{tie.club_a?.name?.slice(0,6)}: {tie.club_a_lineup_submitted?<span className="text-green-600">✅제출</span>:<span className="text-orange-500">⏳대기</span>}</span>
-                          <span>{tie.club_b?.name?.slice(0,6)}: {tie.club_b_lineup_submitted?<span className="text-green-600">✅제출</span>:<span className="text-orange-500">⏳대기</span>}</span>
-                          {tie.lineup_revealed&&<span className="text-blue-600">🔓공개</span>}
-                        </div>
-                      </div>
+            {/* ✅ 단체전 검색 */}
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="클럽명, 라운드, 번호 검색..."
+                value={tieSearchQuery}
+                onChange={e => { setTieSearchQuery(e.target.value); setSelectedTie(null) }}
+                className="w-full border-2 rounded-xl px-4 py-3 pr-10 focus:border-blue-500 outline-none"
+                autoFocus
+              />
+              {tieSearchQuery && (
+                <button onClick={() => { setTieSearchQuery(''); setSelectedTie(null) }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">✕</button>
+              )}
+            </div>
 
-                      {isSelected && (
-                        <div className="border-t bg-gray-50 p-4 space-y-3">
-                          {!tie.lineup_revealed && (
-                            <div className="text-center text-sm text-gray-400 py-2">라인업 미공개 (양팀 제출 후 공개)</div>
-                          )}
-
-                          {tie.lineup_revealed && tieLineups.length===0 && (
-                            <div className="text-center text-sm text-gray-400 py-2">라인업 데이터 없음</div>
-                          )}
-
-                          {/* 러버별 라인업 + 스코어 */}
-                          {Array.from({length:tie.rubber_count},(_,i)=>i+1).map(num => {
-                            const laA = tieLineups.find(l=>l.rubber_number===num&&l.club_id===tie.club_a_id);
-                            const laB = tieLineups.find(l=>l.rubber_number===num&&l.club_id===tie.club_b_id);
-                            const rubber = tieRubbers.find((r:any)=>r.rubber_number===num);
-                            const hasScore = rubber?.set1_a!==null&&rubber?.set1_a!==undefined;
-                            return (
-                              <div key={num} className={`bg-white rounded-lg border p-3 ${rubber?.status==='completed'?'border-green-200':''}`}>
-                                <div className="flex items-center justify-between mb-2">
-                                  <span className="font-medium text-sm">복식 {num}</span>
-                                  {rubber?.status==='completed'&&<span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">완료</span>}
-                                </div>
-                                {(laA||laB) ? (
-                                  <div className="grid grid-cols-5 items-center gap-1 text-xs mb-2">
-                                    <div className="col-span-2 text-right">
-                                      <div className="font-medium">{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</div>
-                                      <div className="text-gray-400">{tie.club_a?.name}</div>
-                                    </div>
-                                    <div className="text-center text-gray-400 font-bold">vs</div>
-                                    <div className="col-span-2 text-left">
-                                      <div className="font-medium">{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</div>
-                                      <div className="text-gray-400">{tie.club_b?.name}</div>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div className="text-xs text-gray-400 mb-2">{tie.lineup_revealed?'선수 정보 없음':'라인업 미공개'}</div>
-                                )}
-                                {hasScore && (
-                                  <div className="text-center py-1 bg-gray-50 rounded text-sm font-bold">
-                                    {formatSetScore(rubber.set1_a,rubber.set1_b)}
-                                    {rubber.set2_a!==null&&' / '+formatSetScore(rubber.set2_a,rubber.set2_b)}
-                                    {rubber.set3_a!==null&&' / '+formatSetScore(rubber.set3_a,rubber.set3_b)}
-                                    {rubber.winning_club_id&&<span className="text-xs text-blue-600 ml-2">승: {rubber.winning_club_id===tie.club_a_id?tie.club_a?.name:tie.club_b?.name}</span>}
-                                  </div>
-                                )}
-                                {!hasScore&&<div className="text-xs text-gray-400 text-center">점수 미입력</div>}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+            {!tieSearchQuery && (
+              <div className="text-center py-10 text-gray-400">
+                <div className="text-3xl mb-2">🔍</div>
+                <p>클럽명 또는 라운드를 검색하세요</p>
+                <p className="text-xs mt-1 text-gray-300">예: "우도", "16강", "1"</p>
               </div>
             )}
+
+            {tiesLoading && <div className="text-center py-8 text-gray-400">로딩중...</div>}
+
+            {tieSearchQuery && !tiesLoading && filteredTies.length === 0 && (
+              <div className="text-center py-8 text-gray-400">검색 결과가 없습니다.</div>
+            )}
+
+            <div className="space-y-3">
+              {filteredTies.map(tie => {
+                const isSelected = selectedTie?.id === tie.id
+                const maj = getMajority(tie.rubber_count)
+                const aWin = tie.club_a_rubbers_won >= maj
+                const bWin = tie.club_b_rubbers_won >= maj
+                return (
+                  <div key={tie.id} className="bg-white rounded-xl border overflow-hidden">
+                    <div onClick={() => handleSelectTie(tie)} className="p-4 cursor-pointer hover:bg-gray-50 transition">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs text-gray-400">#{tie.tie_order}</span>
+                          <span className={`font-semibold ${aWin?'text-blue-600':''}`}>{tie.club_a?.name||'TBD'}</span>
+                          <span className="text-gray-400 text-sm">vs</span>
+                          <span className={`font-semibold ${bWin?'text-blue-600':''}`}>{tie.club_b?.name||'TBD'}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {(tie.status==='completed'||tie.status==='in_progress') && (
+                            <span className="text-lg font-bold">{tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}</span>
+                          )}
+                          <span className={`text-xs px-2 py-1 rounded-full ${getTieStatusColor(tie.status)}`}>
+                            {getTieStatusLabel(tie.status)}
+                          </span>
+                          <span className="text-gray-400 text-xs">{isSelected?'▲':'▼'}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
+                        <span>{tie.club_a?.name?.slice(0,6)}: {tie.club_a_lineup_submitted?<span className="text-green-600">✅제출</span>:<span className="text-orange-500">⏳대기</span>}</span>
+                        <span>{tie.club_b?.name?.slice(0,6)}: {tie.club_b_lineup_submitted?<span className="text-green-600">✅제출</span>:<span className="text-orange-500">⏳대기</span>}</span>
+                        {tie.lineup_revealed && <span className="text-blue-600">🔓공개</span>}
+                        {tie.round && <span className="text-gray-400">{tie.round}</span>}
+                      </div>
+                    </div>
+
+                    {isSelected && (
+                      <div className="border-t bg-gray-50 p-4 space-y-3">
+                        {!tie.lineup_revealed && (
+                          <div className="text-center text-sm text-gray-400 py-2">라인업 미공개 (양팀 제출 후 공개)</div>
+                        )}
+                        {tie.lineup_revealed && tieLineups.length === 0 && (
+                          <div className="text-center text-sm text-gray-400 py-2">라인업 데이터 없음</div>
+                        )}
+                        {Array.from({length: tie.rubber_count}, (_, i) => i+1).map(num => {
+                          const laA = tieLineups.find(l => l.rubber_number===num && l.club_id===tie.club_a_id)
+                          const laB = tieLineups.find(l => l.rubber_number===num && l.club_id===tie.club_b_id)
+                          const rubber = tieRubbers.find((r: any) => r.rubber_number === num)
+                          const hasScore = rubber?.set1_a !== null && rubber?.set1_a !== undefined
+                          return (
+                            <div key={num} className={`bg-white rounded-lg border p-3 ${rubber?.status==='completed'?'border-green-200':''}`}>
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="font-medium text-sm">러버 {num}</span>
+                                {rubber?.status==='completed' && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">완료</span>}
+                              </div>
+                              {(laA || laB) ? (
+                                <div className="grid grid-cols-5 items-center gap-1 text-xs mb-2">
+                                  <div className="col-span-2 text-right">
+                                    <div className="font-medium">{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</div>
+                                    <div className="text-gray-400">{tie.club_a?.name}</div>
+                                  </div>
+                                  <div className="text-center text-gray-400 font-bold">vs</div>
+                                  <div className="col-span-2 text-left">
+                                    <div className="font-medium">{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</div>
+                                    <div className="text-gray-400">{tie.club_b?.name}</div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="text-xs text-gray-400 mb-2">{tie.lineup_revealed?'선수 정보 없음':'라인업 미공개'}</div>
+                              )}
+                              {hasScore ? (
+                                <div className="text-center py-1 bg-gray-50 rounded text-sm font-bold">
+                                  {formatSetScore(rubber.set1_a, rubber.set1_b)}
+                                  {rubber.set2_a !== null && ' / ' + formatSetScore(rubber.set2_a, rubber.set2_b)}
+                                  {rubber.set3_a !== null && ' / ' + formatSetScore(rubber.set3_a, rubber.set3_b)}
+                                  {rubber.winning_club_id && (
+                                    <span className="text-xs text-blue-600 ml-2">
+                                      승: {rubber.winning_club_id===tie.club_a_id?tie.club_a?.name:tie.club_b?.name}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="text-xs text-gray-400 text-center">점수 미입력</div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           </>
         )}
       </main>
