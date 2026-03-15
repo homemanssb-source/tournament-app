@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // 주장 통합 페이지: 라인업 봉인 제출 + 점수 입력
 // src/app/lineup/[tie_id]/page.tsx
 //
@@ -70,7 +70,8 @@ export default function LineupPage() {
         .eq('id', t.event_id).single();
       setSetsPerRubber(ev?.team_sets_per_rubber || 1);
       setTeamMatchType(ev?.team_match_type || null);
-      if (t.lineup_revealed) {
+      // ✅ lineup_revealed OR 경기 진행중/완료 → 바로 revealed 단계
+      if (t.lineup_revealed || t.status === 'in_progress' || t.status === 'completed') {
         setStep('revealed');
         await loadRevealedData(tieId, ca, cb);
         await loadRubbers(tieId);
@@ -113,7 +114,7 @@ export default function LineupPage() {
     const memberList = await fetchClubMembers(club.id); setMembers(memberList);
     const existing = await fetchLineups(tieId, club.id);
     if (existing.length > 0) {
-      if (t.lineup_revealed) {
+      if (t.lineup_revealed || t.status === 'in_progress' || t.status === 'completed') {
         setStep('revealed'); await loadRevealedData(tieId, ca, cb); await loadRubbers(tieId);
       } else {
         setLineups(Array.from({ length: t.rubber_count }, (_, i) => {
@@ -149,7 +150,7 @@ export default function LineupPage() {
     const ml = await fetchClubMembers(club.id); setMembers(ml);
     const existing = await fetchLineups(tieId, club.id);
     if (existing.length > 0 && tie) {
-      if (tie.lineup_revealed) { setStep('revealed'); await loadRevealedData(tieId, clubA, clubB); await loadRubbers(tieId); }
+      if (tie.lineup_revealed || tie.status === 'in_progress' || tie.status === 'completed') { setStep('revealed'); await loadRevealedData(tieId, clubA, clubB); await loadRubbers(tieId); }
       else { setLineups(Array.from({ length: tie.rubber_count }, (_, i) => { const l = existing.find(e => e.rubber_number === i + 1); return { player1_id: l?.player1_id || '', player2_id: l?.player2_id || '' }; })); setStep('submitted'); }
     } else if (tie) { setLineups(Array.from({ length: tie.rubber_count }, () => ({ player1_id: '', player2_id: '' }))); setStep('edit'); }
   }
