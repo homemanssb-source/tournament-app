@@ -39,6 +39,7 @@ export default function CourtsPage() {
   const [autoStage, setAutoStage] = useState<'GROUP' | 'FINALS'>('GROUP')
 
   const [dragMatch, setDragMatch] = useState<string | null>(null)
+  const [quickAssign, setQuickAssign] = useState<Record<string, string>>({})  // matchId → 선택된 코트
   const [assigning, setAssigning] = useState(false)  // ✅ 드래그 처리 중 중복 방지
   // ✅ 코트별 court_order 로컬 카운터 (드래그 연속 시 순서 보장)
   const courtOrderRef = React.useRef<Record<string, number>>({})
@@ -232,11 +233,12 @@ export default function CourtsPage() {
       await supabase.from('ties').update({ court_number: courtNum, court_order: nextTieOrder }).eq('id', tieId)
       sendCourtNotify(court, 'court_changed'); loadTies()
     } else {
-      // ✅ 로컬 카운터로 court_order 결정 (연속 드래그 순서 보장)
+      // ✅ 로컬 카운터로 court_order 즉시 결정
       const nextOrder = (courtOrderRef.current[court] || 0) + 1
-      courtOrderRef.current[court] = nextOrder  // 즉시 업데이트
+      courtOrderRef.current[court] = nextOrder
       await supabase.from('matches').update({ court, court_order: nextOrder }).eq('id', itemId)
-      sendCourtNotify(court, 'court_changed', itemId); loadMatches()
+      sendCourtNotify(court, 'court_changed', itemId)
+      loadMatches()
     }
   }
 
@@ -498,11 +500,47 @@ export default function CourtsPage() {
               {unassigned.length === 0
                 ? <p className="text-xs text-stone-400 text-center py-4">모두 배정됨</p>
                 : unassigned.map(m => (
-                  <MatchChip key={m.id} m={m} divColor={divColors[m.division_id]}
-                    onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
-                    onTouchStart={() => handleTouchStart(m.id)}
-                    onTouchMove={handleTouchMove}
-                    onTouchEnd={handleTouchEnd} />
+                  <div key={m.id} className="rounded-lg border p-2 text-xs bg-white border-stone-200">
+                    {/* 경기 정보 */}
+                    <div className="flex items-center gap-1 mb-1.5">
+                      {m.is_team_tie
+                        ? <span className="text-[10px] bg-blue-600 text-white px-1 rounded">단체</span>
+                        : <span style={{ display:'inline-block', width:6, height:6, borderRadius:'50%', background: divColors[m.division_id] || '#999' }} />
+                      }
+                      <span className="text-stone-500 truncate flex-1">
+                        {m.is_team_tie ? m.match_num : `${m.division_name} · ${m.round}`}
+                      </span>
+                      {!m.is_team_tie && (
+                        <button onClick={() => openScoreEdit(m)} className="text-stone-300 hover:text-blue-500 text-[10px]">수정</button>
+                      )}
+                    </div>
+                    <div className="font-medium truncate mb-2">
+                      {m.team_a_name} <span className="text-stone-300">vs</span> {m.team_b_name}
+                    </div>
+                    {/* 코트 선택 + 배정 버튼 */}
+                    <div className="flex gap-1">
+                      <select
+                        value={quickAssign[m.id] || ''}
+                        onChange={e => setQuickAssign(prev => ({ ...prev, [m.id]: e.target.value }))}
+                        className="flex-1 border rounded px-1 py-1 text-[11px] text-stone-600"
+                      >
+                        <option value="">코트 선택</option>
+                        {courtNames.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                      <button
+                        disabled={!quickAssign[m.id]}
+                        onClick={() => {
+                          if (quickAssign[m.id]) {
+                            assignItemToCourt(m.id, quickAssign[m.id])
+                            setQuickAssign(prev => { const n = {...prev}; delete n[m.id]; return n })
+                          }
+                        }}
+                        className="bg-tennis-600 text-white px-2 py-1 rounded text-[11px] font-medium disabled:opacity-40 hover:bg-tennis-700"
+                      >
+                        배정
+                      </button>
+                    </div>
+                  </div>
                 ))}
             </div>
           </div>
