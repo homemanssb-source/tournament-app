@@ -159,6 +159,7 @@ export default function TiesPage() {
       setEditingRubber(null);
 
       // ✅ 토너먼트 자동 진출은 SQL(rpc_calculate_tie_result)에서 자동 처리
+      const isTournament = ['round_of_16', 'quarter', 'semi', 'final'].includes(selectedTie?.round || '');
 
       await loadData();
       // 조별리그면 순위 계산
