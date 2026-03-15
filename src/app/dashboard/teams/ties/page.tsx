@@ -102,11 +102,14 @@ export default function TiesPage() {
         return rubberType;
       };
 
+      const genPin = () => String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
+
       const rows = Array.from({ length: rubberCount }, (_, i) => ({
-        tie_id:       tie.id,
+        tie_id:        tie.id,
         rubber_number: i + 1,
-        rubber_type:  getType(i + 1, rubberCount),
-        status:       'pending',
+        rubber_type:   getType(i + 1, rubberCount),
+        status:        'pending',
+        pin_code:      genPin(),
       }));
 
       const { data: newRubbers } = await supabase
