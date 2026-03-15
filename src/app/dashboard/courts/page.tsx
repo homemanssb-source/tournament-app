@@ -192,26 +192,48 @@ export default function CourtsPage() {
   async function autoAssignByDivision() {
     if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
     if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
-    if (autoDiv === 'TEAM') {
-      const unTies = ties.filter(t => !t.is_bye && !t.court_number && t.status !== 'completed')
-      if (unTies.length === 0) { setMsg('배정할 단체전 경기가 없습니다.'); return }
-      const courtNums = autoCourts.map(c => parseInt(c.replace('코트 ', '')))
-      for (let i = 0; i < unTies.length; i++) {
+
+    const courtNums = autoCourts.map(c => parseInt(c.replace('코트 ', '')))
+
+    // ── 단체전 (TEAM 또는 부서 ID로 단체전 ties 처리) ──
+    const isTeam = autoDiv === 'TEAM'
+    const divTies = ties.filter(t =>
+      !t.is_bye &&
+      !(t as any).court_number &&
+      t.status !== 'completed' &&
+      (isTeam || (t as any).division_id === autoDiv)
+    )
+
+    if (divTies.length > 0) {
+      for (let i = 0; i < divTies.length; i++) {
         const courtNum = courtNums[i % courtNums.length]
         const courtKey = `코트 ${courtNum}`
         const nextOrder = (courtOrderRef.current[courtKey] || 0) + 1
         courtOrderRef.current[courtKey] = nextOrder
-        await supabase.from('ties').update({ court_number: courtNum, court_order: nextOrder }).eq('id', unTies[i].id)
+        await supabase.from('ties').update({ court_number: courtNum, court_order: nextOrder }).eq('id', divTies[i].id)
       }
-      setMsg(`✅ [단체전] ${unTies.length}경기 자동 배정 완료`); loadTies(); return
+      const divName = isTeam ? '단체전' : (divisions.find(d => d.id === autoDiv)?.name || '')
+      setMsg(`✅ [${divName}] ${divTies.length}경기 자동 배정 완료`)
+      loadTies()
+      return
     }
-    const targetMatches = matches.filter(m => m.division_id === autoDiv && m.stage === autoStage && !m.court && m.status !== 'FINISHED')
+
+    // ── 개인전 ──
+    const targetMatches = matches.filter(m =>
+      m.division_id === autoDiv &&
+      m.stage === autoStage &&
+      !m.court &&
+      m.status !== 'FINISHED'
+    )
     if (targetMatches.length === 0) { setMsg('배정할 경기가 없습니다.'); return }
-    const existingCounts: Record<string, number> = {}
-    for (const c of autoCourts) { existingCounts[c] = allItems.filter(m => m.court === c).length }
-    const sortedCourts = [...autoCourts].sort((a, b) => (existingCounts[a] || 0) - (existingCounts[b] || 0))
+
+    const sortedCourts = [...autoCourts]
     const byGroup = new Map<string, MatchSlim[]>()
-    for (const m of targetMatches) { const key = m.group_label || 'none'; if (!byGroup.has(key)) byGroup.set(key, []); byGroup.get(key)!.push(m) }
+    for (const m of targetMatches) {
+      const key = m.group_label || 'none'
+      if (!byGroup.has(key)) byGroup.set(key, [])
+      byGroup.get(key)!.push(m)
+    }
     const updates: { id: string; court: string; court_order: number }[] = []
     let courtIdx = 0
     for (const [, groupMatches] of byGroup) {
@@ -223,7 +245,9 @@ export default function CourtsPage() {
       }
       courtIdx++
     }
-    for (const u of updates) { await supabase.from('matches').update({ court: u.court, court_order: u.court_order }).eq('id', u.id) }
+    for (const u of updates) {
+      await supabase.from('matches').update({ court: u.court, court_order: u.court_order }).eq('id', u.id)
+    }
     const divName = divisions.find(d => d.id === autoDiv)?.name || ''
     setMsg(`✅ [${divName}] ${updates.length}경기 → ${autoCourts.join(', ')} 자동 배정 완료`)
     loadMatches()
