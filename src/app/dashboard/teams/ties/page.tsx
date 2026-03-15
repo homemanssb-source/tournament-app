@@ -74,7 +74,7 @@ export default function TiesPage() {
     }
     setSelectedTie(tie); setRubbersLoading(true); setEditingRubber(null);
 
-    // ✅ 수정2: is_revealed 관계없이 제출된 라인업 전체 조회 (운영자용)
+    // ✅ is_revealed 관계없이 제출된 라인업 전체 조회 (운영자용)
     const [rubberData, lineupData, membersA, membersB] = await Promise.all([
       fetchRubbers(tie.id),
       supabase.from('team_lineups')
@@ -85,7 +85,38 @@ export default function TiesPage() {
       tie.club_b_id ? fetchClubMembers(tie.club_b_id) : Promise.resolve([]),
     ]);
 
-    setRubbers(rubberData);
+    let rubbers = rubberData;
+
+    // ✅ 핵심 수정: tie_rubbers가 없으면 운영자가 직접 생성
+    // 토너먼트 ties는 lineup_phase를 거치지 않아 rubber 행이 없을 수 있음
+    if (rubbers.length === 0 && !tie.is_bye) {
+      const rubberCount = tie.rubber_count || config?.team_rubber_count || 3;
+      const rubberType  = config?.team_match_type || 'doubles';
+
+      // rubber_type 결정 (단식/복식 혼합 패턴 - 기본 3러버: 복식,단식,복식)
+      const getType = (n: number, total: number): string => {
+        if (total === 1) return rubberType;
+        if (total === 3) return n === 2 ? 'singles' : 'doubles';
+        if (total === 5) return [2,4].includes(n) ? 'singles' : 'doubles';
+        return rubberType;
+      };
+
+      const rows = Array.from({ length: rubberCount }, (_, i) => ({
+        tie_id:       tie.id,
+        rubber_number: i + 1,
+        rubber_type:  getType(i + 1, rubberCount),
+        status:       'pending',
+      }));
+
+      const { data: newRubbers } = await supabase
+        .from('tie_rubbers')
+        .insert(rows)
+        .select();
+
+      rubbers = newRubbers || [];
+    }
+
+    setRubbers(rubbers);
     setTieLineups((lineupData.data as TeamLineup[]) || []);
     const mm: Record<string, ClubMember> = {};
     membersA.forEach(m => { mm[m.id] = m; });
