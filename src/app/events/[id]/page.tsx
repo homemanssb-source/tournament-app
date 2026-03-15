@@ -495,7 +495,23 @@ function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
   )
 }
 
+// ============================================================
+// 이 파일은 src/app/events/[id]/page.tsx 안의
+// TeamBracketView 함수를 교체하는 내용입니다.
+//
+// 기존 TeamBracketView (라운드별 리스트)를
+// 운영자 대시보드와 동일한 가로 브래킷 형태로 변경
+// ============================================================
+
+// src/app/events/[id]/page.tsx 에서
+// 기존 TeamBracketView 함수 전체를 아래로 교체하세요:
+
 function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
+  const ROUND_ORDER = ['round_of_16', 'quarter', 'semi', 'final']
+  const roundLabels: Record<string, string> = {
+    round_of_16: '16강', quarter: '8강', semi: '4강', final: '결승',
+  }
+
   const tournamentTies = ties.filter(t =>
     ['round_of_16', 'quarter', 'semi', 'final'].includes(t.round || '')
   )
@@ -504,12 +520,141 @@ function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
     return <div className="text-center text-gray-400 py-8">토너먼트가 아직 시작되지 않았습니다.</div>
   }
 
-  const rounds = [...new Set(tournamentTies.map(t => t.round))].sort(
-    (a, b) => {
-      const order = ['round_of_16', 'quarter', 'semi', 'final'];
-      return order.indexOf(a || '') - order.indexOf(b || '');
-    }
-  );
+  const tiesByRound: Record<string, TieWithClubs[]> = {}
+  tournamentTies.forEach(t => {
+    const r = t.round || ''
+    if (!tiesByRound[r]) tiesByRound[r] = []
+    tiesByRound[r].push(t)
+  })
+  const sortedRounds = ROUND_ORDER.filter(r => tiesByRound[r])
+
+  const finalTie = tiesByRound['final']?.[0]
+  const winner = finalTie?.winning_club_id
+    ? (finalTie.winning_club_id === finalTie.club_a_id ? finalTie.club_a?.name : finalTie.club_b?.name)
+    : null
+
+  return (
+    <div className="space-y-4">
+      {/* 우승자 표시 */}
+      {winner && (
+        <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-4 text-center">
+          <div className="text-3xl mb-1">🏆</div>
+          <div className="text-xl font-bold">{winner}</div>
+          <div className="text-sm text-yellow-700 mt-1">우승!</div>
+        </div>
+      )}
+
+      {/* 가로 브래킷 */}
+      <div className="overflow-x-auto">
+        <div className="flex gap-4 min-w-max pb-2">
+          {sortedRounds.map((round, roundIdx) => {
+            const roundTies = (tiesByRound[round] || []).sort(
+              (a, b) => (a.bracket_position || 0) - (b.bracket_position || 0)
+            )
+            const gap = Math.pow(2, roundIdx) * 12
+
+            return (
+              <div key={round} className="flex flex-col" style={{ minWidth: 180 }}>
+                {/* 라운드 레이블 */}
+                <div className="text-center mb-3">
+                  <span className="text-xs font-semibold text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
+                    {roundLabels[round] || round}
+                  </span>
+                </div>
+
+                <div className="flex flex-col justify-around flex-1" style={{ gap }}>
+                  {roundTies.map(tie => {
+                    const aWin = tie.winning_club_id === tie.club_a_id
+                    const bWin = tie.winning_club_id === tie.club_b_id
+
+                    return (
+                      <div key={tie.id}
+                        className={`border rounded-xl overflow-hidden shadow-sm ${
+                          tie.status === 'completed' ? 'border-green-300' :
+                          tie.status === 'in_progress' ? 'border-red-300 shadow-red-100' :
+                          tie.is_bye ? 'border-gray-100 bg-gray-50' : 'border-gray-200'
+                        }`}
+                        style={{ minHeight: 68 }}>
+
+                        {/* 진행중 표시 */}
+                        {tie.status === 'in_progress' && (
+                          <div className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                            LIVE
+                          </div>
+                        )}
+
+                        {/* 클럽 A */}
+                        <div className={`flex items-center justify-between px-3 py-2 text-sm ${
+                          aWin ? 'bg-green-50 font-bold' : ''
+                        }`}>
+                          <span className={`truncate ${tie.is_bye && !tie.club_a_id ? 'text-gray-300' : ''}`}>
+                            {tie.club_a?.name || (tie.is_bye && !tie.club_a_id ? 'BYE' : 'TBD')}
+                          </span>
+                          {tie.status === 'completed' && (
+                            <span className={`ml-2 font-bold text-sm flex-shrink-0 ${aWin ? 'text-green-700' : 'text-gray-400'}`}>
+                              {tie.club_a_rubbers_won}
+                            </span>
+                          )}
+                          {tie.status === 'in_progress' && (
+                            <span className="ml-2 font-bold text-sm text-red-600 flex-shrink-0">
+                              {tie.club_a_rubbers_won}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="border-t border-gray-100" />
+
+                        {/* 클럽 B */}
+                        <div className={`flex items-center justify-between px-3 py-2 text-sm ${
+                          bWin ? 'bg-green-50 font-bold' : ''
+                        }`}>
+                          <span className={`truncate ${tie.is_bye && !tie.club_b_id ? 'text-gray-300' : ''}`}>
+                            {tie.club_b?.name || (tie.is_bye && !tie.club_b_id ? 'BYE' : 'TBD')}
+                          </span>
+                          {tie.status === 'completed' && (
+                            <span className={`ml-2 font-bold text-sm flex-shrink-0 ${bWin ? 'text-green-700' : 'text-gray-400'}`}>
+                              {tie.club_b_rubbers_won}
+                            </span>
+                          )}
+                          {tie.status === 'in_progress' && (
+                            <span className="ml-2 font-bold text-sm text-red-600 flex-shrink-0">
+                              {tie.club_b_rubbers_won}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* 부전승 */}
+                        {tie.is_bye && (
+                          <div className="text-center py-0.5 border-t border-gray-100 bg-gray-50">
+                            <span className="text-[10px] text-gray-400">부전승</span>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+
+          {/* 최종 우승 칸 */}
+          <div className="flex flex-col justify-center" style={{ minWidth: 120 }}>
+            <div className="text-center mb-3">
+              <span className="text-xs font-semibold text-yellow-600 bg-yellow-50 px-3 py-1 rounded-full">🏆 우승</span>
+            </div>
+            <div className="border-2 border-dashed border-yellow-200 rounded-xl p-4 text-center">
+              {winner
+                ? <div className="font-bold text-yellow-700">{winner}</div>
+                : <div className="text-gray-300 text-sm">?</div>
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
   return (
     <div className="space-y-4">
