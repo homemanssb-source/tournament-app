@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // 단체전 Supabase API 함수
 // src/lib/team-api.ts
 // ============================================================
@@ -175,7 +175,7 @@ export async function setCaptain(
 // 대전(Tie) 조회
 // ========================================
 
-export async function fetchTies(eventId: string, round?: string): Promise<TieWithClubs[]> {
+export async function fetchTies(eventId: string, round?: string, divisionId?: string | null): Promise<TieWithClubs[]> {
   let query = supabase
     .from('ties')
     .select(`
@@ -187,6 +187,8 @@ export async function fetchTies(eventId: string, round?: string): Promise<TieWit
     .order('tie_order');
 
   if (round) query = query.eq('round', round);
+  if (divisionId) query = query.eq('division_id', divisionId);
+  if (divisionId) query = query.eq('division_id', divisionId);
 
   const { data, error } = await query;
   if (error) throw error;

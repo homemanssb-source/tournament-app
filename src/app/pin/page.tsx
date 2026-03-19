@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -40,6 +40,10 @@ export default function PinPage() {
     setLoading(false)
     if (err) { setError(err.message || 'PIN이 올바르지 않습니다.'); return }
     sessionStorage.setItem('pin_session', JSON.stringify(data))
+    sessionStorage.setItem('venue_pin', pin)
+    sessionStorage.setItem('pin_event_id', selectedEvent)
+    sessionStorage.setItem('venue_pin', pin)
+    sessionStorage.setItem('pin_event_id', selectedEvent)
 
     // 로그인 성공 → 알림 구독 화면으로
     setLoginPin(pin)

@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // 대시보드 메인 페이지
 // src/app/dashboard/page.tsx
 // P7: 진행률 바 추가
@@ -64,7 +64,7 @@ export default function DashboardPage() {
         supabase.from('clubs').select('id', { count: 'exact' }).eq('event_id', eventId),
         supabase.from('groups').select('id,is_finalized', { count: 'exact' }).eq('event_id', eventId),
         supabase.from('v_matches_with_teams').select('team_a_name,team_b_name,score,division_name,updated_at').eq('event_id', eventId).eq('status', 'FINISHED').order('updated_at', { ascending: false }).limit(5),
-        supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name)').eq('event_id', eventId).eq('status', 'completed').order('updated_at', { ascending: false }).limit(5),
+        supabase.from('ties').select('*, updated_at, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name)').eq('event_id', eventId).eq('status', 'completed').order('updated_at', { ascending: false }).limit(5),
       ])
 
       const groups = groupCountRes.data || []

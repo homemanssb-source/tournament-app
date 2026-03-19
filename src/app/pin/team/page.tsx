@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // src/app/pin/team/page.tsx
 // ✅ 경기 시작(in_progress) 없이도 PIN으로 점수 입력 가능
 //    pending / lineup_ready / in_progress 모두 허용
@@ -46,7 +46,7 @@ export default function TeamPinScorePage() {
         .from('tie_rubbers')
         .select('*')
         .eq('pin_code', pin)
-        .in('status', ['pending', 'in_progress', 'lineup_ready'])
+        .in('status', ['pending', 'in_progress'])
         .limit(1)
         .single();
 

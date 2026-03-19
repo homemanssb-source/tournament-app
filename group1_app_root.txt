@@ -1,0 +1,348 @@
+﻿========== src\app\layout.tsx ==========
+import type { Metadata, Viewport } from 'next'
+import './globals.css'
+
+export const metadata: Metadata = {
+  title: '?쒖＜???뚮땲?????,
+  description: '?쒖＜???뚮땲??????댁쁺 ?쒖뒪??,
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: '?뚮땲?ㅻ???,
+  },
+  icons: {
+    icon: '/favicon.png',
+    apple: '/icon-152x152.png',
+  },
+}
+
+export const viewport: Viewport = {
+  themeColor: '#ff5520',
+  width: 'device-width',
+  initialScale: 1,
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="ko">
+      <head>
+        <meta name="mobile-web-app-capable" content="yes" />
+        <link rel="apple-touch-icon" sizes="192x192" href="/icon-192x192.png" />
+      </head>
+      <body>
+        {children}
+
+        {/* Service Worker ?깅줉 */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              if ('serviceWorker' in navigator) {
+                window.addEventListener('load', function() {
+                  navigator.serviceWorker.register('/sw.js')
+                    .then(function(reg) { console.log('[SW] ?깅줉 ?꾨즺:', reg.scope); })
+                    .catch(function(err) { console.error('[SW] ?ㅻ쪟:', err); });
+                });
+              }
+            `,
+          }}
+        />
+      </body>
+    </html>
+  )
+}
+
+
+========== src\app\page.tsx ==========
+'use client'
+import { useState, useEffect } from 'react'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+
+const MEMBER_CARDS = [
+  {
+    href: '/events',
+    emoji: '?벟',
+    title: '???蹂닿린',
+    desc: '議곕퀎由ш렇 쨌 ?좊꼫癒쇳듃 쨌 寃쎄린寃곌낵 쨌 ?대깽?명쁽??,
+    color: 'bg-gradient-to-br from-emerald-50 to-green-100 border-green-200 hover:border-green-400',
+    iconBg: 'bg-white/70',
+    badge: 'LIVE',
+  },
+  {
+    href: '/pin',
+    emoji: '?뱥',
+    title: '?먯닔 吏곸젒?낅젰',
+    desc: 'PIN?쇰줈 ??寃쎄린 寃곌낵 吏곸젒 ?낅젰',
+    color: 'bg-gradient-to-br from-amber-50 to-yellow-100 border-amber-200 hover:border-amber-400',
+    iconBg: 'bg-white/70',
+    badge: null,
+  },
+]
+
+const ADMIN_CARDS = [
+  {
+    href: '/venue',
+    emoji: '?룦',
+    title: '?꾩옣 寃쎄린愿由?,
+    desc: '寃쎄린??PIN?쇰줈 ?대깽??愿由?,
+    color: 'bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200 hover:border-orange-400',
+    wide: false,
+  },
+  {
+    href: '/admin-pin',
+    emoji: '?뵎',
+    title: '愿由ъ옄 紐⑤뱶',
+    desc: '留덉뒪?캰IN?쇰줈 ?먯닔議곗젙/?ㅼ젙',
+    color: 'bg-gradient-to-br from-red-50 to-rose-100 border-red-200 hover:border-red-400',
+    wide: false,
+  },
+  {
+    href: '/dashboard',
+    emoji: '?뱤',
+    title: '????댁쁺 ??쒕낫??,
+    desc: '?愿由?쨌 議고렪??쨌 寃쎄린 쨌 ?대깽?몄꽕???꾩껜 愿由?,
+    color: 'bg-gradient-to-br from-blue-50 to-sky-100 border-blue-200 hover:border-blue-400',
+    wide: true,
+  },
+]
+
+interface Stats {
+  inProgress: number
+  activeCourts: number
+  totalTeams: number
+}
+
+export default function HomePage() {
+  const [activeTab, setActiveTab] = useState<'member' | 'admin'>('member')
+  const [stats, setStats] = useState<Stats>({ inProgress: 0, activeCourts: 0, totalTeams: 0 })
+  const [statsLoading, setStatsLoading] = useState(true)
+
+  useEffect(() => {
+    async function fetchStats() {
+      try {
+        const { data: activeEvents } = await supabase
+          .from('events')
+          .select('id')
+          .eq('status', 'active')
+
+        if (!activeEvents || activeEvents.length === 0) {
+          setStatsLoading(false)
+          return
+        }
+
+        const eventIds = activeEvents.map(e => e.id)
+
+        const matchInProgressPromise = supabase
+          .from('matches')
+          .select('*', { count: 'exact', head: true })
+          .in('event_id', eventIds)
+          .eq('status', 'IN_PROGRESS')
+
+        const tieInProgressPromise = supabase
+          .from('ties')
+          .select('*', { count: 'exact', head: true })
+          .in('event_id', eventIds)
+          .eq('status', 'in_progress')
+
+        const courtMatchesPromise = supabase
+          .from('matches')
+          .select('court')
+          .in('event_id', eventIds)
+          .eq('status', 'IN_PROGRESS')
+          .not('court', 'is', null)
+
+        const totalTeamsPromise = supabase
+          .from('teams')
+          .select('*', { count: 'exact', head: true })
+          .in('event_id', eventIds)
+
+        const [
+          { count: matchInProgress },
+          { count: tieInProgress },
+          { data: courtMatches },
+          { count: totalTeams },
+        ] = await Promise.all([
+          matchInProgressPromise,
+          tieInProgressPromise,
+          courtMatchesPromise,
+          totalTeamsPromise,
+        ])
+
+        const activeCourts = new Set(courtMatches?.map(m => m.court)).size
+
+        setStats({
+          inProgress: (matchInProgress ?? 0) + (tieInProgress ?? 0),
+          activeCourts,
+          totalTeams: totalTeams ?? 0,
+        })
+      } catch (e) {
+        console.error('stats fetch error', e)
+      } finally {
+        setStatsLoading(false)
+      }
+    }
+
+    fetchStats()
+    const timer = setInterval(fetchStats, 30000)
+    return () => clearInterval(timer)
+  }, [])
+
+  return (
+    <div className="min-h-screen bg-stone-100 flex flex-col items-center justify-start py-8 px-4">
+      <div className="w-full max-w-sm">
+
+        {/* Header */}
+        <div className="rounded-3xl overflow-hidden mb-4 shadow-lg"
+          style={{ background: 'linear-gradient(135deg, #1a2e1a 0%, #2d5016 50%, #3d6b1e 100%)' }}>
+          <div className="px-6 py-7 flex items-center gap-4 relative overflow-hidden">
+            <div className="absolute -top-8 -right-8 w-36 h-36 rounded-full bg-white/5" />
+            <div className="absolute -bottom-6 -left-6 w-24 h-24 rounded-full bg-white/5" />
+            <div className="relative z-10 w-14 h-14 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center text-3xl backdrop-blur-sm flex-shrink-0">
+              ?렱
+            </div>
+            <div className="relative z-10">
+              <h1 className="text-white text-xl font-black tracking-tight leading-tight">?쒖＜?쒗뀒?덉뒪???/h1>
+              <p className="text-white/50 text-xs tracking-widest uppercase mt-0.5">Tennis Tournament Manager</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Tab Bar */}
+        <div className="bg-white rounded-2xl shadow-sm flex mb-4 p-1 gap-1">
+          <button
+            onClick={() => setActiveTab('member')}
+            className={`flex-1 flex flex-col items-center py-3 rounded-xl text-xs font-bold transition-all gap-1
+              ${activeTab === 'member'
+                ? 'bg-green-600 text-white shadow-md shadow-green-200'
+                : 'text-stone-400 hover:text-stone-600'}`}
+          >
+            <span className="text-base">?렱</span>
+            ?뚯썝
+          </button>
+          <button
+            onClick={() => setActiveTab('admin')}
+            className={`flex-1 flex flex-col items-center py-3 rounded-xl text-xs font-bold transition-all gap-1
+              ${activeTab === 'admin'
+                ? 'bg-stone-700 text-white shadow-md shadow-stone-300'
+                : 'text-stone-400 hover:text-stone-600'}`}
+          >
+            <span className="text-base">?숋툘</span>
+            愿由ъ옄
+          </button>
+        </div>
+
+        {/* Member Tab */}
+        {activeTab === 'member' && (
+          <div className="flex flex-col gap-3">
+            <p className="text-xs font-bold tracking-widest uppercase text-stone-400 px-1">?뚯썝 硫붾돱</p>
+
+            {MEMBER_CARDS.map(card => (
+              <Link
+                key={card.href}
+                href={card.href}
+                className={`relative flex items-center gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm hover:shadow-md active:scale-[0.98] ${card.color}`}
+              >
+                {card.badge && (
+                  <span className="absolute top-3 right-4 bg-red-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-full tracking-wide">
+                    {card.badge}
+                  </span>
+                )}
+                <div className={`w-13 h-13 min-w-[52px] min-h-[52px] rounded-2xl ${card.iconBg} flex items-center justify-center text-2xl shadow-sm`}>
+                  {card.emoji}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h2 className="font-black text-base text-stone-800 leading-tight">{card.title}</h2>
+                  <p className="text-xs text-stone-500 mt-1 leading-relaxed">{card.desc}</p>
+                </div>
+                <span className="text-stone-300 text-xl font-light">??/span>
+              </Link>
+            ))}
+
+            {/* Quick Stats */}
+            <div className="bg-white rounded-2xl p-4 shadow-sm mt-1">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-bold text-stone-400">?꾩옱 吏꾪뻾 ?꾪솴</p>
+                {statsLoading && (
+                  <span className="text-[10px] text-stone-300 animate-pulse">遺덈윭?ㅻ뒗 以?..</span>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { num: statsLoading ? '쨌' : String(stats.inProgress), label: '吏꾪뻾以?寃쎄린' },
+                  { num: statsLoading ? '쨌' : String(stats.activeCourts), label: '?ъ슜 肄뷀듃' },
+                  { num: statsLoading ? '쨌' : String(stats.totalTeams), label: '李멸??' },
+                ].map(s => (
+                  <div key={s.label} className="bg-stone-50 rounded-xl py-3 text-center">
+                    <div className="text-xl font-black text-green-700">{s.num}</div>
+                    <div className="text-[10px] text-stone-400 mt-0.5">{s.label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Admin Tab */}
+        {activeTab === 'admin' && (
+          <div className="flex flex-col gap-3">
+            <p className="text-xs font-bold tracking-widest uppercase text-stone-400 px-1">愿由ъ옄 湲곕뒫</p>
+
+            <div className="grid grid-cols-2 gap-3">
+              {ADMIN_CARDS.filter(c => !c.wide).map(card => (
+                <Link
+                  key={card.href}
+                  href={card.href}
+                  className={`flex flex-col p-4 rounded-2xl border-2 transition-all shadow-sm hover:shadow-md active:scale-[0.98] ${card.color}`}
+                >
+                  <div className="text-2xl mb-3">{card.emoji}</div>
+                  <h2 className="font-black text-sm text-stone-800 leading-tight">{card.title}</h2>
+                  <p className="text-[11px] text-stone-500 mt-1 leading-relaxed">{card.desc}</p>
+                  <div className="mt-3 inline-flex items-center gap-1 bg-black/8 rounded-full px-2 py-0.5 self-start">
+                    <span className="text-[10px]">?뵏</span>
+                    <span className="text-[10px] font-bold text-stone-500">PIN ?꾩슂</span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+
+            {ADMIN_CARDS.filter(c => c.wide).map(card => (
+              <Link
+                key={card.href}
+                href={card.href}
+                className={`flex items-center gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm hover:shadow-md active:scale-[0.98] ${card.color}`}
+              >
+                <div className="text-3xl">{card.emoji}</div>
+                <div className="flex-1">
+                  <h2 className="font-black text-base text-stone-800 leading-tight">{card.title}</h2>
+                  <p className="text-xs text-stone-500 mt-1 leading-relaxed">{card.desc}</p>
+                  <div className="mt-2 inline-flex items-center gap-1 bg-black/8 rounded-full px-2 py-0.5">
+                    <span className="text-[10px]">?뵏</span>
+                    <span className="text-[10px] font-bold text-stone-500">PIN ?꾩슂</span>
+                  </div>
+                </div>
+                <span className="text-stone-300 text-xl font-light">??/span>
+              </Link>
+            ))}
+          </div>
+        )}
+
+        {/* Footer */}
+        <p className="text-center text-[11px] text-stone-400 mt-6">?렱 ?쒖＜?쒗뀒?덉뒪?묓쉶</p>
+      </div>
+    </div>
+  )
+}
+
+========== src\app\globals.css ==========
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
+
+body { font-family: 'Pretendard Variable', system-ui, sans-serif; }
+.pin-input { @apply text-center text-3xl font-bold tracking-[0.5em] border-2 border-stone-300 rounded-xl px-6 py-4 focus:border-tennis-600 focus:ring-2 focus:ring-tennis-200 outline-none transition-all; }
+.score-input { @apply text-center text-2xl font-bold border-2 border-stone-300 rounded-lg px-4 py-3 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 outline-none transition-all; }
+
+
+

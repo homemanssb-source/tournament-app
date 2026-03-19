@@ -1,0 +1,2315 @@
+﻿========== src\lib\notify.ts ==========
+'use client'
+
+import { useState, useEffect, useCallback } from 'react'
+
+// ?? VAPID 怨듦컻??(?쒕쾭?먯꽌 諛쒓툒 ???ш린??遺숈뿬?ｊ린) ??
+// ?뚯뒪?몄슜?쇰줈 鍮덇컪?대㈃ ?뚮┝ 援щ룆? ???섏?留?沅뚰븳 ?붿껌? ?⑸땲??const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || ''
+
+function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = window.atob(base64)
+  const outputArray = new Uint8Array(rawData.length)
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i)
+  }
+  return outputArray.buffer as ArrayBuffer
+}
+
+export type NotificationPermission = 'default' | 'granted' | 'denied'
+
+export function usePushNotification() {
+  const [permission, setPermission] = useState<NotificationPermission>('default')
+  const [subscription, setSubscription] = useState<PushSubscription | null>(null)
+  const [isSupported, setIsSupported] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+
+  // 吏???щ? & ?꾩옱 沅뚰븳 珥덇린??  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window && 'serviceWorker' in navigator) {
+      setIsSupported(true)
+      setPermission(Notification.permission as NotificationPermission)
+    }
+  }, [])
+
+  // 湲곗〈 援щ룆 ?뺤씤
+  useEffect(() => {
+    if (!isSupported) return
+    navigator.serviceWorker.ready.then(reg => {
+      reg.pushManager.getSubscription().then(sub => {
+        if (sub) setSubscription(sub)
+      })
+    })
+  }, [isSupported])
+
+  // 沅뚰븳 ?붿껌 & 援щ룆
+  const subscribe = useCallback(async () => {
+    if (!isSupported) return null
+    setIsLoading(true)
+    try {
+      const perm = await Notification.requestPermission()
+      setPermission(perm as NotificationPermission)
+      if (perm !== 'granted') return null
+
+      const reg = await navigator.serviceWorker.ready
+
+      // 湲곗〈 援щ룆???덉쑝硫??ъ궗??      let sub = await reg.pushManager.getSubscription()
+      if (!sub && VAPID_PUBLIC_KEY) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        })
+      }
+
+      setSubscription(sub)
+
+      // TODO: ?쒕쾭??援щ룆 ?뺣낫 ???      // await fetch('/api/push/subscribe', {
+      //   method: 'POST',
+      //   headers: { 'Content-Type': 'application/json' },
+      //   body: JSON.stringify(sub),
+      // })
+
+      return sub
+    } catch (err) {
+      console.error('[Push] 援щ룆 ?ㅻ쪟:', err)
+      return null
+    } finally {
+      setIsLoading(false)
+    }
+  }, [isSupported])
+
+  // 援щ룆 ?댁젣
+  const unsubscribe = useCallback(async () => {
+    if (!subscription) return
+    setIsLoading(true)
+    try {
+      await subscription.unsubscribe()
+      setSubscription(null)
+
+      // TODO: ?쒕쾭?먯꽌 援щ룆 ?뺣낫 ??젣
+      // await fetch('/api/push/unsubscribe', { method: 'POST' })
+    } catch (err) {
+      console.error('[Push] 援щ룆 ?댁젣 ?ㅻ쪟:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [subscription])
+
+  // 濡쒖뺄 ?뚯뒪???뚮┝ (?쒕쾭 ?놁씠 諛붾줈 ?뚯뒪??
+  const sendTestNotification = useCallback(async () => {
+    if (permission !== 'granted') {
+      await subscribe()
+      return
+    }
+    const reg = await navigator.serviceWorker.ready
+    reg.showNotification('?렱 ?뚯뒪???뚮┝', {
+      body: '?뚮┝???뺤긽?곸쑝濡??묐룞?⑸땲??',
+      icon: '/icon-192x192.png',
+      badge: '/icon-72x72.png',
+    } as NotificationOptions)
+  }, [permission, subscribe])
+
+  return {
+    isSupported,
+    permission,
+    subscription,
+    isLoading,
+    isSubscribed: !!subscription && permission === 'granted',
+    subscribe,
+    unsubscribe,
+    sendTestNotification,
+  }
+}
+
+========== src\lib\supabase.ts ==========
+import { createClient } from '@supabase/supabase-js'
+
+export const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
+
+// ── 앱B 서비스 롤 (서버사이드 API Route 전용) ──
+export function getServiceClient() {
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY not set');
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey);
+}
+
+// ── 앱A 읽기 전용 클라이언트 (연동용) ──
+export function getAppAClient() {
+  const appAAnonKey = process.env.APP_A_ANON_KEY;
+  if (!appAAnonKey) throw new Error('APP_A_ANON_KEY not set');
+  return createClient(process.env.APP_A_SUPABASE_URL!, appAAnonKey);
+}
+
+// ============================================================
+// Types (기존 개인전)
+// ============================================================
+export interface Event {
+  id: string; event_key: string; name: string; date: string; location: string; status: string
+}
+
+export interface Division {
+  id: string; event_id: string; name: string; sort_order: number
+}
+
+export interface Team {
+  id: string; team_num: string; team_name: string; player1_name: string; player2_name: string
+  division_name: string; division_id: string; event_id: string; pin_plain?: string; group_id?: string
+}
+
+export interface Group {
+  id: string; event_id: string; division_id: string; division_name: string
+  group_label: string; group_num: number; advance_count: number
+}
+
+export interface Match {
+  id: string; match_num: string; event_id: string; division_id: string; division_name: string
+  stage: 'GROUP' | 'FINALS'; round: string; slot: number; group_id?: string
+  team_a_id?: string; team_b_id?: string; score?: string; winner_team_id?: string
+  status: 'PENDING' | 'IN_PROGRESS' | 'FINISHED'; court?: string
+  locked_by_participant: boolean; ended_at?: string
+  // joined
+  team_a_name?: string; team_b_name?: string; winner_name?: string; group_label?: string
+}
+
+export interface BracketNode {
+  id: string; division_name: string; round: string; match_id: string
+  next_match_id?: string; next_slot?: 'A' | 'B'
+  seed_a_team_id?: string; seed_b_team_id?: string; lock: boolean
+  // joined from v_bracket_with_details
+  team_a_name?: string; team_b_name?: string; winner_name?: string
+  score?: string; status?: string; team_a_id?: string; team_b_id?: string; winner_team_id?: string
+  slot?: number
+}
+
+========== src\lib\team-api.ts ==========
+// ============================================================
+// ?⑥껜??Supabase API ?⑥닔
+// src/lib/team-api.ts
+// ============================================================
+
+import { supabase } from './supabase';
+import type {
+  Club, ClubMember, ClubWithMembers,
+  Tie, TieWithClubs, TieRubber,
+  TeamStanding, StandingWithClub, TeamLineup,
+  LineupEntry, RpcResult, EventTeamConfig,
+} from '@/types/team';
+
+// ========================================
+// ?대읇 CRUD
+// ========================================
+
+export async function fetchClubs(eventId: string, divisionId?: string | null): Promise<Club[]> {
+  let query = supabase
+    .from('clubs')
+    .select('*')
+    .eq('event_id', eventId);
+  if (divisionId) query = query.eq('division_id', divisionId);
+  const { data, error } = await query
+    .order('seed_number', { ascending: true, nullsFirst: false })
+    .order('created_at');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function fetchClubWithMembers(clubId: string): Promise<ClubWithMembers | null> {
+  const { data: club, error: ce } = await supabase
+    .from('clubs')
+    .select('*')
+    .eq('id', clubId)
+    .single();
+  if (ce) throw ce;
+  if (!club) return null;
+
+  const { data: members, error: me } = await supabase
+    .from('club_members')
+    .select('*')
+    .eq('club_id', clubId)
+    .order('member_order', { ascending: true, nullsFirst: false })
+    .order('name');
+  if (me) throw me;
+
+  return { ...club, members: members || [] };
+}
+
+export async function fetchClubMembers(clubId: string): Promise<ClubMember[]> {
+  const { data, error } = await supabase
+    .from('club_members')
+    .select('*')
+    .eq('club_id', clubId)
+    .order('member_order', { ascending: true, nullsFirst: false })
+    .order('name');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function createClub(
+  eventId: string,
+  name: string,
+  captainName?: string,
+  captainPin?: string,
+  seedNumber?: number | null,
+): Promise<Club> {
+  const { data, error } = await supabase
+    .from('clubs')
+    .insert({
+      event_id: eventId,
+      name,
+      captain_name: captainName || null,
+      captain_pin: captainPin || null,
+      seed_number: seedNumber ?? null,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateClub(
+  clubId: string,
+  updates: Partial<Pick<Club, 'name' | 'captain_name' | 'captain_pin' | 'seed_number'>>,
+): Promise<Club> {
+  const { data, error } = await supabase
+    .from('clubs')
+    .update(updates)
+    .eq('id', clubId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteClub(clubId: string): Promise<void> {
+  const { error } = await supabase.from('clubs').delete().eq('id', clubId);
+  if (error) throw error;
+}
+
+export async function addClubMember(
+  clubId: string,
+  name: string,
+  gender?: 'M' | 'F',
+  grade?: string,
+  isCaptain?: boolean,
+): Promise<ClubMember> {
+  const { data, error } = await supabase
+    .from('club_members')
+    .insert({
+      club_id: clubId,
+      name,
+      gender: gender || null,
+      grade: grade || null,
+      is_captain: isCaptain || false,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function addClubMembersBatch(
+  clubId: string,
+  members: { name: string; gender?: 'M' | 'F'; grade?: string; is_captain?: boolean; member_order?: number }[],
+): Promise<ClubMember[]> {
+  const rows = members.map((m, idx) => ({
+    club_id: clubId,
+    name: m.name,
+    gender: m.gender || null,
+    grade: m.grade || null,
+    is_captain: m.is_captain || false,
+    member_order: m.member_order ?? idx + 1,
+  }));
+  const { data, error } = await supabase
+    .from('club_members')
+    .insert(rows)
+    .select();
+  if (error) throw error;
+  return data || [];
+}
+
+export async function deleteClubMember(memberId: string): Promise<void> {
+  const { error } = await supabase.from('club_members').delete().eq('id', memberId);
+  if (error) throw error;
+}
+
+// ========================================
+// 二쇱옣(罹≫떞) 蹂寃?// ========================================
+
+export async function setCaptain(
+  clubId: string,
+  memberId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const { error: resetError } = await supabase
+    .from('club_members')
+    .update({ is_captain: false })
+    .eq('club_id', clubId)
+    .eq('is_captain', true);
+  if (resetError) return { success: false, error: resetError.message };
+
+  const { error: setError } = await supabase
+    .from('club_members')
+    .update({ is_captain: true })
+    .eq('id', memberId)
+    .eq('club_id', clubId);
+  if (setError) return { success: false, error: setError.message };
+  return { success: true };
+}
+
+// ========================================
+// ???Tie) 議고쉶
+// ========================================
+
+export async function fetchTies(eventId: string, round?: string): Promise<TieWithClubs[]> {
+  let query = supabase
+    .from('ties')
+    .select(`
+      *,
+      club_a:clubs!ties_club_a_id_fkey(*),
+      club_b:clubs!ties_club_b_id_fkey(*)
+    `)
+    .eq('event_id', eventId)
+    .order('tie_order');
+
+  if (round) query = query.eq('round', round);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data || []) as TieWithClubs[];
+}
+
+export async function fetchTieWithRubbers(tieId: string) {
+  const { data: tie, error: te } = await supabase
+    .from('ties')
+    .select(`
+      *,
+      club_a:clubs!ties_club_a_id_fkey(*),
+      club_b:clubs!ties_club_b_id_fkey(*)
+    `)
+    .eq('id', tieId)
+    .single();
+  if (te) throw te;
+
+  const { data: rubbers, error: re } = await supabase
+    .from('tie_rubbers')
+    .select('*')
+    .eq('tie_id', tieId)
+    .order('rubber_number');
+  if (re) throw re;
+
+  return { ...tie, rubbers: rubbers || [] };
+}
+
+export async function fetchRubbers(tieId: string): Promise<TieRubber[]> {
+  const { data, error } = await supabase
+    .from('tie_rubbers')
+    .select('*')
+    .eq('tie_id', tieId)
+    .order('rubber_number');
+  if (error) throw error;
+  return data || [];
+}
+
+// ========================================
+// ?쒖쐞 議고쉶
+// ========================================
+
+export async function fetchStandings(eventId: string, groupId?: string | null): Promise<StandingWithClub[]> {
+  let query = supabase
+    .from('team_standings')
+    .select(`*, club:clubs(*)`)
+    .eq('event_id', eventId);
+
+  if (groupId === null || groupId === undefined) {
+    query = query.is('group_id', null);
+  } else if (groupId) {
+    query = query.eq('group_id', groupId);
+  }
+
+  const { data, error } = await query
+    .order('rank', { ascending: true, nullsFirst: false })
+    .order('won', { ascending: false })
+    .order('rubber_diff', { ascending: false });
+  if (error) throw error;
+
+  const standings = (data || []) as (TeamStanding & { club: Club })[];
+  return standings.map((s) => {
+    const isTied = s.rank === null && s.played > 0;
+    return { ...s, is_tied: isTied };
+  });
+}
+
+// ========================================
+// ?쇱씤??議고쉶
+// ========================================
+
+export async function fetchLineups(tieId: string, clubId: string): Promise<TeamLineup[]> {
+  const { data, error } = await supabase
+    .from('team_lineups')
+    .select('*')
+    .eq('tie_id', tieId)
+    .eq('club_id', clubId)
+    .order('rubber_number');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function fetchRevealedLineups(tieId: string): Promise<TeamLineup[]> {
+  const { data, error } = await supabase
+    .from('team_lineups')
+    .select('*')
+    .eq('tie_id', tieId)
+    .eq('is_revealed', true)
+    .order('rubber_number');
+  if (error) throw error;
+  return data || [];
+}
+
+// ========================================
+// RPC ?몄텧
+// ========================================
+
+export async function submitLineup(
+  tieId: string, clubId: string, captainPin: string, lineups: LineupEntry[],
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_submit_lineup', {
+    p_tie_id: tieId,
+    p_club_id: clubId,
+    p_captain_pin: captainPin,
+    p_lineups: lineups,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+// ??divisionId 異붽?
+export async function generateFullLeague(
+  eventId: string,
+  divisionId?: string,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_generate_full_league', {
+    p_event_id: eventId,
+    p_division_id: divisionId || null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+// ??divisionId 異붽?
+export async function createTeamGroups(
+  eventId: string,
+  groupCount: number,
+  groupSize: number,
+  divisionId?: string,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_create_team_groups', {
+    p_event_id: eventId,
+    p_group_count: groupCount,
+    p_group_size: groupSize,
+    p_division_id: divisionId || null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+export async function recordRubberScore(
+  rubberId: string,
+  set1a: number, set1b: number,
+  set2a?: number | null, set2b?: number | null,
+  set3a?: number | null, set3b?: number | null,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_admin_record_score', {
+    p_rubber_id: rubberId,
+    p_set1_a: set1a,
+    p_set1_b: set1b,
+    p_set2_a: set2a ?? null,
+    p_set2_b: set2b ?? null,
+    p_set3_a: set3a ?? null,
+    p_set3_b: set3b ?? null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+export async function pinRecordScore(
+  pin: string, rubberId: string,
+  set1a: number, set1b: number,
+  set2a?: number | null, set2b?: number | null,
+  set3a?: number | null, set3b?: number | null,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_team_pin_score', {
+    p_pin: pin,
+    p_rubber_id: rubberId,
+    p_set1_a: set1a,
+    p_set1_b: set1b,
+    p_set2_a: set2a ?? null,
+    p_set2_b: set2b ?? null,
+    p_set3_a: set3a ?? null,
+    p_set3_b: set3b ?? null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+export async function setManualRank(
+  eventId: string, clubId: string, rank: number, notes?: string,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_set_manual_rank', {
+    p_event_id: eventId,
+    p_club_id: clubId,
+    p_rank: rank,
+    p_notes: notes || null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+// ??divisionId 異붽?
+export async function generateTeamTournament(
+  eventId: string,
+  seededClubs?: { club_id: string; seed_number: number }[],
+  divisionId?: string,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_generate_team_tournament', {
+    p_event_id: eventId,
+    p_division_id: divisionId || null,
+    p_seeded_clubs: seededClubs || [],
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+export async function advanceTournamentWinner(tieId: string): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_advance_tournament_winner', {
+    p_tie_id: tieId,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+export async function calculateStandings(eventId: string, groupId?: string | null): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_calculate_standings', {
+    p_event_id: eventId,
+    p_group_id: groupId ?? null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+// ========================================
+// ????⑥껜???ㅼ젙 議고쉶/?섏젙
+// ========================================
+
+export async function fetchEventTeamConfig(eventId: string): Promise<EventTeamConfig | null> {
+  const { data, error } = await supabase
+    .from('events')
+    .select('event_type, team_format, team_rubber_count, team_sets_per_rubber, allow_player_reuse, lineup_mode, team_member_limit, team_match_type')
+    .eq('id', eventId)
+    .single();
+  if (error) throw error;
+  return data as EventTeamConfig;
+}
+
+export async function updateEventTeamConfig(eventId: string, config: Partial<EventTeamConfig>): Promise<void> {
+  const { error } = await supabase
+    .from('events')
+    .update(config)
+    .eq('id', eventId);
+  if (error) throw error;
+}
+
+// ========================================
+// 媛쒖씤??寃곗꽑 寃곌낵 ?곕룞 (App B ??App A)
+// ========================================
+
+export async function fetchFinalsMatches(eventId: string) {
+  const { data, error } = await supabase
+    .from('matches')
+    .select(`
+      id, match_num, event_id, division_id, division_name,
+      stage, round, team_a_id, team_b_id, score,
+      winner_team_id, status, ended_at,
+      team_a_name, team_b_name, winner_name
+    `)
+    .eq('event_id', eventId)
+    .eq('stage', 'FINALS')
+    .eq('status', 'FINISHED')
+    .in('round', ['R32', 'R16', 'QF', 'SF', 'F'])
+    .order('round')
+    .order('slot');
+
+  if (error) throw error;
+  return data || [];
+}
+
+export async function sendResultsToAppA(
+  appAClient: any,
+  eventId: string,
+  matches: any[],
+): Promise<{ success: boolean; synced: number; skipped: number; errors: string[] }> {
+  const roundMap: Record<string, string> = {
+    'R32': '32', 'R16': '16', 'QF': '8', 'SF': '4', 'F': 'final',
+  };
+
+  let synced = 0, skipped = 0;
+  const errors: string[] = [];
+
+  for (const m of matches) {
+    const { data: existing } = await appAClient
+      .from('app_b_match_results')
+      .select('id')
+      .eq('event_id', eventId)
+      .eq('external_match_id', m.id)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      skipped++;
+      continue;
+    }
+
+    const { error } = await appAClient.from('app_b_match_results').insert([{
+      event_id: eventId,
+      division_id: m.division_id || null,
+      division_name: m.division_name || null,
+      round: roundMap[m.round] || m.round,
+      match_num: m.match_num || null,
+      external_match_id: m.id,
+      team_a_name: m.team_a_name || null,
+      team_b_name: m.team_b_name || null,
+      team_a_id: m.team_a_id || null,
+      team_b_id: m.team_b_id || null,
+      score: m.score || null,
+      winner_name: m.winner_name || null,
+      winner_id: m.winner_team_id || null,
+      completed_at: m.ended_at || new Date().toISOString(),
+    }]);
+
+    if (error) {
+      errors.push(`${m.match_num || m.id}: ${error.message}`);
+    } else {
+      synced++;
+    }
+  }
+
+  return { success: errors.length === 0, synced, skipped, errors };
+}
+
+========== src\lib\team-utils.ts ==========
+// ============================================================
+// ?⑥껜???좏떥由ы떚 ?⑥닔
+// src/lib/team-utils.ts
+// ============================================================
+
+import type { TieStatus, TeamFormat, TeamMatchType } from '@/types/team';
+
+// ?? ????곹깭 ?쒓? ?쒖떆 ??
+export function getTieStatusLabel(status: TieStatus): string {
+  const labels: Record<TieStatus, string> = {
+    pending: '?湲?,
+    lineup_phase: '?쇱씤???쒖텧以?,
+    lineup_ready: '?쇱씤???뺤젙',
+    in_progress: '寃쎄린以?,
+    completed: '?꾨즺',
+    bye: '遺?꾩듅',
+  };
+  return labels[status] || status;
+}
+
+export function getTieStatusColor(status: TieStatus): string {
+  const colors: Record<TieStatus, string> = {
+    pending: 'bg-gray-100 text-gray-700',
+    lineup_phase: 'bg-yellow-100 text-yellow-800',
+    lineup_ready: 'bg-blue-100 text-blue-800',
+    in_progress: 'bg-green-100 text-green-800',
+    completed: 'bg-purple-100 text-purple-800',
+    bye: 'bg-gray-200 text-gray-500',
+  };
+  return colors[status] || 'bg-gray-100 text-gray-700';
+}
+
+// ?? ????щ㎎ ?쒓? ??
+export function getFormatLabel(format: TeamFormat): string {
+  const labels: Record<TeamFormat, string> = {
+    full_league: '?由ш렇',
+    group_tournament: '議곕퀎由ш렇 + ?좊꼫癒쇳듃',
+    prelim_tournament: '?덉꽑 ?쒖쐞寃곗젙??+ ?좊꼫癒쇳듃',
+  };
+  return labels[format] || format;
+}
+
+export function getFormatDescription(format: TeamFormat): string {
+  const desc: Record<TeamFormat, string> = {
+    full_league: '紐⑤뱺 ????쒕줈 ??踰덉뵫, 諛붾줈 ?쒖쐞 寃곗젙 (5? ?댄븯 異붿쿇)',
+    group_tournament: '議??섎닠??由ш렇 ???좊꼫癒쇳듃 (6? ?댁긽 異붿쿇)',
+    prelim_tournament: '2~3???臾띠뼱 ?덉꽑, ?쒕뱶 諛곗젙 ???좊꼫癒쇳듃',
+  };
+  return desc[format] || '';
+}
+
+// ?? ?쇱슫???대쫫 ?쒓? ??
+export function getRoundLabel(round: string | null): string {
+  if (!round) return '';
+  const labels: Record<string, string> = {
+    full_league: '?由ш렇',
+    group: '議곕퀎由ш렇',
+    round_of_16: '16媛?,
+    quarter: '8媛?,
+    semi: '4媛?,
+    final: '寃곗듅',
+  };
+  return labels[round] || round;
+}
+
+// ?? 怨쇰컲??怨꾩궛 ??
+export function getMajority(rubberCount: number): number {
+  return Math.floor(rubberCount / 2) + 1;
+}
+
+// ?? ?由ш렇 ???????
+export function getFullLeagueTieCount(clubCount: number): number {
+  return (clubCount * (clubCount - 1)) / 2;
+}
+
+// ?? 釉뚮옒???ъ씠利?+ 諛붿씠 ??怨꾩궛 ??
+export function calculateBracket(clubCount: number) {
+  let bracketSize = 2;
+  while (bracketSize < clubCount) bracketSize *= 2;
+  return {
+    bracketSize,
+    byeCount: bracketSize - clubCount,
+  };
+}
+
+// ?? ?ㅼ퐫???щ㎎ ??
+export function formatSetScore(a: number | null, b: number | null): string {
+  if (a === null || b === null) return '-';
+  return `${a}-${b}`;
+}
+
+export function formatTieScore(aWins: number, bWins: number, rubberCount: number): string {
+  return `${aWins} - ${bWins} (${rubberCount}蹂듭떇)`;
+}
+
+// ?? ?깅퀎 ?쒖떆 ??
+export function getGenderLabel(gender: string | null): string {
+  if (gender === 'M') return '??;
+  if (gender === 'F') return '??;
+  return '';
+}
+
+// ?? PIN ?앹꽦 (6?먮━) ??
+export function generatePin(): string {
+  return String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
+}
+
+// ?? ?쒕뱶 踰덊샇 ?쒖떆 ??
+export function getSeedBadge(seedNumber: number | null): string {
+  if (!seedNumber) return '';
+  return `[${seedNumber}?쒕뱶]`;
+}
+
+// ???? 寃쎄린諛⑹떇(team_match_type) 愿????
+
+export function getMatchTypeLabel(matchType: TeamMatchType | string | null): string {
+  if (matchType === '5_doubles') return '5蹂듭떇 (3???좎듅)';
+  if (matchType === '3_doubles') return '3蹂듭떇 (2???좎듅)';
+  return '3蹂듭떇 (湲곕낯)';
+}
+
+export function getMatchTypeShort(matchType: TeamMatchType | string | null): string {
+  if (matchType === '5_doubles') return '5蹂듭떇';
+  return '3蹂듭떇';
+}
+
+export function getRubberCountByMatchType(matchType: TeamMatchType | string | null): number {
+  if (matchType === '5_doubles') return 5;
+  return 3; // 湲곕낯媛?}
+
+export function getMajorityByMatchType(matchType: TeamMatchType | string | null): number {
+  return getMajority(getRubberCountByMatchType(matchType));
+}
+
+========== src\components\ClubDetail.tsx ==========
+// ============================================================
+// ?대읇 ?곸꽭 而댄룷?뚰듃 (二쇱옣 蹂寃??ы븿)
+// src/components/ClubDetail.tsx
+//
+// ?ъ슜踰? <ClubDetail clubId={clubId} onClose={() => ...} />
+// clubs ?섏씠吏?먯꽌 ?대읇 ?대┃ ???쒖떆
+// ============================================================
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import {
+  fetchClubWithMembers, addClubMember, deleteClubMember, setCaptain,
+  updateClub, fetchEventTeamConfig,
+} from '@/lib/team-api';
+import { getMatchTypeShort, getRubberCountByMatchType } from '@/lib/team-utils';
+import type { ClubWithMembers, ClubMember, EventTeamConfig } from '@/types/team';
+
+interface Props {
+  clubId: string;
+  eventId: string;
+  onClose: () => void;
+  onUpdated?: () => void;
+}
+
+export default function ClubDetail({ clubId, eventId, onClose, onUpdated }: Props) {
+  const [club, setClub] = useState<ClubWithMembers | null>(null);
+  const [config, setConfig] = useState<EventTeamConfig | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // ?좎닔 異붽? ??  const [addForm, setAddForm] = useState({ name: '', gender: '' as '' | 'M' | 'F', grade: '' });
+  const [adding, setAdding] = useState(false);
+
+  // 二쇱옣 蹂寃?  const [changingCaptain, setChangingCaptain] = useState(false);
+
+  // ??젣
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    const [clubData, cfg] = await Promise.all([
+      fetchClubWithMembers(clubId),
+      fetchEventTeamConfig(eventId),
+    ]);
+    setClub(clubData);
+    setConfig(cfg);
+    setLoading(false);
+  }, [clubId, eventId]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // ?좎닔 異붽?
+  async function handleAddMember() {
+    if (!addForm.name.trim()) return;
+    setAdding(true);
+    try {
+      await addClubMember(
+        clubId,
+        addForm.name.trim(),
+        addForm.gender as 'M' | 'F' | undefined,
+        addForm.grade || undefined,
+        false,
+      );
+      setAddForm({ name: '', gender: '', grade: '' });
+      await loadData();
+      onUpdated?.();
+    } catch (e: any) {
+      alert('?좎닔 異붽? ?ㅽ뙣: ' + e.message);
+    }
+    setAdding(false);
+  }
+
+  // ?좎닔 ??젣
+  async function handleDeleteMember(memberId: string, memberName: string) {
+    if (!confirm(`${memberName} ?좎닔瑜???젣?섏떆寃좎뒿?덇퉴?`)) return;
+    setDeleting(memberId);
+    try {
+      await deleteClubMember(memberId);
+      await loadData();
+      onUpdated?.();
+    } catch (e: any) {
+      alert('??젣 ?ㅽ뙣: ' + e.message);
+    }
+    setDeleting(null);
+  }
+
+  // 二쇱옣 蹂寃?  async function handleSetCaptain(memberId: string, memberName: string) {
+    const currentCaptain = club?.members.find(m => m.is_captain);
+    const msg = currentCaptain
+      ? `二쇱옣??${currentCaptain.name} ??${memberName}(??濡?蹂寃쏀븯?쒓쿋?듬땲源?`
+      : `${memberName}??瑜? 二쇱옣?쇰줈 吏?뺥븯?쒓쿋?듬땲源?`;
+
+    if (!confirm(msg)) return;
+    setChangingCaptain(true);
+    try {
+      const result = await setCaptain(clubId, memberId);
+      if (!result.success) {
+        alert('二쇱옣 蹂寃??ㅽ뙣: ' + result.error);
+        return;
+      }
+      await loadData();
+      onUpdated?.();
+    } catch (e: any) {
+      alert('二쇱옣 蹂寃??ㅽ뙣: ' + e.message);
+    }
+    setChangingCaptain(false);
+  }
+
+  if (loading) return <div className="p-6 text-center text-gray-400">濡쒕뵫以?..</div>;
+  if (!club) return <div className="p-6 text-center text-gray-400">?대읇??李얠쓣 ???놁뒿?덈떎.</div>;
+
+  const members = club.members || [];
+  const captain = members.find(m => m.is_captain);
+  const rubberCount = config ? getRubberCountByMatchType(config.team_match_type) : 3;
+  const matchTypeLabel = config ? getMatchTypeShort(config.team_match_type) : '3蹂듭떇';
+
+  // 異쒖쟾 ?몄썝 = 蹂듭떇 ??횞 2紐?  const playingCount = rubberCount * 2;
+  const isOverCapacity = members.length > playingCount;
+
+  return (
+    <div className="bg-white rounded-lg border overflow-hidden">
+      {/* ?ㅻ뜑 */}
+      <div className="bg-gray-50 px-4 py-3 flex items-center justify-between border-b">
+        <div>
+          <h3 className="font-bold text-lg">{club.name}</h3>
+          <div className="flex items-center gap-3 text-xs text-gray-500 mt-1">
+            <span>{matchTypeLabel}</span>
+            <span>異쒖쟾 {playingCount}紐?/span>
+            <span>?깅줉 {members.length}紐?/span>
+            {club.seed_number && (
+              <span className="bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">
+                {club.seed_number}?쒕뱶
+              </span>
+            )}
+          </div>
+        </div>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg">??/button>
+      </div>
+
+      {/* 二쇱옣 ?뺣낫 */}
+      <div className="px-4 py-3 border-b bg-yellow-50">
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="text-xs text-yellow-700 font-medium">?몣 二쇱옣</span>
+            <p className="font-bold text-sm mt-0.5">
+              {captain ? captain.name : '誘몄???}
+              {captain?.gender && <span className="text-xs text-gray-500 ml-1">({captain.gender === 'M' ? '?? : '??})</span>}
+            </p>
+          </div>
+          {club.captain_pin && (
+            <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded font-mono">
+              PIN: {club.captain_pin}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* ?좎닔 紐⑸줉 */}
+      <div className="px-4 py-3">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-semibold">?좎닔 紐낅떒</h4>
+          {isOverCapacity && (
+            <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded">
+              ?꾨낫 {members.length - playingCount}紐??ы븿
+            </span>
+          )}
+        </div>
+
+        <div className="space-y-1">
+          {members.length === 0 ? (
+            <p className="text-sm text-gray-400 py-4 text-center">?깅줉???좎닔媛 ?놁뒿?덈떎.</p>
+          ) : members.map((m, idx) => {
+            const isPlaying = idx < playingCount;
+            return (
+              <div key={m.id}
+                className={`flex items-center justify-between py-2 px-3 rounded-lg ${
+                  m.is_captain ? 'bg-yellow-50 border border-yellow-200' :
+                  isPlaying ? 'bg-gray-50' : 'bg-orange-50 border border-orange-100'
+                }`}>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-400 w-5">{idx + 1}</span>
+                  {m.is_captain && <span className="text-xs">?몣</span>}
+                  <span className={`text-sm font-medium ${!isPlaying ? 'text-orange-600' : ''}`}>{m.name}</span>
+                  {m.gender && <span className="text-xs text-gray-400">{m.gender === 'M' ? '?? : '??}</span>}
+                  {m.grade && <span className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">{m.grade}</span>}
+                  {!isPlaying && <span className="text-xs text-orange-500">?꾨낫</span>}
+                </div>
+                <div className="flex items-center gap-1">
+                  {/* 二쇱옣 蹂寃?踰꾪듉 */}
+                  {!m.is_captain && (
+                    <button
+                      onClick={() => handleSetCaptain(m.id, m.name)}
+                      disabled={changingCaptain}
+                      className="text-xs text-yellow-600 hover:text-yellow-800 px-2 py-1 hover:bg-yellow-50 rounded disabled:opacity-50"
+                    >
+                      二쇱옣吏??                    </button>
+                  )}
+                  {/* ??젣 踰꾪듉 */}
+                  <button
+                    onClick={() => handleDeleteMember(m.id, m.name)}
+                    disabled={deleting === m.id}
+                    className="text-xs text-red-400 hover:text-red-600 px-2 py-1 hover:bg-red-50 rounded disabled:opacity-50"
+                  >
+                    {deleting === m.id ? '...' : '??젣'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ?좎닔 異붽? */}
+        <div className="mt-4 pt-3 border-t">
+          <h4 className="text-xs font-semibold text-gray-500 mb-2">?좎닔 異붽?</h4>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={addForm.name}
+              onChange={e => setAddForm({ ...addForm, name: e.target.value })}
+              placeholder="?대쫫"
+              className="flex-1 text-sm border rounded-lg px-3 py-2"
+              onKeyDown={e => e.key === 'Enter' && handleAddMember()}
+            />
+            <select
+              value={addForm.gender}
+              onChange={e => setAddForm({ ...addForm, gender: e.target.value as '' | 'M' | 'F' })}
+              className="text-sm border rounded-lg px-2 py-2 w-16"
+            >
+              <option value="">-</option>
+              <option value="M">??/option>
+              <option value="F">??/option>
+            </select>
+            <input
+              type="text"
+              value={addForm.grade}
+              onChange={e => setAddForm({ ...addForm, grade: e.target.value })}
+              placeholder="?깃툒"
+              className="text-sm border rounded-lg px-2 py-2 w-16"
+            />
+            <button
+              onClick={handleAddMember}
+              disabled={adding || !addForm.name.trim()}
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
+            >
+              {adding ? '...' : '異붽?'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+========== src\components\CourtBoard.tsx ==========
+'use client'
+import { useEffect, useState, useCallback } from 'react'
+import { supabase } from '@/lib/supabase'
+
+interface CourtMatch {
+  id: string; match_num: string; court: string; court_order: number
+  stage: string; round: string; status: string; score: string | null
+  division_name: string
+  team_a_name: string; team_b_name: string
+  team_a_id: string; team_b_id: string
+  winner_team_id: string | null
+  is_team_tie?: boolean
+}
+
+export default function CourtBoard({ eventId }: { eventId: string }) {
+  const [matches, setMatches] = useState<CourtMatch[]>([])
+  const [loading, setLoading] = useState(true)
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+
+  const loadData = useCallback(async () => {
+    const { data: matchData } = await supabase.from('v_matches_with_teams').select('*')
+      .eq('event_id', eventId).not('court', 'is', null).order('court').order('court_order')
+    const indivMatches: CourtMatch[] = ((matchData as any[]) || [])
+      .filter(m => m.score !== 'BYE').map(m => ({ ...m, is_team_tie: false }))
+    const { data: tieData } = await supabase.from('ties')
+      .select('*, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name)')
+      .eq('event_id', eventId).not('court_number', 'is', null).order('court_number').order('tie_order')
+    const sMap: Record<string, string> = { pending: 'PENDING', lineup_phase: 'PENDING', in_progress: 'IN_PROGRESS', completed: 'FINISHED' }
+    const tieMatches: CourtMatch[] = ((tieData as any[]) || []).filter(t => !t.is_bye).map(t => ({
+      id: 'tie_' + t.id, match_num: 'T#' + t.tie_order, court: '\uCF54\uD2B8 ' + t.court_number,
+      court_order: 100 + (t.tie_order || 0), stage: 'TEAM', round: t.round || 'group',
+      status: sMap[t.status] || 'PENDING',
+      score: (t.status === 'completed' || t.status === 'in_progress') ? t.club_a_rubbers_won + '-' + t.club_b_rubbers_won : null,
+      division_name: '\uB2E8\uCCB4\uC804', team_a_name: t.club_a?.name || 'TBD', team_b_name: t.club_b?.name || 'TBD',
+      team_a_id: t.club_a_id || '', team_b_id: t.club_b_id || '', winner_team_id: t.winning_club_id || null, is_team_tie: true,
+    }))
+    setMatches([...indivMatches, ...tieMatches]); setLoading(false); setLastUpdate(new Date())
+  }, [eventId])
+
+  useEffect(() => { loadData(); const i = setInterval(loadData, 15000); return () => clearInterval(i) }, [loadData])
+
+  const byCourt = new Map<string, CourtMatch[]>()
+  for (const m of matches) { if (!byCourt.has(m.court)) byCourt.set(m.court, []); byCourt.get(m.court)!.push(m) }
+  const courts = Array.from(byCourt.keys()).sort((a, b) => {
+    const na = parseInt(a.replace(/\D/g, '')) || 0; const nb = parseInt(b.replace(/\D/g, '')) || 0; return na - nb
+  })
+
+  if (loading) return <p className="text-center py-10 text-stone-400">{'\uBD88\uB7EC\uC624\uB294 \uC911...'}</p>
+  if (!courts.length) return <p className="text-center py-10 text-stone-400">{'\uC544\uC9C1 \uCF54\uD2B8 \uBC30\uC815\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.'}</p>
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h3 className="font-bold text-lg">{'\uD83C\uDFBE \uCF54\uD2B8 \uD604\uD669'}</h3>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-stone-400">{'\uD83D\uDD04 '}{lastUpdate.toLocaleTimeString('ko-KR')}{' \uC5C5\uB370\uC774\uD2B8'}</span>
+          <button onClick={loadData} className="text-xs px-2 py-1 bg-stone-100 rounded-lg hover:bg-stone-200">{'\uC0C8\uB85C\uACE0\uCE68'}</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {courts.map(court => {
+          const cm = (byCourt.get(court) || []).sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
+          const ci = cm.findIndex(m => m.status === 'IN_PROGRESS')
+          const pi = cm.findIndex(m => m.status === 'PENDING')
+          const ai = ci >= 0 ? ci : pi
+          const fc = cm.filter(m => m.status === 'FINISHED').length
+          const tc = cm.length
+          const cur = ai >= 0 ? cm[ai] : null
+          const w1 = ai >= 0 && ai + 1 < cm.length ? cm[ai + 1] : null
+          const w2 = ai >= 0 && ai + 2 < cm.length ? cm[ai + 2] : null
+          const allDone = fc === tc
+          return (
+            <div key={court} className="bg-white rounded-xl border overflow-hidden">
+              <div className={'px-4 py-2.5 font-bold text-sm flex items-center justify-between ' + (allDone ? 'bg-stone-400 text-white' : 'bg-[#2d5016] text-white')}>
+                <span>{court}</span>
+                <span className="text-white/70 text-xs font-normal">{fc}/{tc}{' \uC644\uB8CC'}</span>
+              </div>
+              <div className="p-3 space-y-2">
+                {allDone ? (
+                  <div className="text-center py-4 text-stone-400"><div className="text-2xl mb-1">{'\u2705'}</div><div className="text-sm">{'\uBAA8\uB4E0 \uACBD\uAE30 \uC644\uB8CC'}</div></div>
+                ) : (<>
+                  {cur && <CourtSlot label={'\uD83D\uDD34 \uD604\uC7AC \uACBD\uAE30'} labelColor="bg-red-50 text-red-700 border-red-200" match={cur} />}
+                  {w1 && <CourtSlot label={'\uD83D\uDFE1 \uB2E4\uC74C \uB300\uAE30'} labelColor="bg-amber-50 text-amber-700 border-amber-200" match={w1} />}
+                  {w2 && <CourtSlot label={'\uD83D\uDFE2 \uB300\uAE30 2'} labelColor="bg-green-50 text-green-700 border-green-200" match={w2} />}
+                  {ai >= 0 && ai + 3 < cm.length && <RemainingMatches matches={cm.slice(ai + 3).filter(m => m.status !== 'FINISHED')} />}
+                </>)}
+                {fc > 0 && <FinishedMatches matches={cm.filter(m => m.status === 'FINISHED')} />}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+function CourtSlot({ label, labelColor, match }: { label: string; labelColor: string; match: CourtMatch }) {
+  const isTeam = match.is_team_tie
+  return (
+    <div className={'rounded-lg border p-2.5 ' + labelColor}>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-xs font-bold">{label}</span>
+        <span className="text-xs opacity-70">#{match.court_order > 100 ? match.match_num : match.court_order}{' \u00B7 '}{match.round}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="font-bold text-sm truncate">{match.team_a_name || 'TBD'}</div>
+          <div className="text-xs opacity-60">vs</div>
+          <div className="font-bold text-sm truncate">{match.team_b_name || 'TBD'}</div>
+        </div>
+        <div className="text-right flex-shrink-0">
+          <div className={'text-xs font-medium px-2 py-0.5 rounded-full ' + (isTeam ? 'bg-blue-100 text-blue-700' : 'bg-white/50')}>
+            {isTeam ? '\uD83D\uDCCB \uB2E8\uCCB4\uC804' : match.division_name}
+          </div>
+          {match.score && <div className={'text-sm font-bold mt-1 ' + (isTeam ? 'text-blue-700' : '')}>{match.score}</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RemainingMatches({ matches }: { matches: CourtMatch[] }) {
+  const [open, setOpen] = useState(false)
+  if (!matches.length) return null
+  return (
+    <div>
+      <button onClick={() => setOpen(!open)} className="text-xs text-stone-400 hover:text-stone-600 w-full text-left py-1">
+        {open ? '\u25BC' : '\u25B6'}{' \uC774\uD6C4 \uB300\uAE30 '}{matches.length}{'\uACBD\uAE30'}
+      </button>
+      {open && <div className="space-y-1 ml-3">{matches.map(m => (
+        <div key={m.id} className="text-xs py-1 border-b border-stone-50 last:border-0">
+          <span className="text-stone-400">#{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
+          {m.is_team_tie && <span className="text-blue-600 mr-1">[\uB2E8\uCCB4]</span>}
+          <span className="font-medium">{m.team_a_name}</span>
+          <span className="text-stone-300"> vs </span>
+          <span className="font-medium">{m.team_b_name}</span>
+          {!m.is_team_tie && <span className="text-stone-400 ml-1">({m.division_name})</span>}
+        </div>
+      ))}</div>}
+    </div>
+  )
+}
+
+function FinishedMatches({ matches }: { matches: CourtMatch[] }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="border-t border-stone-100 pt-2 mt-2">
+      <button onClick={() => setOpen(!open)} className="text-xs text-stone-400 hover:text-stone-600 w-full text-left">
+        {open ? '\u25BC' : '\u25B6'}{' \uC644\uB8CC '}{matches.length}{'\uACBD\uAE30'}
+      </button>
+      {open && <div className="space-y-1 mt-1 ml-3">{matches.map(m => (
+        <div key={m.id} className="text-xs py-1 text-stone-400 border-b border-stone-50 last:border-0">
+          <span>#{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
+          {m.is_team_tie && <span className="text-blue-500 mr-1">[\uB2E8\uCCB4]</span>}
+          <span>{m.team_a_name} vs {m.team_b_name}</span>
+          {m.score && <span className={'font-bold ml-1 ' + (m.is_team_tie ? 'text-blue-600' : 'text-tennis-600')}>{m.score}</span>}
+        </div>
+      ))}</div>}
+    </div>
+  )
+}
+
+========== src\components\NotificationButton.tsx ==========
+'use client'
+
+import { usePushNotification } from '@/hooks/usePushNotification'
+
+export default function NotificationButton() {
+  const {
+    isSupported,
+    permission,
+    isLoading,
+    isSubscribed,
+    subscribe,
+    unsubscribe,
+    sendTestNotification,
+  } = usePushNotification()
+
+  if (!isSupported) return null
+
+  if (permission === 'denied') {
+    return (
+      <div className="text-sm text-red-500 px-3 py-2 rounded-lg bg-red-50">
+        ?뵓 ?뚮┝??李⑤떒?섏뼱 ?덉뒿?덈떎. 釉뚮씪?곗? ?ㅼ젙?먯꽌 ?덉슜??二쇱꽭??
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {/* ?뚮┝ 耳쒓린/?꾧린 踰꾪듉 */}
+      <button
+        onClick={isSubscribed ? unsubscribe : subscribe}
+        disabled={isLoading}
+        className={`
+          flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
+          transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed
+          ${isSubscribed
+            ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            : 'bg-orange-500 text-white hover:bg-orange-600 shadow-md'
+          }
+        `}
+      >
+        {isLoading ? (
+          <span className="animate-spin">??/span>
+        ) : isSubscribed ? (
+          <>?뵒 ?뚮┝ 耳쒖쭚</>
+        ) : (
+          <>?뵓 ?뚮┝ 諛쏄린</>
+        )}
+      </button>
+
+      {/* ?뚯뒪??踰꾪듉 (?뚮┝ ?덉슜??寃쎌슦留? */}
+      {permission === 'granted' && (
+        <button
+          onClick={sendTestNotification}
+          className="px-3 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-100 transition-colors"
+          title="?뚯뒪???뚮┝ 蹂대궡湲?
+        >
+          ?㎦
+        </button>
+      )}
+    </div>
+  )
+}
+
+
+========== src\components\PinSubscribeButton.tsx ==========
+'use client'
+// src/components/PinSubscribeButton.tsx
+// 湲곗〈 PIN ?낅젰 ?섏씠吏????踰꾪듉留?異붽??섎㈃ ?⑸땲??// ?ъ슜踰? <PinSubscribeButton pin={pin} onSuccess={() => {}} />
+
+import { usePushSubscription } from '@/hooks/usePushSubscription'
+
+interface Props {
+  pin: string          // ?좎닔媛 ?낅젰??PIN
+  onSuccess?: () => void
+}
+
+export default function PinSubscribeButton({ pin, onSuccess }: Props) {
+  const { status, message, subscribeWithPin } = usePushSubscription()
+
+  // 釉뚮씪?곗? 誘몄??먯씠硫??④?
+  if (typeof window !== 'undefined' && !('PushManager' in window)) return null
+
+  async function handleClick() {
+    if (!pin || pin.length < 6) return
+    const ok = await subscribeWithPin(pin)
+    if (ok && onSuccess) onSuccess()
+  }
+
+  if (status === 'success') {
+    return (
+      <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 px-4 py-2 rounded-xl">
+        <span>?뵒</span>
+        <span>{message}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-1">
+      <button
+        onClick={handleClick}
+        disabled={status === 'loading' || pin.length < 6}
+        className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border-2 border-stone-200
+          text-sm font-medium text-stone-600 hover:border-blue-400 hover:text-blue-600
+          disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+      >
+        {status === 'loading' ? (
+          <><span className="animate-spin">??/span> ?뚮┝ ?깅줉 以?..</>
+        ) : (
+          <><span>?뵒</span> 肄뷀듃 諛곗젙 ?뚮┝ 諛쏄린</>
+        )}
+      </button>
+      {status === 'error' && (
+        <p className="text-xs text-red-500 text-center">{message}</p>
+      )}
+      <p className="text-xs text-stone-400 text-center">
+        ??肄뷀듃 李⑤?媛 ?섎㈃ ?깆씠 爰쇱졇 ?덉뼱???뚮┝?????      </p>
+    </div>
+  )
+}
+
+
+========== src\components\SyncResults.tsx ==========
+// ============================================================
+// 媛쒖씤??蹂몄꽑 寃곌낵 ?꾩넚 而댄룷?뚰듃 (App B ??App A)
+// src/components/SyncResults.tsx
+//
+// ??쒕낫?쒖뿉???ъ슜: <SyncResults eventId={eventId} />
+// 32媛?寃곗듅 ?꾨즺??寃쎄린瑜?App A DB濡??꾩넚
+// ============================================================
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import { supabase, getAppAClient } from '@/lib/supabase';
+import { fetchFinalsMatches, sendResultsToAppA } from '@/lib/team-api';
+
+interface Props {
+  eventId: string;
+}
+
+interface MatchPreview {
+  id: string;
+  match_num: string;
+  division_name: string;
+  round: string;
+  team_a_name: string;
+  team_b_name: string;
+  score: string;
+  winner_name: string;
+  ended_at: string;
+}
+
+const ROUND_LABELS: Record<string, string> = {
+  'R32': '32媛?, 'R16': '16媛?, 'QF': '8媛?, 'SF': '4媛?, 'F': '寃곗듅',
+};
+
+const ROUND_ORDER: Record<string, number> = {
+  'R32': 1, 'R16': 2, 'QF': 3, 'SF': 4, 'F': 5,
+};
+
+export default function SyncResults({ eventId }: Props) {
+  const [matches, setMatches] = useState<MatchPreview[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [result, setResult] = useState<{ synced: number; skipped: number; errors: string[] } | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+
+  // ?댁쟾 ?꾩넚 湲곕줉 ?뺤씤
+  const checkLastSync = useCallback(async () => {
+    try {
+      const appA = getAppAClient();
+      const { data } = await appA
+        .from('app_b_match_results')
+        .select('synced_at')
+        .eq('event_id', eventId)
+        .order('synced_at', { ascending: false })
+        .limit(1);
+      if (data && data.length > 0) {
+        setLastSyncedAt(data[0].synced_at);
+      }
+    } catch {
+      // App A ?묎렐 ?ㅽ뙣?대룄 臾댁떆
+    }
+  }, [eventId]);
+
+  // 蹂몄꽑 寃쎄린 濡쒕뱶
+  const loadMatches = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await fetchFinalsMatches(eventId);
+      // ?쇱슫?쒖닚 ?뺣젹
+      const sorted = data.sort((a: any, b: any) => {
+        const ra = ROUND_ORDER[a.round] || 0;
+        const rb = ROUND_ORDER[b.round] || 0;
+        if (ra !== rb) return ra - rb;
+        return (a.match_num || '').localeCompare(b.match_num || '');
+      });
+      setMatches(sorted);
+    } catch (e: any) {
+      console.error('蹂몄꽑 寃쎄린 濡쒕뱶 ?ㅽ뙣:', e);
+    }
+    setLoading(false);
+  }, [eventId]);
+
+  useEffect(() => {
+    loadMatches();
+    checkLastSync();
+  }, [loadMatches, checkLastSync]);
+
+  // 寃곌낵 ?꾩넚
+  async function handleSync() {
+    if (matches.length === 0) {
+      alert('?꾩넚??蹂몄꽑 寃쎄린媛 ?놁뒿?덈떎.');
+      return;
+    }
+    if (!confirm(`${matches.length}寃쎄린??蹂몄꽑 寃곌낵瑜?App A濡??꾩넚?⑸땲??\n怨꾩냽?섏떆寃좎뒿?덇퉴?`)) return;
+
+    setSyncing(true);
+    setResult(null);
+    try {
+      const appA = getAppAClient();
+      const res = await sendResultsToAppA(appA, eventId, matches);
+      setResult(res);
+      if (res.synced > 0) {
+        setLastSyncedAt(new Date().toISOString());
+      }
+      if (res.errors.length > 0) {
+        console.error('?꾩넚 ?ㅻ쪟:', res.errors);
+      }
+    } catch (e: any) {
+      alert('?꾩넚 ?ㅽ뙣: ' + e.message);
+    }
+    setSyncing(false);
+  }
+
+  // ?쇱슫?쒕퀎 洹몃９??  const byRound = new Map<string, MatchPreview[]>();
+  for (const m of matches) {
+    const key = m.round;
+    if (!byRound.has(key)) byRound.set(key, []);
+    byRound.get(key)!.push(m);
+  }
+  const roundKeys = Array.from(byRound.keys()).sort((a, b) => (ROUND_ORDER[a] || 0) - (ROUND_ORDER[b] || 0));
+
+  return (
+    <div className="bg-white rounded-lg border overflow-hidden">
+      <div className="px-4 py-3 bg-blue-50 border-b flex items-center justify-between">
+        <div>
+          <h3 className="font-bold text-sm text-blue-800">?뱾 媛쒖씤??蹂몄꽑 寃곌낵 ?꾩넚</h3>
+          <p className="text-xs text-blue-600 mt-0.5">
+            32媛?寃곗듅 ?꾨즺 寃쎄린瑜?App A濡??꾩넚?⑸땲??          </p>
+        </div>
+        <div className="text-right">
+          {lastSyncedAt && (
+            <p className="text-xs text-blue-500">
+              留덉?留??꾩넚: {new Date(lastSyncedAt).toLocaleString('ko-KR')}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="p-4">
+        {loading ? (
+          <p className="text-center text-gray-400 py-6">蹂몄꽑 寃쎄린 議고쉶以?..</p>
+        ) : matches.length === 0 ? (
+          <div className="text-center py-6">
+            <p className="text-gray-400">?꾩넚 媛?ν븳 蹂몄꽑 寃쎄린媛 ?놁뒿?덈떎.</p>
+            <p className="text-xs text-gray-400 mt-1">32媛?寃곗듅 以??꾨즺(FINISHED) ?곹깭??寃쎄린留??꾩넚?⑸땲??</p>
+          </div>
+        ) : (
+          <>
+            {/* ?붿빟 */}
+            <div className="flex gap-3 mb-4">
+              {roundKeys.map(round => (
+                <div key={round} className="bg-gray-50 rounded-lg px-3 py-2 text-center flex-1">
+                  <p className="text-xs text-gray-500">{ROUND_LABELS[round] || round}</p>
+                  <p className="text-lg font-bold">{byRound.get(round)?.length || 0}</p>
+                </div>
+              ))}
+              <div className="bg-blue-50 rounded-lg px-3 py-2 text-center flex-1">
+                <p className="text-xs text-blue-600">?꾩껜</p>
+                <p className="text-lg font-bold text-blue-700">{matches.length}</p>
+              </div>
+            </div>
+
+            {/* 寃쎄린 紐⑸줉 (?묒씠?? */}
+            <details className="mb-4">
+              <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-700 mb-2">
+                ?꾩넚 ???寃쎄린 ?곸꽭蹂닿린 ({matches.length}寃쎄린)
+              </summary>
+              <div className="space-y-1 max-h-60 overflow-y-auto">
+                {roundKeys.map(round => (
+                  <div key={round}>
+                    <p className="text-xs font-semibold text-gray-600 py-1 sticky top-0 bg-white">
+                      {ROUND_LABELS[round] || round}
+                    </p>
+                    {(byRound.get(round) || []).map(m => (
+                      <div key={m.id} className="flex items-center justify-between py-1.5 px-2 text-xs bg-gray-50 rounded mb-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-400">{m.match_num}</span>
+                          <span className="text-gray-500">{m.division_name}</span>
+                          <span className="font-medium">{m.team_a_name}</span>
+                          <span className="text-gray-300">vs</span>
+                          <span className="font-medium">{m.team_b_name}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-green-600">{m.score}</span>
+                          <span className="text-blue-600">?룇 {m.winner_name}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </details>
+
+            {/* ?꾩넚 踰꾪듉 */}
+            <button
+              onClick={handleSync}
+              disabled={syncing}
+              className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              {syncing ? '?꾩넚 以?..' : `?뱾 ${matches.length}寃쎄린 App A濡??꾩넚`}
+            </button>
+          </>
+        )}
+
+        {/* ?꾩넚 寃곌낵 */}
+        {result && (
+          <div className={`mt-4 rounded-lg p-4 ${result.errors.length > 0 ? 'bg-yellow-50 border border-yellow-200' : 'bg-green-50 border border-green-200'}`}>
+            <h4 className={`text-sm font-bold mb-2 ${result.errors.length > 0 ? 'text-yellow-800' : 'text-green-800'}`}>
+              {result.errors.length > 0 ? '?좑툘 ?쇰? ?ㅻ쪟 諛쒖깮' : '???꾩넚 ?꾨즺'}
+            </h4>
+            <div className="flex gap-3 text-sm">
+              <div>
+                <span className="text-green-600 font-bold">{result.synced}</span>
+                <span className="text-gray-500 ml-1">?꾩넚 ?깃났</span>
+              </div>
+              <div>
+                <span className="text-gray-500 font-bold">{result.skipped}</span>
+                <span className="text-gray-500 ml-1">以묐났 ?ㅽ궢</span>
+              </div>
+              {result.errors.length > 0 && (
+                <div>
+                  <span className="text-red-600 font-bold">{result.errors.length}</span>
+                  <span className="text-gray-500 ml-1">?ㅻ쪟</span>
+                </div>
+              )}
+            </div>
+            {result.errors.length > 0 && (
+              <details className="mt-2">
+                <summary className="text-xs text-red-600 cursor-pointer">?ㅻ쪟 ?곸꽭</summary>
+                <div className="mt-1 space-y-0.5">
+                  {result.errors.map((err, i) => (
+                    <p key={i} className="text-xs text-red-500">{err}</p>
+                  ))}
+                </div>
+              </details>
+            )}
+          </div>
+        )}
+
+        {/* ?덈줈怨좎묠 */}
+        <button
+          onClick={loadMatches}
+          className="w-full mt-3 text-sm text-gray-500 hover:text-gray-700 py-2"
+        >
+          ?봽 寃쎄린 紐⑸줉 ?덈줈怨좎묠
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
+========== src\components\TournamentBracket.tsx ==========
+'use client'
+import { useRef, useEffect, useState } from 'react'
+
+interface BracketMatch {
+  match_id?: string; match_num?: string; round?: string; slot?: number
+  team_a_id?: string; team_b_id?: string; team_a_name?: string; team_b_name?: string
+  winner_team_id?: string; winner_name?: string; score?: string; status?: string
+  next_match_id?: string; next_slot?: string
+}
+
+const ROUND_ORDER = ['蹂몄꽑128媛?, '蹂몄꽑64媛?, '蹂몄꽑32媛?, '16媛?, '8媛?, '4媛?, '寃곗듅']
+
+const CARD_H = 64
+const MIN_GAP = 12
+
+export default function TournamentBracket({ matches }: { matches: BracketMatch[] }) {
+  const byRound = new Map<string, BracketMatch[]>()
+  for (const m of matches) {
+    const r = m.round || ''
+    if (!byRound.has(r)) byRound.set(r, [])
+    byRound.get(r)!.push(m)
+  }
+  for (const arr of byRound.values()) arr.sort((a, b) => (a.slot || 0) - (b.slot || 0))
+
+  const rounds = ROUND_ORDER.filter(r => byRound.has(r))
+  if (!rounds.length) return <p className="text-center py-10 text-stone-400">?좊꼫癒쇳듃 ?곗씠?곌? ?놁뒿?덈떎.</p>
+
+  const firstRoundCount = (byRound.get(rounds[0]) || []).length
+  const totalHeight = firstRoundCount * CARD_H + (firstRoundCount - 1) * MIN_GAP + 60
+
+  return (
+    <div className="overflow-x-auto pb-6">
+      <div className="relative flex" style={{ minWidth: rounds.length * 210, height: Math.max(totalHeight, 300) }}>
+        {rounds.map((round, rIdx) => {
+          const roundMatches = byRound.get(round) || []
+          const count = roundMatches.length
+
+          const positions = calcPositions(rIdx, count, firstRoundCount, totalHeight)
+
+          return (
+            <div key={round} className="flex-shrink-0 relative" style={{ width: 200 }}>
+              <div className="text-center font-bold text-xs text-stone-500 uppercase mb-0 py-1 bg-stone-100 rounded sticky top-0 z-10">
+                {round}
+              </div>
+              {roundMatches.map((m, mIdx) => (
+                <div
+                  key={m.match_id}
+                  className="absolute left-1 right-1"
+                  style={{ top: positions[mIdx] + 28 }}
+                >
+                  <MatchCard m={m} />
+                  {rIdx < rounds.length - 1 && (
+                    <div
+                      className="absolute top-1/2 -right-[11px] w-[10px] border-t-2 border-stone-300"
+                      style={{ transform: 'translateY(-50%)' }}
+                    />
+                  )}
+                  {rIdx > 0 && (
+                    <div
+                      className="absolute top-1/2 -left-[11px] w-[10px] border-t-2 border-stone-300"
+                      style={{ transform: 'translateY(-50%)' }}
+                    />
+                  )}
+                </div>
+              ))}
+              {rIdx > 0 && roundMatches.map((m, mIdx) => {
+                const prevPositions = calcPositions(rIdx - 1, (byRound.get(rounds[rIdx - 1]) || []).length, firstRoundCount, totalHeight)
+                const prevTop = prevPositions[mIdx * 2]
+                const prevBottom = prevPositions[mIdx * 2 + 1]
+                if (prevTop === undefined || prevBottom === undefined) return null
+                const lineTop = prevTop + CARD_H / 2 + 28
+                const lineBottom = prevBottom + CARD_H / 2 + 28
+                return (
+                  <div
+                    key={`vline-${mIdx}`}
+                    className="absolute border-l-2 border-stone-300"
+                    style={{
+                      left: -1,
+                      top: lineTop,
+                      height: lineBottom - lineTop,
+                    }}
+                  />
+                )
+              })}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function calcPositions(roundIdx: number, count: number, firstRoundCount: number, totalHeight: number): number[] {
+  if (roundIdx === 0) {
+    const spacing = (totalHeight - 60) / Math.max(count, 1)
+    return Array.from({ length: count }, (_, i) => i * spacing + (spacing - CARD_H) / 2)
+  }
+
+  const prevCount = count * 2
+  const prevPositions = calcPositions(roundIdx - 1, prevCount, firstRoundCount, totalHeight)
+  const positions: number[] = []
+  for (let i = 0; i < count; i++) {
+    const top = prevPositions[i * 2] || 0
+    const bottom = prevPositions[i * 2 + 1] || top
+    positions.push((top + bottom) / 2)
+  }
+  return positions
+}
+
+function MatchCard({ m }: { m: BracketMatch }) {
+  const isBye = m.score === 'BYE'
+  const done = m.status === 'FINISHED'
+  const inProgress = m.status === 'IN_PROGRESS'
+  const aWon = m.winner_team_id && m.winner_team_id === m.team_a_id
+  const bWon = m.winner_team_id && m.winner_team_id === m.team_b_id
+
+  return (
+    <div
+      className={`rounded-lg border text-xs overflow-hidden shadow-sm ${
+        inProgress ? 'border-red-400 ring-1 ring-red-200' :
+        done && !isBye ? 'border-green-400 bg-white' :
+        isBye ? 'border-amber-200 bg-amber-50/30' :
+        'border-stone-200 bg-white'
+      }`}
+      style={{ height: CARD_H }}
+    >
+      {/* Team A */}
+      <div className={`flex items-center justify-between px-2.5 h-[26px] border-b border-stone-100 ${
+        aWon ? 'bg-blue-50 font-bold text-blue-800' :
+        bWon && done ? 'text-stone-300' : ''
+      }`}>
+        <span className={`truncate flex-1 ${
+          !m.team_a_name || m.team_a_name === 'TBD' ? 'text-stone-300 italic' : ''
+        }`}>
+          {aWon && '?룇 '}{m.team_a_name || 'TBD'}
+        </span>
+        {inProgress && m.team_a_id && <span className="text-red-400 ml-1 animate-pulse text-[10px]">??/span>}
+      </div>
+      {/* Team B */}
+      <div className={`flex items-center justify-between px-2.5 h-[26px] ${
+        bWon ? 'bg-blue-50 font-bold text-blue-800' :
+        aWon && done ? 'text-stone-300' : ''
+      }`}>
+        <span className={`truncate flex-1 ${
+          !m.team_b_name || m.team_b_name === 'TBD' || isBye ? 'text-stone-300 italic' : ''
+        }`}>
+          {bWon && '?룇 '}{isBye ? 'BYE' : (m.team_b_name || 'TBD')}
+        </span>
+      </div>
+      {/* Score bar */}
+      {done && !isBye && m.score && (
+        <div className="text-center h-[12px] leading-[12px] bg-green-50 text-green-700 font-bold text-[10px] border-t border-stone-100">
+          {m.score}
+        </div>
+      )}
+      {isBye && (
+        <div className="text-center h-[12px] leading-[12px] bg-amber-50 text-amber-500 font-medium text-[10px] border-t border-stone-100">
+          BYE
+        </div>
+      )}
+    </div>
+  )
+}
+
+========== src\components\useDashboard.tsx ==========
+'use client'
+import { useEffect, useState } from 'react'
+import { supabase, Division } from '@/lib/supabase'
+
+export function useEventId(): string {
+  const [id, setId] = useState('')
+  useEffect(() => {
+    const stored = sessionStorage.getItem('dashboard_event_id') || ''
+    setId(stored)
+  }, [])
+  return id
+}
+
+export function useDivisions(eventId: string) {
+  const [divisions, setDivisions] = useState<Division[]>([])
+  const [selected, setSelected] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!eventId) return
+    supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order')
+      .then(({ data }) => {
+        setDivisions(data || [])
+        if (data?.length) setSelected(data[0].id)
+        setLoading(false)
+      })
+  }, [eventId])
+
+  return { divisions, selected, setSelected, loading }
+}
+
+export function DivisionTabs({ divisions, selected, onSelect }: {
+  divisions: Division[]; selected: string; onSelect: (id: string) => void
+}) {
+  if (divisions.length <= 1) return null
+  return (
+    <div className="flex gap-1 mb-4 overflow-x-auto">
+      {divisions.map(d => (
+        <button key={d.id} onClick={() => onSelect(d.id)}
+          className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+            selected === d.id ? 'bg-tennis-600 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+          }`}>
+          {d.name}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+
+========== src\hooks\usePushNotification.ts ==========
+'use client'
+
+import { useState, useEffect, useCallback } from 'react'
+
+// ?? VAPID 怨듦컻??(?쒕쾭?먯꽌 諛쒓툒 ???ш린??遺숈뿬?ｊ린) ??
+// ?뚯뒪?몄슜?쇰줈 鍮덇컪?대㈃ ?뚮┝ 援щ룆? ???섏?留?沅뚰븳 ?붿껌? ?⑸땲??const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || ''
+
+function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = window.atob(base64)
+  const outputArray = new Uint8Array(rawData.length)
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i)
+  }
+  return outputArray.buffer as ArrayBuffer
+}
+
+export type NotificationPermission = 'default' | 'granted' | 'denied'
+
+export function usePushNotification() {
+  const [permission, setPermission] = useState<NotificationPermission>('default')
+  const [subscription, setSubscription] = useState<PushSubscription | null>(null)
+  const [isSupported, setIsSupported] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+
+  // 吏???щ? & ?꾩옱 沅뚰븳 珥덇린??  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window && 'serviceWorker' in navigator) {
+      setIsSupported(true)
+      setPermission(Notification.permission as NotificationPermission)
+    }
+  }, [])
+
+  // 湲곗〈 援щ룆 ?뺤씤
+  useEffect(() => {
+    if (!isSupported) return
+    navigator.serviceWorker.ready.then(reg => {
+      reg.pushManager.getSubscription().then(sub => {
+        if (sub) setSubscription(sub)
+      })
+    })
+  }, [isSupported])
+
+  // 沅뚰븳 ?붿껌 & 援щ룆
+  const subscribe = useCallback(async () => {
+    if (!isSupported) return null
+    setIsLoading(true)
+    try {
+      const perm = await Notification.requestPermission()
+      setPermission(perm as NotificationPermission)
+      if (perm !== 'granted') return null
+
+      const reg = await navigator.serviceWorker.ready
+
+      // 湲곗〈 援щ룆???덉쑝硫??ъ궗??      let sub = await reg.pushManager.getSubscription()
+      if (!sub && VAPID_PUBLIC_KEY) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        })
+      }
+
+      setSubscription(sub)
+
+      // TODO: ?쒕쾭??援щ룆 ?뺣낫 ???      // await fetch('/api/push/subscribe', {
+      //   method: 'POST',
+      //   headers: { 'Content-Type': 'application/json' },
+      //   body: JSON.stringify(sub),
+      // })
+
+      return sub
+    } catch (err) {
+      console.error('[Push] 援щ룆 ?ㅻ쪟:', err)
+      return null
+    } finally {
+      setIsLoading(false)
+    }
+  }, [isSupported])
+
+  // 援щ룆 ?댁젣
+  const unsubscribe = useCallback(async () => {
+    if (!subscription) return
+    setIsLoading(true)
+    try {
+      await subscription.unsubscribe()
+      setSubscription(null)
+
+      // TODO: ?쒕쾭?먯꽌 援щ룆 ?뺣낫 ??젣
+      // await fetch('/api/push/unsubscribe', { method: 'POST' })
+    } catch (err) {
+      console.error('[Push] 援щ룆 ?댁젣 ?ㅻ쪟:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [subscription])
+
+  // 濡쒖뺄 ?뚯뒪???뚮┝ (?쒕쾭 ?놁씠 諛붾줈 ?뚯뒪??
+  const sendTestNotification = useCallback(async () => {
+    if (permission !== 'granted') {
+      await subscribe()
+      return
+    }
+    const reg = await navigator.serviceWorker.ready
+    reg.showNotification('?렱 ?뚯뒪???뚮┝', {
+      body: '?뚮┝???뺤긽?곸쑝濡??묐룞?⑸땲??',
+      icon: '/icon-192x192.png',
+      badge: '/icon-72x72.png',
+    } as NotificationOptions)
+  }, [permission, subscribe])
+
+  return {
+    isSupported,
+    permission,
+    subscription,
+    isLoading,
+    isSubscribed: !!subscription && permission === 'granted',
+    subscribe,
+    unsubscribe,
+    sendTestNotification,
+  }
+}
+
+========== src\hooks\usePushSubscription.ts ==========
+'use client'
+// ============================================================
+// src/hooks/usePushSubscription.ts
+// ???뚮┝ ?먭씀 爰쇱???踰꾧렇 ?섏젙
+//    ?먯씤1: 湲곗〈 援щ룆 ?ъ궗????endpoint 留뚮즺?쇰룄 媛깆떊 ????//    ?먯씤2: iOS PWA ?ъ떎????援щ룆 珥덇린??//    ?먯씤3: ?쒕쾭 DB??援щ룆 ?놁뼱???대씪?댁뼵?몃뒗 紐⑤쫫
+//
+//    ?닿껐: ??긽 unsubscribe ???덈줈 援щ룆 + autoResubscribe ??// ============================================================
+import { useState, useCallback } from 'react'
+
+const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || ''
+
+function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = window.atob(base64)
+  const output = new Uint8Array(rawData.length)
+  for (let i = 0; i < rawData.length; i++) output[i] = rawData.charCodeAt(i)
+  return output.buffer as ArrayBuffer
+}
+
+// ?쒕쾭??援щ룆 ?뺣낫 ???async function saveToServer(pin: string, sub: PushSubscription) {
+  const res = await fetch('/api/push/subscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      pin,
+      subscription: {
+        endpoint: sub.endpoint,
+        keys: {
+          p256dh: sub.toJSON().keys?.p256dh,
+          auth:   sub.toJSON().keys?.auth,
+        },
+      },
+    }),
+  })
+  return res
+}
+
+// ?쒕쾭??endpoint 議댁옱 ?щ? ?뺤씤
+async function checkOnServer(endpoint: string): Promise<boolean> {
+  try {
+    const res = await fetch('/api/push/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint }),
+    })
+    if (!res.ok) return false
+    const data = await res.json()
+    return data.exists === true
+  } catch {
+    return false
+  }
+}
+
+export type PushStatus = 'idle' | 'loading' | 'success' | 'error' | 'unsupported'
+
+export function usePushSubscription() {
+  const [status, setStatus]   = useState<PushStatus>('idle')
+  const [message, setMessage] = useState('')
+
+  // ?? 理쒖큹 援щ룆 (PIN 濡쒓렇?????몄텧) ??????????????????????????
+  const subscribeWithPin = useCallback(async (pin: string): Promise<boolean> => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setStatus('unsupported')
+      setMessage('??釉뚮씪?곗????몄떆 ?뚮┝??吏?먰븯吏 ?딆뒿?덈떎.')
+      return false
+    }
+    if (!VAPID_PUBLIC_KEY) {
+      console.warn('[Push] VAPID_PUBLIC_KEY not set')
+      return false
+    }
+
+    setStatus('loading')
+    try {
+      // 1. 沅뚰븳 ?붿껌
+      const permission = await Notification.requestPermission()
+      if (permission !== 'granted') {
+        setStatus('idle')
+        return false
+      }
+
+      const reg = await navigator.serviceWorker.ready
+
+      // 2. ??湲곗〈 援щ룆 臾댁“嫄??댁젣 ???덈줈 諛쒓툒
+      //    (endpoint 留뚮즺 諛⑹? ????긽 理쒖떊 endpoint ?ъ슜)
+      const existing = await reg.pushManager.getSubscription()
+      if (existing) await existing.unsubscribe()
+
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      })
+
+      // 3. ?쒕쾭?????      const res = await saveToServer(pin, sub)
+      const data = await res.json()
+
+      if (!res.ok) {
+        setStatus('error')
+        setMessage(data.error || '援щ룆 ????ㅽ뙣')
+        return false
+      }
+
+      // 4. ??localStorage??PIN + endpoint ???(?먮룞 ?ш뎄?낆뿉 ?ъ슜)
+      localStorage.setItem('push_pin', pin)
+      localStorage.setItem('push_endpoint', sub.endpoint)
+
+      setStatus('success')
+      setMessage(`${data.team_name || ''} ?뚮┝ ?깅줉 ?꾨즺!`)
+      return true
+
+    } catch (err: any) {
+      console.error('[Push] subscribeWithPin error:', err)
+      setStatus('error')
+      setMessage('?뚮┝ ?깅줉 以??ㅻ쪟媛 諛쒖깮?덉뒿?덈떎.')
+      return false
+    }
+  }, [])
+
+  // ?? ?먮룞 ?ш뎄??(pin/matches ?섏씠吏 吏꾩엯 ???몄텧) ?????????????
+  // 沅뚰븳? ?덈뒗??援щ룆???녾굅??留뚮즺??寃쎌슦 ?먮룞?쇰줈 ?щ벑濡?  const autoResubscribe = useCallback(async (): Promise<void> => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+    if (!VAPID_PUBLIC_KEY) return
+    if (Notification.permission !== 'granted') return
+
+    const savedPin      = localStorage.getItem('push_pin')
+    const savedEndpoint = localStorage.getItem('push_endpoint')
+    if (!savedPin) return  // ??踰덈룄 ?깅줉 ?????ъ슜?먮뒗 嫄대뱶由ъ? ?딆쓬
+
+    try {
+      const reg        = await navigator.serviceWorker.ready
+      const currentSub = await reg.pushManager.getSubscription()
+
+      // 耳?댁뒪 1: 釉뚮씪?곗? 援щ룆 ?먯껜媛 ?щ씪吏?寃쎌슦 (iOS PWA ?ъ떎????
+      if (!currentSub) {
+        console.log('[Push] 援щ룆 ?놁쓬 ???먮룞 ?ш뎄??)
+        const newSub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        })
+        await saveToServer(savedPin, newSub)
+        localStorage.setItem('push_endpoint', newSub.endpoint)
+        return
+      }
+
+      // 耳?댁뒪 2: endpoint媛 蹂寃쎈맂 寃쎌슦
+      if (currentSub.endpoint !== savedEndpoint) {
+        console.log('[Push] endpoint 蹂寃????щ벑濡?)
+        await saveToServer(savedPin, currentSub)
+        localStorage.setItem('push_endpoint', currentSub.endpoint)
+        return
+      }
+
+      // 耳?댁뒪 3: ?쒕쾭 DB??援щ룆???녿뒗 寃쎌슦 (DB 珥덇린????
+      const existsOnServer = await checkOnServer(currentSub.endpoint)
+      if (!existsOnServer) {
+        console.log('[Push] ?쒕쾭??援щ룆 ?놁쓬 ???щ벑濡?)
+        await saveToServer(savedPin, currentSub)
+      }
+
+    } catch (err) {
+      // ?먮룞 ?ш뎄???ㅽ뙣??議곗슜??泥섎━ (UX 諛⑺빐 ????
+      console.warn('[Push] autoResubscribe error:', err)
+    }
+  }, [])
+
+  return { status, message, subscribeWithPin, autoResubscribe }
+}
+
+========== src\types\team.ts ==========
+// ============================================================
+// ?켃 ?⑥껜??????뺤쓽
+// src/types/team.ts
+// ============================================================
+
+// ?? 湲곕낯 ?뷀떚????
+
+export interface Club {
+  id: string;
+  event_id: string;
+  name: string;
+  captain_name: string | null;
+  captain_phone: string | null;
+  captain_pin: string | null;
+  seed_number: number | null;
+  division_id: string | null;       // ???좉퇋: 媛쒖씤??遺???곕룞
+  created_at: string;
+}
+
+export interface ClubMember {
+  id: string;
+  club_id: string;
+  name: string;
+  gender: 'M' | 'F' | null;
+  grade: string | null;
+  is_captain: boolean;
+  member_order: number | null;
+  created_at: string;
+}
+
+export type TieStatus = 'pending' | 'lineup_phase' | 'lineup_ready' | 'in_progress' | 'completed' | 'bye';
+
+export interface Tie {
+  id: string;
+  event_id: string;
+  group_id: string | null;
+  round: string | null;
+  tie_order: number | null;
+  bracket_position: number | null;
+  club_a_id: string | null;
+  club_b_id: string | null;
+  rubber_count: number;
+  club_a_lineup_submitted: boolean;
+  club_b_lineup_submitted: boolean;
+  lineup_revealed: boolean;
+  lineup_locked_at: string | null;
+  winning_club_id: string | null;
+  club_a_rubbers_won: number;
+  club_b_rubbers_won: number;
+  status: TieStatus;
+  is_bye: boolean;
+  court_number: number | null;
+  scheduled_time: string | null;
+  division_id: string | null;       // ???좉퇋
+  created_at: string;
+}
+
+export interface TieRubber {
+  id: string;
+  tie_id: string;
+  rubber_number: number;
+  rubber_type: string;
+  club_a_player1_id: string | null;
+  club_a_player2_id: string | null;
+  club_b_player1_id: string | null;
+  club_b_player2_id: string | null;
+  set1_a: number | null;
+  set1_b: number | null;
+  set2_a: number | null;
+  set2_b: number | null;
+  set3_a: number | null;
+  set3_b: number | null;
+  sets_won_a: number;
+  sets_won_b: number;
+  winning_club_id: string | null;
+  status: 'pending' | 'in_progress' | 'completed';
+  court_number: number | null;
+  pin_code: string | null;
+  created_at: string;
+}
+
+export interface TeamLineup {
+  id: string;
+  tie_id: string;
+  club_id: string;
+  rubber_number: number;
+  player1_id: string;
+  player2_id: string;
+  submitted_at: string;
+  submitted_by: string;
+  is_revealed: boolean;
+}
+
+export interface TeamStanding {
+  id: string;
+  event_id: string;
+  group_id: string | null;
+  club_id: string;
+  played: number;
+  won: number;
+  lost: number;
+  rubbers_for: number;
+  rubbers_against: number;
+  rubber_diff: number;
+  rank: number | null;
+  rank_locked: boolean;
+  notes: string | null;
+}
+
+// ?? events ?뺤옣 ?꾨뱶 ??
+
+export type TeamFormat = 'full_league' | 'group_tournament' | 'prelim_tournament';
+export type LineupMode = 'captain_pin' | 'admin_only';
+export type TeamMatchType = '3_doubles' | '5_doubles';   // ???좉퇋
+
+export interface EventTeamConfig {
+  event_type: 'individual' | 'team' | 'both';
+  team_format: TeamFormat;
+  team_rubber_count: number;
+  team_sets_per_rubber: number;
+  allow_player_reuse: boolean;
+  lineup_mode: LineupMode;
+  team_member_limit: number | null;
+  team_match_type: TeamMatchType | null;   // ???좉퇋
+}
+
+// ?? 議곗씤??UI???뺤옣 ?????
+
+export interface ClubWithMembers extends Club {
+  members: ClubMember[];
+}
+
+export interface TieWithClubs extends Tie {
+  club_a: Club | null;
+  club_b: Club | null;
+}
+
+export interface TieWithDetails extends TieWithClubs {
+  rubbers: TieRubberWithPlayers[];
+  group_name?: string;
+}
+
+export interface TieRubberWithPlayers extends TieRubber {
+  club_a_player1?: ClubMember;
+  club_a_player2?: ClubMember;
+  club_b_player1?: ClubMember;
+  club_b_player2?: ClubMember;
+}
+
+export interface StandingWithClub extends TeamStanding {
+  club: Club;
+  is_tied: boolean;
+}
+
+export interface LineupEntry {
+  rubber_number: number;
+  player1_id: string;
+  player2_id: string;
+}
+
+// ?? RPC ?묐떟 怨듯넻 ??
+
+export interface RpcResult {
+  success: boolean;
+  error?: string;
+  [key: string]: unknown;
+}
+
+// ?? ?숆린????
+
+export interface SyncLog {
+  id: string;
+  event_id: string;
+  sync_type: 'individual' | 'team';
+  app_a_record_id: string;
+  app_b_record_id: string;
+  app_b_table: string;
+  status: string;
+  synced_at: string;
+  error_message: string | null;
+}
+
+

@@ -1,0 +1,3742 @@
+﻿========== src\app\layout.tsx ==========
+import type { Metadata, Viewport } from 'next'
+import './globals.css'
+
+export const metadata: Metadata = {
+  title: '?쒖＜???뚮땲?????,
+  description: '?쒖＜???뚮땲??????댁쁺 ?쒖뒪??,
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: '?뚮땲?ㅻ???,
+  },
+  icons: {
+    icon: '/favicon.png',
+    apple: '/icon-152x152.png',
+  },
+}
+
+export const viewport: Viewport = {
+  themeColor: '#ff5520',
+  width: 'device-width',
+  initialScale: 1,
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="ko">
+      <head>
+        <meta name="mobile-web-app-capable" content="yes" />
+        <link rel="apple-touch-icon" sizes="192x192" href="/icon-192x192.png" />
+      </head>
+      <body>
+        {children}
+
+        {/* Service Worker ?깅줉 */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              if ('serviceWorker' in navigator) {
+                window.addEventListener('load', function() {
+                  navigator.serviceWorker.register('/sw.js')
+                    .then(function(reg) { console.log('[SW] ?깅줉 ?꾨즺:', reg.scope); })
+                    .catch(function(err) { console.error('[SW] ?ㅻ쪟:', err); });
+                });
+              }
+            `,
+          }}
+        />
+      </body>
+    </html>
+  )
+}
+
+
+========== src\app\page.tsx ==========
+'use client'
+import { useState, useEffect } from 'react'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+
+const MEMBER_CARDS = [
+  {
+    href: '/events',
+    emoji: '?벟',
+    title: '???蹂닿린',
+    desc: '議곕퀎由ш렇 쨌 ?좊꼫癒쇳듃 쨌 寃쎄린寃곌낵 쨌 ?대깽?명쁽??,
+    color: 'bg-gradient-to-br from-emerald-50 to-green-100 border-green-200 hover:border-green-400',
+    iconBg: 'bg-white/70',
+    badge: 'LIVE',
+  },
+  {
+    href: '/pin',
+    emoji: '?뱥',
+    title: '?먯닔 吏곸젒?낅젰',
+    desc: 'PIN?쇰줈 ??寃쎄린 寃곌낵 吏곸젒 ?낅젰',
+    color: 'bg-gradient-to-br from-amber-50 to-yellow-100 border-amber-200 hover:border-amber-400',
+    iconBg: 'bg-white/70',
+    badge: null,
+  },
+]
+
+const ADMIN_CARDS = [
+  {
+    href: '/venue',
+    emoji: '?룦',
+    title: '?꾩옣 寃쎄린愿由?,
+    desc: '寃쎄린??PIN?쇰줈 ?대깽??愿由?,
+    color: 'bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200 hover:border-orange-400',
+    wide: false,
+  },
+  {
+    href: '/admin-pin',
+    emoji: '?뵎',
+    title: '愿由ъ옄 紐⑤뱶',
+    desc: '留덉뒪?캰IN?쇰줈 ?먯닔議곗젙/?ㅼ젙',
+    color: 'bg-gradient-to-br from-red-50 to-rose-100 border-red-200 hover:border-red-400',
+    wide: false,
+  },
+  {
+    href: '/dashboard',
+    emoji: '?뱤',
+    title: '????댁쁺 ??쒕낫??,
+    desc: '?愿由?쨌 議고렪??쨌 寃쎄린 쨌 ?대깽?몄꽕???꾩껜 愿由?,
+    color: 'bg-gradient-to-br from-blue-50 to-sky-100 border-blue-200 hover:border-blue-400',
+    wide: true,
+  },
+]
+
+interface Stats {
+  inProgress: number
+  activeCourts: number
+  totalTeams: number
+}
+
+export default function HomePage() {
+  const [activeTab, setActiveTab] = useState<'member' | 'admin'>('member')
+  const [stats, setStats] = useState<Stats>({ inProgress: 0, activeCourts: 0, totalTeams: 0 })
+  const [statsLoading, setStatsLoading] = useState(true)
+
+  useEffect(() => {
+    async function fetchStats() {
+      try {
+        const { data: activeEvents } = await supabase
+          .from('events')
+          .select('id')
+          .eq('status', 'active')
+
+        if (!activeEvents || activeEvents.length === 0) {
+          setStatsLoading(false)
+          return
+        }
+
+        const eventIds = activeEvents.map(e => e.id)
+
+        const matchInProgressPromise = supabase
+          .from('matches')
+          .select('*', { count: 'exact', head: true })
+          .in('event_id', eventIds)
+          .eq('status', 'IN_PROGRESS')
+
+        const tieInProgressPromise = supabase
+          .from('ties')
+          .select('*', { count: 'exact', head: true })
+          .in('event_id', eventIds)
+          .eq('status', 'in_progress')
+
+        const courtMatchesPromise = supabase
+          .from('matches')
+          .select('court')
+          .in('event_id', eventIds)
+          .eq('status', 'IN_PROGRESS')
+          .not('court', 'is', null)
+
+        const totalTeamsPromise = supabase
+          .from('teams')
+          .select('*', { count: 'exact', head: true })
+          .in('event_id', eventIds)
+
+        const [
+          { count: matchInProgress },
+          { count: tieInProgress },
+          { data: courtMatches },
+          { count: totalTeams },
+        ] = await Promise.all([
+          matchInProgressPromise,
+          tieInProgressPromise,
+          courtMatchesPromise,
+          totalTeamsPromise,
+        ])
+
+        const activeCourts = new Set(courtMatches?.map(m => m.court)).size
+
+        setStats({
+          inProgress: (matchInProgress ?? 0) + (tieInProgress ?? 0),
+          activeCourts,
+          totalTeams: totalTeams ?? 0,
+        })
+      } catch (e) {
+        console.error('stats fetch error', e)
+      } finally {
+        setStatsLoading(false)
+      }
+    }
+
+    fetchStats()
+    const timer = setInterval(fetchStats, 30000)
+    return () => clearInterval(timer)
+  }, [])
+
+  return (
+    <div className="min-h-screen bg-stone-100 flex flex-col items-center justify-start py-8 px-4">
+      <div className="w-full max-w-sm">
+
+        {/* Header */}
+        <div className="rounded-3xl overflow-hidden mb-4 shadow-lg"
+          style={{ background: 'linear-gradient(135deg, #1a2e1a 0%, #2d5016 50%, #3d6b1e 100%)' }}>
+          <div className="px-6 py-7 flex items-center gap-4 relative overflow-hidden">
+            <div className="absolute -top-8 -right-8 w-36 h-36 rounded-full bg-white/5" />
+            <div className="absolute -bottom-6 -left-6 w-24 h-24 rounded-full bg-white/5" />
+            <div className="relative z-10 w-14 h-14 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center text-3xl backdrop-blur-sm flex-shrink-0">
+              ?렱
+            </div>
+            <div className="relative z-10">
+              <h1 className="text-white text-xl font-black tracking-tight leading-tight">?쒖＜?쒗뀒?덉뒪???/h1>
+              <p className="text-white/50 text-xs tracking-widest uppercase mt-0.5">Tennis Tournament Manager</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Tab Bar */}
+        <div className="bg-white rounded-2xl shadow-sm flex mb-4 p-1 gap-1">
+          <button
+            onClick={() => setActiveTab('member')}
+            className={`flex-1 flex flex-col items-center py-3 rounded-xl text-xs font-bold transition-all gap-1
+              ${activeTab === 'member'
+                ? 'bg-green-600 text-white shadow-md shadow-green-200'
+                : 'text-stone-400 hover:text-stone-600'}`}
+          >
+            <span className="text-base">?렱</span>
+            ?뚯썝
+          </button>
+          <button
+            onClick={() => setActiveTab('admin')}
+            className={`flex-1 flex flex-col items-center py-3 rounded-xl text-xs font-bold transition-all gap-1
+              ${activeTab === 'admin'
+                ? 'bg-stone-700 text-white shadow-md shadow-stone-300'
+                : 'text-stone-400 hover:text-stone-600'}`}
+          >
+            <span className="text-base">?숋툘</span>
+            愿由ъ옄
+          </button>
+        </div>
+
+        {/* Member Tab */}
+        {activeTab === 'member' && (
+          <div className="flex flex-col gap-3">
+            <p className="text-xs font-bold tracking-widest uppercase text-stone-400 px-1">?뚯썝 硫붾돱</p>
+
+            {MEMBER_CARDS.map(card => (
+              <Link
+                key={card.href}
+                href={card.href}
+                className={`relative flex items-center gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm hover:shadow-md active:scale-[0.98] ${card.color}`}
+              >
+                {card.badge && (
+                  <span className="absolute top-3 right-4 bg-red-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-full tracking-wide">
+                    {card.badge}
+                  </span>
+                )}
+                <div className={`w-13 h-13 min-w-[52px] min-h-[52px] rounded-2xl ${card.iconBg} flex items-center justify-center text-2xl shadow-sm`}>
+                  {card.emoji}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h2 className="font-black text-base text-stone-800 leading-tight">{card.title}</h2>
+                  <p className="text-xs text-stone-500 mt-1 leading-relaxed">{card.desc}</p>
+                </div>
+                <span className="text-stone-300 text-xl font-light">??/span>
+              </Link>
+            ))}
+
+            {/* Quick Stats */}
+            <div className="bg-white rounded-2xl p-4 shadow-sm mt-1">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-bold text-stone-400">?꾩옱 吏꾪뻾 ?꾪솴</p>
+                {statsLoading && (
+                  <span className="text-[10px] text-stone-300 animate-pulse">遺덈윭?ㅻ뒗 以?..</span>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { num: statsLoading ? '쨌' : String(stats.inProgress), label: '吏꾪뻾以?寃쎄린' },
+                  { num: statsLoading ? '쨌' : String(stats.activeCourts), label: '?ъ슜 肄뷀듃' },
+                  { num: statsLoading ? '쨌' : String(stats.totalTeams), label: '李멸??' },
+                ].map(s => (
+                  <div key={s.label} className="bg-stone-50 rounded-xl py-3 text-center">
+                    <div className="text-xl font-black text-green-700">{s.num}</div>
+                    <div className="text-[10px] text-stone-400 mt-0.5">{s.label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Admin Tab */}
+        {activeTab === 'admin' && (
+          <div className="flex flex-col gap-3">
+            <p className="text-xs font-bold tracking-widest uppercase text-stone-400 px-1">愿由ъ옄 湲곕뒫</p>
+
+            <div className="grid grid-cols-2 gap-3">
+              {ADMIN_CARDS.filter(c => !c.wide).map(card => (
+                <Link
+                  key={card.href}
+                  href={card.href}
+                  className={`flex flex-col p-4 rounded-2xl border-2 transition-all shadow-sm hover:shadow-md active:scale-[0.98] ${card.color}`}
+                >
+                  <div className="text-2xl mb-3">{card.emoji}</div>
+                  <h2 className="font-black text-sm text-stone-800 leading-tight">{card.title}</h2>
+                  <p className="text-[11px] text-stone-500 mt-1 leading-relaxed">{card.desc}</p>
+                  <div className="mt-3 inline-flex items-center gap-1 bg-black/8 rounded-full px-2 py-0.5 self-start">
+                    <span className="text-[10px]">?뵏</span>
+                    <span className="text-[10px] font-bold text-stone-500">PIN ?꾩슂</span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+
+            {ADMIN_CARDS.filter(c => c.wide).map(card => (
+              <Link
+                key={card.href}
+                href={card.href}
+                className={`flex items-center gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm hover:shadow-md active:scale-[0.98] ${card.color}`}
+              >
+                <div className="text-3xl">{card.emoji}</div>
+                <div className="flex-1">
+                  <h2 className="font-black text-base text-stone-800 leading-tight">{card.title}</h2>
+                  <p className="text-xs text-stone-500 mt-1 leading-relaxed">{card.desc}</p>
+                  <div className="mt-2 inline-flex items-center gap-1 bg-black/8 rounded-full px-2 py-0.5">
+                    <span className="text-[10px]">?뵏</span>
+                    <span className="text-[10px] font-bold text-stone-500">PIN ?꾩슂</span>
+                  </div>
+                </div>
+                <span className="text-stone-300 text-xl font-light">??/span>
+              </Link>
+            ))}
+          </div>
+        )}
+
+        {/* Footer */}
+        <p className="text-center text-[11px] text-stone-400 mt-6">?렱 ?쒖＜?쒗뀒?덉뒪?묓쉶</p>
+      </div>
+    </div>
+  )
+}
+
+========== src\app\admin-pin\page.tsx ==========
+'use client'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+
+export default function AdminPinPage() {
+  const router = useRouter()
+  const [events, setEvents] = useState<any[]>([])
+  const [selectedEvent, setSelectedEvent] = useState('')
+  const [pin, setPin] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    supabase.from('events').select('id, name').eq('status', 'active')
+      .then(({ data }) => {
+        setEvents(data || [])
+        if (data?.length === 1) setSelectedEvent(data[0].id)
+      })
+  }, [])
+
+  async function handleSubmit() {
+    if (!selectedEvent) { setError('??뚮? ?좏깮?댁＜?몄슂.'); return }
+    if (!pin) { setError('留덉뒪??PIN???낅젰?댁＜?몄슂.'); return }
+    setError(''); setLoading(true)
+
+    const { data, error: err } = await supabase.rpc('rpc_admin_pin_login', {
+      p_master_pin: pin,
+      p_event_id: selectedEvent,
+    })
+    setLoading(false)
+
+    if (err) { setError(err.message || '留덉뒪??PIN???щ컮瑜댁? ?딆뒿?덈떎.'); return }
+
+    sessionStorage.setItem('admin_pin_session', JSON.stringify(data))
+    router.push('/admin-pin/manage')
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center p-4">
+      <Link href="/" className="text-stone-400 hover:text-stone-600 mb-8">???덉쑝濡?/Link>
+
+      <div className="text-5xl mb-4">?썳截?/div>
+      <h1 className="text-2xl font-bold mb-2">愿由ъ옄 ?꾧뎄</h1>
+      <p className="text-stone-500 text-sm mb-8">留덉뒪??PIN???낅젰?섏꽭??(30遺??몄뀡)</p>
+
+      <div className="w-full max-w-sm space-y-4">
+        {events.length > 1 && (
+          <select value={selectedEvent} onChange={e => setSelectedEvent(e.target.value)}
+            className="w-full border border-stone-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-red-500">
+            <option value="">????좏깮</option>
+            {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+          </select>
+        )}
+
+        <input type="tel" value={pin}
+          onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
+          onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+          placeholder="留덉뒪??PIN"
+          className="pin-input w-full" autoFocus />
+
+        {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+
+        <button onClick={handleSubmit} disabled={loading || !pin}
+          className="w-full bg-red-600 text-white font-bold py-3.5 rounded-xl hover:bg-red-700 disabled:opacity-50 transition-all">
+          {loading ? '?뺤씤 以?..' : '愿由ъ옄 濡쒓렇??}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+
+========== src\app\admin-pin\manage\page.tsx ==========
+'use client'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
+import { fetchTies, fetchClubMembers } from '@/lib/team-api'
+import { getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority } from '@/lib/team-utils'
+import type { TieWithClubs, TeamLineup, ClubMember } from '@/types/team'
+
+type Tab = 'individual' | 'team'
+
+export default function AdminPinManagePage() {
+  const router = useRouter()
+  const [session, setSession] = useState<any>(null)
+  const [tab, setTab] = useState<Tab>('individual')
+
+  // ?? 媛쒖씤????
+  const [searchQuery, setSearchQuery] = useState('')
+  const [allMatches, setAllMatches] = useState<any[]>([])
+  const [selectedMatch, setSelectedMatch] = useState<any>(null)
+  const [newScore, setNewScore] = useState('')
+  const [newWinner, setNewWinner] = useState<'A' | 'B' | ''>('')
+  const [reason, setReason] = useState('')
+  const [msg, setMsg] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  // ?? ?⑥껜????
+  const [ties, setTies] = useState<TieWithClubs[]>([])
+  const [tiesLoading, setTiesLoading] = useState(false)
+  const [tieSearchQuery, setTieSearchQuery] = useState('')
+  const [selectedTie, setSelectedTie] = useState<TieWithClubs | null>(null)
+  const [tieLineups, setTieLineups] = useState<TeamLineup[]>([])
+  const [memberMap, setMemberMap] = useState<Record<string, ClubMember>>({})
+  const [tieRubbers, setTieRubbers] = useState<any[]>([])
+
+  // ?⑥껜???먯닔 ?낅젰 state
+  const [scoringRubber, setScoringRubber] = useState<string | null>(null)
+  const [set1a, setSet1a] = useState('')
+  const [set1b, setSet1b] = useState('')
+  const [set2a, setSet2a] = useState('')
+  const [set2b, setSet2b] = useState('')
+  const [set3a, setSet3a] = useState('')
+  const [set3b, setSet3b] = useState('')
+  const [setsPerRubber, setSetsPerRubber] = useState(1)
+  const [scoreError, setScoreError] = useState('')
+  const [scoreSaving, setScoreSaving] = useState(false)
+  const [tieMsg, setTieMsg] = useState('')
+
+  useEffect(() => {
+    const raw = sessionStorage.getItem('admin_pin_session')
+    if (!raw) { router.push('/admin-pin'); return }
+    const s = JSON.parse(raw)
+    setSession(s)
+    loadAllMatches(s.event_id)
+    loadTiesData(s.event_id)
+  }, [])
+
+  async function loadAllMatches(eventId: string) {
+    const { data } = await supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId).order('slot')
+    setAllMatches(data || [])
+  }
+
+  async function loadTiesData(eventId: string) {
+    setTiesLoading(true)
+    try {
+      const { data: ev } = await supabase.from('events').select('team_sets_per_rubber').eq('id', eventId).single()
+      setSetsPerRubber(ev?.team_sets_per_rubber || 1)
+      const data = await fetchTies(eventId)
+      setTies(data)
+    } catch {}
+    setTiesLoading(false)
+  }
+
+  // 媛쒖씤???꾪꽣
+  const filtered = allMatches.filter(m => {
+    if (!searchQuery) return false
+    const q = searchQuery.toLowerCase()
+    return (m.match_num||'').toLowerCase().includes(q)
+      || (m.team_a_name||'').toLowerCase().includes(q)
+      || (m.team_b_name||'').toLowerCase().includes(q)
+      || (m.division_name||'').toLowerCase().includes(q)
+      || (m.round||'').toLowerCase().includes(q)
+  })
+
+  // ?⑥껜???꾪꽣
+  const filteredTies = ties.filter(tie => {
+    if (!tieSearchQuery) return false
+    const q = tieSearchQuery.toLowerCase()
+    return (tie.club_a?.name||'').toLowerCase().includes(q)
+      || (tie.club_b?.name||'').toLowerCase().includes(q)
+      || (tie.tie_order?.toString()||'').includes(q)
+      || (tie.round||'').toLowerCase().includes(q)
+  })
+
+  async function selectMatch(m: any) {
+    setSelectedMatch(m)
+    setNewScore(m.score || '')
+    setNewWinner(m.winner_team_id===m.team_a_id?'A':m.winner_team_id===m.team_b_id?'B':'')
+    setReason('')
+    setMsg('')
+  }
+
+  async function handleUnlock() {
+    if (!session || !selectedMatch) return
+    setLoading(true); setMsg('')
+    const { error } = await supabase.rpc('rpc_admin_pin_unlock_match', {
+      p_token: session.token, p_match_id: selectedMatch.id, p_reason: reason||'愿由ъ옄 ?댁젣'
+    })
+    setLoading(false)
+    if (error) { setMsg('??'+error.message); return }
+    setMsg('???좉툑???댁젣?섏뿀?듬땲??')
+    loadAllMatches(session.event_id); setSelectedMatch(null)
+  }
+
+  async function handleUpdateScore() {
+    if (!session||!selectedMatch||!newScore||!newWinner) { setMsg('?먯닔? ?뱀옄瑜?紐⑤몢 ?낅젰?댁＜?몄슂.'); return }
+    setLoading(true); setMsg('')
+    const winnerId = newWinner==='A' ? selectedMatch.team_a_id : selectedMatch.team_b_id
+    const { error } = await supabase.rpc('rpc_admin_pin_update_score', {
+      p_token: session.token, p_match_id: selectedMatch.id, p_score: newScore, p_winner_team_id: winnerId
+    })
+    setLoading(false)
+    if (error) { setMsg('??'+error.message); return }
+    setMsg('??寃곌낵媛 ?섏젙?섏뿀?듬땲??')
+    loadAllMatches(session.event_id); setSelectedMatch(null)
+  }
+
+  async function handleSelectTie(tie: TieWithClubs) {
+    if (selectedTie?.id === tie.id) { setSelectedTie(null); setScoringRubber(null); return }
+    setSelectedTie(tie); setScoringRubber(null); setTieMsg('')
+    const [lineupData, rubberData] = await Promise.all([
+      // ?댁쁺?먮뒗 is_revealed 愿怨꾩뾾???꾩껜 議고쉶
+      supabase.from('team_lineups').select('*').eq('tie_id', tie.id).order('rubber_number'),
+      supabase.from('tie_rubbers').select('*').eq('tie_id', tie.id).order('rubber_number'),
+    ])
+    setTieLineups((lineupData.data || []) as TeamLineup[])
+    setTieRubbers(rubberData.data || [])
+    const mm: Record<string, ClubMember> = {}
+    if (tie.club_a_id) { (await fetchClubMembers(tie.club_a_id)).forEach(m => { mm[m.id]=m }) }
+    if (tie.club_b_id) { (await fetchClubMembers(tie.club_b_id)).forEach(m => { mm[m.id]=m }) }
+    setMemberMap(mm)
+  }
+
+  function startScoring(rubber: any) {
+    setScoringRubber(rubber.id); setScoreError('')
+    setSet1a(rubber.set1_a?.toString()||''); setSet1b(rubber.set1_b?.toString()||'')
+    setSet2a(rubber.set2_a?.toString()||''); setSet2b(rubber.set2_b?.toString()||'')
+    setSet3a(rubber.set3_a?.toString()||''); setSet3b(rubber.set3_b?.toString()||'')
+  }
+
+  async function handleTieScoreSave() {
+    if (!set1a || !set1b) { setScoreError('1?명듃 ?먯닔瑜??낅젰?섏꽭??'); return }
+    setScoreSaving(true); setScoreError('')
+    try {
+      const { data, error: err } = await supabase.rpc('rpc_admin_record_score', {
+        p_rubber_id: scoringRubber,
+        p_set1_a: parseInt(set1a), p_set1_b: parseInt(set1b),
+        p_set2_a: set2a ? parseInt(set2a) : null, p_set2_b: set2b ? parseInt(set2b) : null,
+        p_set3_a: set3a ? parseInt(set3a) : null, p_set3_b: set3b ? parseInt(set3b) : null,
+      })
+      if (err) { setScoreError(err.message); return }
+      if (data && !data.success) { setScoreError(data.error || '????ㅽ뙣'); return }
+
+      // ?곗씠???덈줈怨좎묠
+      const [rubberData, tieData] = await Promise.all([
+        supabase.from('tie_rubbers').select('*').eq('tie_id', selectedTie!.id).order('rubber_number'),
+        supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)').eq('id', selectedTie!.id).single(),
+      ])
+      setTieRubbers(rubberData.data || [])
+      if (tieData.data) {
+        setSelectedTie(tieData.data as any)
+        setTies(prev => prev.map(t => t.id === selectedTie!.id ? tieData.data as any : t))
+      }
+      setScoringRubber(null)
+      setTieMsg('???먯닔 ??λ맖')
+      setTimeout(() => setTieMsg(''), 3000)
+    } catch (err: any) {
+      setScoreError(err.message || '????ㅽ뙣')
+    } finally {
+      setScoreSaving(false)
+    }
+  }
+
+  function getMemberName(id: string|null|undefined): string {
+    return id && memberMap[id] ? memberMap[id].name : '-'
+  }
+
+  function handleLogout() { sessionStorage.removeItem('admin_pin_session'); router.push('/admin-pin') }
+
+  if (!session) return null
+
+  return (
+    <div className="min-h-screen">
+      <header className="bg-red-700 text-white sticky top-0 z-10">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div>
+            <h1 className="font-bold">?썳截?愿由ъ옄 ?꾧뎄</h1>
+            <p className="text-xs text-white/60">{session.event_name} 쨌 30遺??몄뀡</p>
+          </div>
+          <button onClick={handleLogout} className="text-sm text-white/60 hover:text-white">濡쒓렇?꾩썐</button>
+        </div>
+      </header>
+
+      <div className="max-w-2xl mx-auto px-4 pt-4">
+        <div className="flex gap-2 mb-4">
+          <button onClick={() => { setTab('individual'); setSelectedMatch(null); setMsg('') }}
+            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition ${tab==='individual'?'bg-red-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            ?렱 媛쒖씤??          </button>
+          <button onClick={() => { setTab('team'); setSelectedTie(null); setScoringRubber(null); setTieMsg('') }}
+            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition ${tab==='team'?'bg-blue-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            ?뱥 ?⑥껜??          </button>
+        </div>
+      </div>
+
+      <main className="max-w-2xl mx-auto px-4 pb-8 space-y-3">
+
+        {/* ?먥븧?먥븧?먥븧 媛쒖씤???먥븧?먥븧?먥븧 */}
+        {tab === 'individual' && (
+          <>
+            {msg && (
+              <div className={`p-3 rounded-lg text-sm ${msg.startsWith('??)?'bg-green-50 text-green-700':'bg-red-50 text-red-600'}`}>
+                {msg}
+              </div>
+            )}
+            <div className="relative">
+              <input type="text" placeholder="?紐? 寃쎄린踰덊샇, 遺?쒕챸 寃??.."
+                value={searchQuery}
+                onChange={e => { setSearchQuery(e.target.value); setSelectedMatch(null); setMsg('') }}
+                className="w-full border-2 rounded-xl px-4 py-3 pr-10 focus:border-red-500 outline-none"
+                autoFocus
+              />
+              {searchQuery && (
+                <button onClick={() => { setSearchQuery(''); setSelectedMatch(null) }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">??/button>
+              )}
+            </div>
+
+            {!searchQuery && (
+              <div className="text-center py-10 text-gray-400">
+                <div className="text-3xl mb-2">?뵇</div>
+                <p>?紐??먮뒗 寃쎄린踰덊샇瑜?寃?됲븯?몄슂</p>
+              </div>
+            )}
+            {searchQuery && filtered.length === 0 && (
+              <div className="text-center py-8 text-gray-400">寃??寃곌낵媛 ?놁뒿?덈떎.</div>
+            )}
+
+            {filtered.map(m => (
+              <div key={m.id} onClick={() => selectMatch(m)}
+                className={`bg-white rounded-xl border p-4 cursor-pointer transition ${selectedMatch?.id===m.id?'border-red-400 bg-red-50':'hover:border-gray-300'}`}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-gray-400">{m.match_num} 쨌 {m.division_name} 쨌 {m.round}</span>
+                  <div className="flex items-center gap-2">
+                    {m.locked_by_participant && <span className="text-xs text-red-500">?뵏</span>}
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${m.status==='FINISHED'?'bg-green-100 text-green-700':m.status==='IN_PROGRESS'?'bg-red-100 text-red-700':'bg-gray-100 text-gray-500'}`}>
+                      {m.status==='FINISHED'?'?꾨즺':m.status==='IN_PROGRESS'?'吏꾪뻾以?:'?湲?}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">{m.team_a_name}</span>
+                  <span className="text-gray-400 font-bold mx-2">{m.score || 'vs'}</span>
+                  <span className="font-medium">{m.team_b_name}</span>
+                </div>
+              </div>
+            ))}
+
+            {selectedMatch && (
+              <div className="bg-white rounded-xl border-2 border-red-300 p-5">
+                <h3 className="font-bold text-lg mb-1">寃쎄린 ?섏젙</h3>
+                <div className="text-xs text-stone-400 mb-4">{selectedMatch.match_num} 쨌 {selectedMatch.division_name} 쨌 {selectedMatch.round}</div>
+                <div className="flex items-center justify-center gap-4 my-4">
+                  <div className="text-center flex-1"><div className="font-bold">{selectedMatch.team_a_name||'TBD'}</div><span className="text-xs text-stone-400">? A</span></div>
+                  <span className="text-2xl text-stone-300 font-bold">VS</span>
+                  <div className="text-center flex-1"><div className="font-bold">{selectedMatch.team_b_name||'TBD'}</div><span className="text-xs text-stone-400">? B</span></div>
+                </div>
+                {selectedMatch.score && (
+                  <div className="text-center mb-4 text-sm">?꾩옱: <strong>{selectedMatch.score}</strong>
+                    {selectedMatch.winner_name && <span> ???? {selectedMatch.winner_name}</span>}
+                    {selectedMatch.locked_by_participant && <span className="ml-2 text-red-500">?뵏 李멸??먯옞湲?/span>}
+                  </div>
+                )}
+                <hr className="my-4" />
+                {selectedMatch.locked_by_participant && (
+                  <div className="mb-4 p-3 bg-amber-50 rounded-lg">
+                    <p className="text-sm font-bold text-amber-700 mb-2">?뵑 ?좉툑 ?댁젣</p>
+                    <input type="text" placeholder="?댁젣 ?ъ쑀 (?좏깮)" value={reason} onChange={e => setReason(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm mb-2" />
+                    <button onClick={handleUnlock} disabled={loading} className="w-full bg-amber-500 text-white py-2 rounded-lg font-medium hover:bg-amber-600 disabled:opacity-50">
+                      {loading?'泥섎━ 以?..':'?좉툑 ?댁젣 + 寃곌낵 珥덇린??}
+                    </button>
+                  </div>
+                )}
+                <div className="p-3 bg-stone-50 rounded-lg">
+                  <p className="text-sm font-bold mb-3">?륅툘 寃곌낵 ?섏젙</p>
+                  <div className="mb-3">
+                    <label className="text-xs text-stone-500">?먯닔</label>
+                    <input type="text" placeholder="6:4" value={newScore} onChange={e => setNewScore(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-center text-lg font-bold mt-1" />
+                  </div>
+                  <div className="mb-3">
+                    <label className="text-xs text-stone-500">?뱀옄</label>
+                    <div className="flex gap-2 mt-1">
+                      <button onClick={() => setNewWinner('A')} className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${newWinner==='A'?'bg-red-600 text-white border-red-600':'border-stone-300 hover:border-red-400'}`}>A: {selectedMatch.team_a_name||'TBD'}</button>
+                      <button onClick={() => setNewWinner('B')} className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${newWinner==='B'?'bg-red-600 text-white border-red-600':'border-stone-300 hover:border-red-400'}`}>B: {selectedMatch.team_b_name||'TBD'}</button>
+                    </div>
+                  </div>
+                  <button onClick={handleUpdateScore} disabled={loading||!newScore||!newWinner} className="w-full bg-red-600 text-white py-2.5 rounded-lg font-bold hover:bg-red-700 disabled:opacity-50">
+                    {loading?'泥섎━ 以?..':'寃곌낵 ???}
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ?먥븧?먥븧?먥븧 ?⑥껜???먥븧?먥븧?먥븧 */}
+        {tab === 'team' && (
+          <>
+            {tieMsg && (
+              <div className={`p-3 rounded-lg text-sm ${tieMsg.startsWith('??)?'bg-green-50 text-green-700':'bg-red-50 text-red-600'}`}>
+                {tieMsg}
+              </div>
+            )}
+            <div className="relative">
+              <input type="text" placeholder="?대읇紐? ?쇱슫?? 踰덊샇 寃??.."
+                value={tieSearchQuery}
+                onChange={e => { setTieSearchQuery(e.target.value); setSelectedTie(null); setScoringRubber(null) }}
+                className="w-full border-2 rounded-xl px-4 py-3 pr-10 focus:border-blue-500 outline-none"
+                autoFocus
+              />
+              {tieSearchQuery && (
+                <button onClick={() => { setTieSearchQuery(''); setSelectedTie(null); setScoringRubber(null) }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">??/button>
+              )}
+            </div>
+
+            {!tieSearchQuery && (
+              <div className="text-center py-10 text-gray-400">
+                <div className="text-3xl mb-2">?뵇</div>
+                <p>?대읇紐??먮뒗 ?쇱슫?쒕? 寃?됲븯?몄슂</p>
+                <p className="text-xs mt-1 text-gray-300">?? "?곕룄", "16媛?, "1"</p>
+              </div>
+            )}
+            {tiesLoading && <div className="text-center py-8 text-gray-400">濡쒕뵫以?..</div>}
+            {tieSearchQuery && !tiesLoading && filteredTies.length === 0 && (
+              <div className="text-center py-8 text-gray-400">寃??寃곌낵媛 ?놁뒿?덈떎.</div>
+            )}
+
+            <div className="space-y-3">
+              {filteredTies.map(tie => {
+                const isSelected = selectedTie?.id === tie.id
+                const maj = getMajority(tie.rubber_count)
+                const aWin = tie.club_a_rubbers_won >= maj
+                const bWin = tie.club_b_rubbers_won >= maj
+                return (
+                  <div key={tie.id} className="bg-white rounded-xl border overflow-hidden">
+                    <div onClick={() => handleSelectTie(tie)} className="p-4 cursor-pointer hover:bg-gray-50 transition">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs text-gray-400">#{tie.tie_order}</span>
+                          <span className={`font-semibold ${aWin?'text-blue-600':''}`}>{tie.club_a?.name||'TBD'}</span>
+                          <span className="text-gray-400 text-sm">vs</span>
+                          <span className={`font-semibold ${bWin?'text-blue-600':''}`}>{tie.club_b?.name||'TBD'}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {(tie.status==='completed'||tie.status==='in_progress') && (
+                            <span className="text-lg font-bold">{tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}</span>
+                          )}
+                          <span className={`text-xs px-2 py-1 rounded-full ${getTieStatusColor(tie.status)}`}>
+                            {getTieStatusLabel(tie.status)}
+                          </span>
+                          <span className="text-gray-400 text-xs">{isSelected?'??:'??}</span>
+                        </div>
+                      </div>
+                      {tie.round && (
+                        <div className="text-xs text-gray-400 mt-1">{tie.round}</div>
+                      )}
+                    </div>
+
+                    {isSelected && (
+                      <div className="border-t bg-gray-50 p-4 space-y-3">
+                        {/* ?щ쾭蹂??먯닔 */}
+                        {Array.from({ length: tie.rubber_count }, (_, i) => i+1).map(num => {
+                          const laA = tieLineups.find(l => l.rubber_number===num && l.club_id===tie.club_a_id)
+                          const laB = tieLineups.find(l => l.rubber_number===num && l.club_id===tie.club_b_id)
+                          const rubber = tieRubbers.find((r: any) => r.rubber_number===num)
+                          const hasScore = rubber?.set1_a !== null && rubber?.set1_a !== undefined
+                          const isScoring = scoringRubber === rubber?.id
+
+                          return (
+                            <div key={num} className={`bg-white rounded-lg border p-3 ${rubber?.status==='completed'?'border-green-200':''}`}>
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="font-medium text-sm">?щ쾭 {num}</span>
+                                {rubber?.status==='completed' && (
+                                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">?꾨즺</span>
+                                )}
+                              </div>
+
+                              {/* ?쇱씤??*/}
+                              {(laA || laB) && (
+                                <div className="grid grid-cols-5 items-center gap-1 text-xs mb-2">
+                                  <div className="col-span-2 text-right">
+                                    <div className="font-medium">{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</div>
+                                    <div className="text-gray-400">{tie.club_a?.name}</div>
+                                  </div>
+                                  <div className="text-center text-gray-400 font-bold">vs</div>
+                                  <div className="col-span-2">
+                                    <div className="font-medium">{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</div>
+                                    <div className="text-gray-400">{tie.club_b?.name}</div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* ?먯닔 ?쒖떆 */}
+                              {hasScore && !isScoring && (
+                                <div className="flex items-center justify-between">
+                                  <div className="text-center flex-1 py-1 bg-gray-50 rounded text-sm font-bold">
+                                    {formatSetScore(rubber.set1_a, rubber.set1_b)}
+                                    {rubber.set2_a !== null && ' / '+formatSetScore(rubber.set2_a, rubber.set2_b)}
+                                    {rubber.set3_a !== null && ' / '+formatSetScore(rubber.set3_a, rubber.set3_b)}
+                                    {rubber.winning_club_id && (
+                                      <span className="text-xs text-blue-600 ml-2">
+                                        ?? {rubber.winning_club_id===tie.club_a_id?tie.club_a?.name:tie.club_b?.name}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <button onClick={() => startScoring(rubber)}
+                                    className="ml-2 text-xs text-amber-500 hover:text-amber-700 px-2 py-1 rounded hover:bg-amber-50">
+                                    ?섏젙
+                                  </button>
+                                </div>
+                              )}
+
+                              {/* ?먯닔 ?놁쑝硫??낅젰 踰꾪듉 */}
+                              {!hasScore && !isScoring && rubber && (
+                                <button onClick={() => startScoring(rubber)}
+                                  className="w-full bg-blue-50 text-blue-700 py-2 rounded-lg text-sm font-medium hover:bg-blue-100">
+                                  + ?먯닔 ?낅젰
+                                </button>
+                              )}
+
+                              {/* ?먯닔 ?낅젰 ??*/}
+                              {isScoring && rubber && (
+                                <div className="space-y-2 mt-2 border-t pt-3">
+                                  <SetRow label="1?명듃" aVal={set1a} bVal={set1b} setA={setSet1a} setB={setSet1b} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
+                                  {setsPerRubber === 3 && (<>
+                                    <SetRow label="2?명듃" aVal={set2a} bVal={set2b} setA={setSet2a} setB={setSet2b} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
+                                    <SetRow label="3?명듃" aVal={set3a} bVal={set3b} setA={setSet3a} setB={setSet3b} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
+                                  </>)}
+                                  {scoreError && <p className="text-red-500 text-xs">{scoreError}</p>}
+                                  <div className="flex gap-2">
+                                    <button onClick={() => { setScoringRubber(null); setScoreError('') }}
+                                      className="flex-1 bg-gray-100 py-2 rounded-lg text-sm">痍⑥냼</button>
+                                    <button onClick={handleTieScoreSave} disabled={scoreSaving}
+                                      className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
+                                      {scoreSaving ? '??μ쨷...' : '?먯닔 ?뺤젙'}
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
+      </main>
+    </div>
+  )
+}
+
+function SetRow({ label, aVal, bVal, setA, setB, clubA, clubB }: {
+  label: string; aVal: string; bVal: string
+  setA: (v: string) => void; setB: (v: string) => void
+  clubA?: string; clubB?: string
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-gray-500 w-12">{label}</span>
+      <div className="flex items-center gap-1 flex-1">
+        <div className="flex-1 text-center">
+          <div className="text-[10px] text-gray-400 mb-0.5">{clubA?.slice(0,5)}</div>
+          <input type="number" min="0" max="7" value={aVal} onChange={e => setA(e.target.value)}
+            className="w-full border-2 rounded-lg px-2 py-2 text-center text-lg focus:border-blue-500 outline-none" />
+        </div>
+        <span className="text-gray-400 font-bold">:</span>
+        <div className="flex-1 text-center">
+          <div className="text-[10px] text-gray-400 mb-0.5">{clubB?.slice(0,5)}</div>
+          <input type="number" min="0" max="7" value={bVal} onChange={e => setB(e.target.value)}
+            className="w-full border-2 rounded-lg px-2 py-2 text-center text-lg focus:border-blue-500 outline-none" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+========== src\app\events\page.tsx ==========
+'use client'
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+
+export default function EventsPage() {
+  const [events, setEvents] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    supabase.from('events').select('*').order('date', { ascending: false })
+      .then(({ data }) => { setEvents(data || []); setLoading(false) })
+  }, [])
+
+  return (
+    <div className="min-h-screen">
+      <header className="bg-white border-b sticky top-0 z-10">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
+          <Link href="/" className="text-stone-400 hover:text-stone-600">??/Link>
+          <h1 className="text-lg font-bold">?렱 ???紐⑸줉</h1>
+        </div>
+      </header>
+      <main className="max-w-2xl mx-auto px-4 py-6">
+        {loading ? (
+          <p className="text-center py-20 text-stone-400">遺덈윭?ㅻ뒗 以?..</p>
+        ) : events.length === 0 ? (
+          <p className="text-center py-20 text-stone-400">?깅줉????뚭? ?놁뒿?덈떎.</p>
+        ) : (
+          <div className="space-y-3">
+            {events.map(e => (
+              <Link key={e.id} href={'/events/' + e.id}
+                className="block bg-white rounded-xl border p-4 hover:border-stone-400 transition-all">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="font-bold text-lg">{e.name}</h2>
+                      {e.event_type && (
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${
+                          e.event_type === 'both' ? 'bg-purple-100 text-purple-700' :
+                          e.event_type === 'team' ? 'bg-green-100 text-green-700' :
+                          'bg-blue-100 text-blue-700'
+                        }`}>
+                          {e.event_type === 'both' ? '媛쒖씤+?⑥껜' : e.event_type === 'team' ? '?⑥껜?? : '媛쒖씤??}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-stone-500 mt-1">{e.date} 쨌 {e.location}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={'text-xs px-2 py-1 rounded-full ' + (e.status === 'active' ? 'bg-green-100 text-green-700' : e.status === 'completed' ? 'bg-stone-100 text-stone-500' : 'bg-amber-100 text-amber-700')}>
+                      {e.status === 'active' ? '吏꾪뻾以? : e.status === 'completed' ? '?꾨즺' : '以鍮꾩쨷'}
+                    </span>
+                    <span className="text-stone-400">??/span>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}
+
+========== src\app\events\[id]\page.tsx ==========
+// ============================================================
+// src/app/events/[id]/page.tsx
+// ??TeamBracketView: 媛濡?釉뚮옒???뺥깭濡?援먯껜 (?댁쁺?먯? ?숈씪)
+// ============================================================
+'use client'
+import { useEffect, useState, useCallback } from 'react'
+import { useParams } from 'next/navigation'
+import Link from 'next/link'
+import { supabase, Division, Match } from '@/lib/supabase'
+import TournamentBracket from '@/components/TournamentBracket'
+import CourtBoard from '@/components/CourtBoard'
+import { fetchClubs, fetchTies, fetchStandings, fetchEventTeamConfig } from '@/lib/team-api'
+import { getFormatLabel, getRoundLabel, getTieStatusLabel, getTieStatusColor, getMajority } from '@/lib/team-utils'
+import type { Club, TieWithClubs, StandingWithClub, EventTeamConfig } from '@/types/team'
+
+type Mode = 'individual' | 'team'
+type IndividualTab = 'groups' | 'tournament' | 'results' | 'courts'
+type TeamTab = 'standings' | 'matches' | 'bracket' | 'courts'
+
+async function logAccess(eventId: string, page: string, tab?: string) {
+  try {
+    const device = window.innerWidth < 768 ? 'mobile' : 'desktop'
+    await supabase.from('access_logs').insert({ event_id: eventId, page, tab: tab || null, device })
+  } catch {}
+}
+
+export default function EventDetailPage() {
+  const { id } = useParams()
+  const eventId = id as string
+  const [event, setEvent] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [mode, setMode] = useState<Mode>('individual')
+
+  const [divisions, setDivisions] = useState<Division[]>([])
+  const [activeDivision, setActiveDivision] = useState('')
+  const [iTab, setITab] = useState<IndividualTab>('groups')
+
+  const [tTab, setTTab] = useState<TeamTab>('standings')
+  const [teamConfig, setTeamConfig] = useState<EventTeamConfig | null>(null)
+  const [clubs, setClubs] = useState<Club[]>([])
+  const [ties, setTies] = useState<TieWithClubs[]>([])
+  const [groups, setGroups] = useState<any[]>([])
+  const [standingsMap, setStandingsMap] = useState<Record<string, StandingWithClub[]>>({})
+
+  const [teamDivisions, setTeamDivisions] = useState<Division[]>([])
+  const [selectedTeamDiv, setSelectedTeamDiv] = useState<string>('')
+
+  useEffect(() => {
+    (async () => {
+      const { data: ev } = await supabase.from('events').select('*').eq('id', eventId).single()
+      setEvent(ev)
+      if (ev?.event_type === 'team') setMode('team')
+      else setMode('individual')
+
+      const { data: divs } = await supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order')
+      setDivisions(divs || [])
+      if (divs?.length) setActiveDivision(divs[0].id)
+      setTeamDivisions(divs || [])
+      if (divs?.length) setSelectedTeamDiv(divs[0].id)
+
+      await loadTeamData(divs?.[0]?.id)
+      setLoading(false)
+      logAccess(eventId, 'event_detail')
+    })()
+  }, [eventId])
+
+  useEffect(() => {
+    if (!eventId || loading) return
+    if (mode === 'individual') logAccess(eventId, 'event_detail', iTab)
+  }, [iTab, mode, eventId, loading])
+
+  useEffect(() => {
+    if (!eventId || loading) return
+    if (mode === 'team') logAccess(eventId, 'event_detail', `team_${tTab}`)
+  }, [tTab, mode, eventId, loading])
+
+  const loadTeamData = useCallback(async (divisionId?: string) => {
+    const divId = divisionId || selectedTeamDiv || undefined
+    const [cfg, clubList, tieList] = await Promise.all([
+      fetchEventTeamConfig(eventId),
+      fetchClubs(eventId, divId || null),
+      fetchTies(eventId),
+    ])
+    setTeamConfig(cfg)
+    setClubs(clubList)
+    const filteredTies = divId ? tieList.filter(t => (t as any).division_id === divId) : tieList
+    setTies(filteredTies)
+
+    const map: Record<string, StandingWithClub[]> = {}
+    if (cfg?.team_format === 'full_league') {
+      map['full'] = await fetchStandings(eventId, null)
+    } else {
+      const { data: grps } = await supabase.from('groups').select('*').eq('event_id', eventId).order('group_num')
+      const filteredGrps = divId ? (grps || []).filter((g: any) => g.division_id === divId) : (grps || [])
+      setGroups(filteredGrps)
+      for (const g of filteredGrps) {
+        map[g.id] = await fetchStandings(eventId, g.id)
+      }
+    }
+    setStandingsMap(map)
+  }, [eventId, selectedTeamDiv])
+
+  async function handleTeamDivChange(divId: string) {
+    setSelectedTeamDiv(divId)
+    await loadTeamData(divId)
+  }
+
+  useEffect(() => {
+    if (mode !== 'team') return
+    const interval = setInterval(() => loadTeamData(), 30000)
+    return () => clearInterval(interval)
+  }, [mode, loadTeamData])
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center text-stone-400">遺덈윭?ㅻ뒗 以?..</div>
+  if (!event) return <div className="min-h-screen flex items-center justify-center text-stone-400">??뚮? 李얠쓣 ???놁뒿?덈떎.</div>
+
+  const individualTabs: { key: IndividualTab; label: string; emoji: string }[] = [
+    { key: 'groups', label: '議고렪??, emoji: '?뱥' },
+    { key: 'tournament', label: '?좊꼫癒쇳듃', emoji: '?룇' },
+    { key: 'results', label: '寃쎄린寃곌낵', emoji: '?뱤' },
+    { key: 'courts', label: '肄뷀듃?꾪솴', emoji: '?렱' },
+  ]
+  const teamTabs: { key: TeamTab; label: string; emoji: string }[] = [
+    { key: 'standings', label: '?쒖쐞', emoji: '?뱤' },
+    { key: 'matches', label: '寃쎄린寃곌낵', emoji: '?뱥' },
+    { key: 'bracket', label: '?좊꼫癒쇳듃', emoji: '?룇' },
+    { key: 'courts', label: '肄뷀듃?꾪솴', emoji: '?렱' },
+  ]
+
+  const liveTies = ties.filter(t => t.status === 'in_progress')
+
+  return (
+    <div className="min-h-screen">
+      <header className="bg-[#2d5016] text-white sticky top-0 z-10">
+        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
+          <Link href="/events" className="text-white/60 hover:text-white">??/Link>
+          <div className="flex-1">
+            <h1 className="font-bold text-lg">{event.name}</h1>
+            <p className="text-xs text-white/60">{event.date} 쨌 {event.location}</p>
+          </div>
+        </div>
+
+        {(!event.event_type || event.event_type === 'both') && (
+          <div className="max-w-5xl mx-auto px-4 flex gap-2 pb-2">
+            <button onClick={() => setMode('individual')}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium transition ${mode === 'individual' ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'}`}>
+              ?렱 媛쒖씤??            </button>
+            <button onClick={() => setMode('team')}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium transition ${mode === 'team' ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'}`}>
+              ?룇 ?⑥껜??            </button>
+          </div>
+        )}
+
+        {event.event_type && event.event_type !== 'both' && (
+          <div className="max-w-5xl mx-auto px-4 pb-2">
+            <span className="px-4 py-1.5 rounded-full text-sm font-medium bg-white text-[#2d5016]">
+              {event.event_type === 'team' ? '?룇 ?⑥껜?? : '?렱 媛쒖씤??}
+            </span>
+          </div>
+        )}
+
+        {mode === 'individual' && divisions.length > 1 && iTab !== 'courts' && (
+          <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
+            {divisions.map(d => (
+              <button key={d.id} onClick={() => setActiveDivision(d.id)}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                  activeDivision === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
+                }`}>{d.name}</button>
+            ))}
+          </div>
+        )}
+
+        {mode === 'team' && teamDivisions.length > 1 && tTab !== 'courts' && (
+          <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
+            {teamDivisions.map(d => (
+              <button key={d.id} onClick={() => handleTeamDivChange(d.id)}
+                className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                  selectedTeamDiv === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
+                }`}>{d.name}</button>
+            ))}
+          </div>
+        )}
+
+        <div className="max-w-5xl mx-auto px-4 flex border-t border-white/10">
+          {mode === 'individual' ? (
+            individualTabs.map(t => (
+              <button key={t.key} onClick={() => setITab(t.key)}
+                className={`flex-1 py-2.5 text-sm font-medium border-b-2 transition-all ${
+                  iTab === t.key ? 'border-white text-white' : 'border-transparent text-white/50'
+                }`}>{t.emoji} {t.label}</button>
+            ))
+          ) : (
+            teamTabs.map(t => (
+              <button key={t.key} onClick={() => setTTab(t.key)}
+                className={`flex-1 py-2.5 text-sm font-medium border-b-2 transition-all ${
+                  tTab === t.key ? 'border-white text-white' : 'border-transparent text-white/50'
+                }`}>{t.emoji} {t.label}</button>
+            ))
+          )}
+        </div>
+      </header>
+
+      <main className="max-w-5xl mx-auto px-4 py-6">
+        {mode === 'individual' && (<>
+          {iTab === 'groups'     && <GroupsView eventId={eventId} divisionId={activeDivision} />}
+          {iTab === 'tournament' && <TournamentView eventId={eventId} divisionId={activeDivision} />}
+          {iTab === 'results'    && <ResultsView eventId={eventId} divisionId={activeDivision} />}
+          {iTab === 'courts'     && <CourtBoard eventId={eventId} />}
+        </>)}
+
+        {mode === 'team' && (<>
+          {liveTies.length > 0 && (
+            <div className="bg-gradient-to-r from-red-50 to-orange-50 border-2 border-red-300 rounded-xl p-4 mb-6 shadow-sm">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="inline-flex items-center gap-1.5 bg-red-500 text-white text-xs font-bold px-3 py-1 rounded-full animate-pulse">
+                  ?뵶 LIVE
+                </span>
+                <h2 className="font-bold text-red-800">吏湲?吏꾪뻾 以묒씤 寃쎄린</h2>
+                <span className="text-xs text-red-500 ml-auto">{liveTies.length}寃쎄린</span>
+              </div>
+              <div className="space-y-2">
+                {liveTies.map(tie => (
+                  <div key={tie.id} className="bg-white rounded-xl p-3 flex items-center justify-between shadow-sm border border-red-100">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm">{tie.club_a?.name}</span>
+                        <span className="text-gray-400 text-xs">vs</span>
+                        <span className="font-bold text-sm">{tie.club_b?.name}</span>
+                      </div>
+                      {tie.court_number && (
+                        <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded mt-1 inline-block">
+                          肄뷀듃 {tie.court_number}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-2xl font-black text-red-600">
+                      {tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tTab === 'standings' && <TeamStandingsView standingsMap={standingsMap} groups={groups} />}
+          {tTab === 'matches'   && <TeamMatchesView ties={ties} />}
+          {tTab === 'bracket'   && <TeamBracketView ties={ties} />}
+          {tTab === 'courts'    && <CourtBoard eventId={eventId} />}
+
+          <div className="text-center mt-6">
+            <button onClick={() => loadTeamData()} className="text-sm text-gray-400 hover:text-gray-600">
+              ?봽 ?덈줈怨좎묠
+            </button>
+            <p className="text-xs text-gray-300 mt-1">30珥덈쭏???먮룞 媛깆떊</p>
+          </div>
+        </>)}
+      </main>
+    </div>
+  )
+}
+
+// =====================================
+// 媛쒖씤??酉?// =====================================
+function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: string }) {
+  const [data, setData] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    setLoading(true)
+    supabase.from('v_group_board').select('*').eq('event_id', eventId).eq('division_id', divisionId)
+      .order('group_num').order('team_num')
+      .then(({ data: rows }) => {
+        const map = new Map<string, { label: string; num: number; teams: any[] }>()
+        for (const r of (rows || [])) {
+          if (!map.has(r.group_id)) map.set(r.group_id, { label: r.group_label, num: r.group_num, teams: [] })
+          map.get(r.group_id)!.teams.push(r)
+        }
+        setData(Array.from(map.values()).sort((a, b) => a.num - b.num))
+        setLoading(false)
+      })
+  }, [eventId, divisionId])
+  if (loading) return <p className="text-center py-10 text-stone-400">遺덈윭?ㅻ뒗 以?..</p>
+  if (!data.length) return <p className="text-center py-10 text-stone-400">?꾩쭅 議고렪?깆씠 ?놁뒿?덈떎.</p>
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {data.map(g => (
+        <div key={g.label} className="bg-white rounded-xl border overflow-hidden">
+          <div className="bg-tennis-600 text-white px-4 py-2 font-bold text-sm">{g.label}</div>
+          <div className="p-3">
+            {g.teams.map((t: any, i: number) => (
+              <div key={t.team_id} className="flex items-center gap-2 py-2 border-b border-stone-100 last:border-0">
+                <span className="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-500">{i + 1}</span>
+                <span className="font-medium text-sm">{t.team_name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TournamentView({ eventId, divisionId }: { eventId: string; divisionId: string }) {
+  const [matches, setMatches] = useState<Match[]>([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    setLoading(true)
+    supabase.from('matches').select('*')
+      .eq('event_id', eventId).eq('division_id', divisionId).eq('stage', 'FINALS')
+      .order('round').order('match_num')
+      .then(({ data }) => { setMatches(data || []); setLoading(false) })
+  }, [eventId, divisionId])
+  if (loading) return <p className="text-center py-10 text-stone-400">遺덈윭?ㅻ뒗 以?..</p>
+  if (!matches.length) return <p className="text-center py-10 text-stone-400">?꾩쭅 ?좊꼫癒쇳듃媛 ?놁뒿?덈떎.</p>
+  return <TournamentBracket matches={matches} />
+}
+
+function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: string }) {
+  const [matches, setMatches] = useState<Match[]>([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    setLoading(true)
+    supabase.from('v_matches_with_teams').select('*')
+      .eq('event_id', eventId).eq('division_id', divisionId).eq('status', 'FINISHED')
+      .neq('score', 'BYE').order('updated_at', { ascending: false }).limit(50)
+      .then(({ data }) => { setMatches(data || []); setLoading(false) })
+  }, [eventId, divisionId])
+  if (loading) return <p className="text-center py-10 text-stone-400">遺덈윭?ㅻ뒗 以?..</p>
+  if (!matches.length) return <p className="text-center py-10 text-stone-400">?꾨즺??寃쎄린媛 ?놁뒿?덈떎.</p>
+  return (
+    <div className="space-y-2">
+      {(matches as any[]).map((m: any) => (
+        <div key={m.id} className="bg-white rounded-xl border p-3">
+          <div className="flex items-center justify-between text-xs text-stone-400 mb-1">
+            <span>{m.round} 쨌 {m.match_num}</span>
+            {m.court && <span className="text-green-700 font-medium">{m.court}</span>}
+          </div>
+          <div className="flex items-center justify-between">
+            <span className={`font-medium ${m.winner_team_id === m.team_a_id ? 'text-green-700 font-bold' : ''}`}>{m.team_a_name}</span>
+            <span className="text-xl font-black mx-4">{m.score}</span>
+            <span className={`font-medium ${m.winner_team_id === m.team_b_id ? 'text-green-700 font-bold' : ''}`}>{m.team_b_name}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// =====================================
+// ?⑥껜??酉?// =====================================
+function TeamStandingsView({ standingsMap, groups }: { standingsMap: Record<string, StandingWithClub[]>; groups: any[] }) {
+  if (Object.keys(standingsMap).length === 0) {
+    return <p className="text-center py-10 text-stone-400">?꾩쭅 ?쒖쐞 ?곗씠?곌? ?놁뒿?덈떎.</p>
+  }
+  return (
+    <div className="space-y-4">
+      {Object.entries(standingsMap).map(([key, standings]) => {
+        const title = key === 'full' ? '?由ш렇 ?쒖쐞' : groups.find(g => g.id === key)?.group_name || ''
+        return (
+          <div key={key} className="bg-white rounded-xl border overflow-hidden">
+            <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">{title}</div>
+            <table className="w-full text-sm">
+              <thead className="border-t bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-left w-12">#</th>
+                  <th className="px-3 py-2 text-left">?대읇</th>
+                  <th className="px-3 py-2 text-center w-10">??/th>
+                  <th className="px-3 py-2 text-center w-10">??/th>
+                  <th className="px-3 py-2 text-center w-14">?앹떎</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {standings.map(s => (
+                  <tr key={s.id} className={s.is_tied ? 'bg-yellow-50' : ''}>
+                    <td className="px-3 py-2 font-bold">{s.rank ?? <span className="text-yellow-500 text-xs">?숈젏</span>}</td>
+                    <td className="px-3 py-2 font-medium">
+                      {s.club?.name}
+                      {s.club?.seed_number && <span className="ml-1 text-xs text-yellow-600">[{s.club.seed_number}]</span>}
+                    </td>
+                    <td className="px-3 py-2 text-center font-medium">{s.won}</td>
+                    <td className="px-3 py-2 text-center">{s.lost}</td>
+                    <td className="px-3 py-2 text-center">
+                      <span className={s.rubber_diff > 0 ? 'text-green-600' : s.rubber_diff < 0 ? 'text-red-600' : ''}>
+                        {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
+  if (ties.length === 0) return <div className="text-center text-gray-400 py-8">??닿? ?놁뒿?덈떎.</div>
+  return (
+    <div className="space-y-2">
+      {ties.map(tie => (
+        <div key={tie.id} className={`bg-white rounded-xl border p-4 ${tie.is_bye ? 'opacity-50' : ''}`}>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-gray-400">{getRoundLabel(tie.round || '')} #{tie.tie_order}</span>
+            <span className={`text-xs px-2 py-0.5 rounded ${getTieStatusColor(tie.status)}`}>{getTieStatusLabel(tie.status)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <span className={`font-medium ${tie.winning_club_id === tie.club_a_id ? 'text-green-700' : ''}`}>
+                {tie.club_a?.name || 'TBD'}
+              </span>
+            </div>
+            <div className="text-center px-4">
+              {tie.status === 'completed' || tie.status === 'in_progress' ? (
+                <span className={`text-xl font-bold ${tie.status === 'in_progress' ? 'text-red-600' : ''}`}>
+                  {tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}
+                </span>
+              ) : tie.is_bye ? (
+                <span className="text-sm text-gray-400">BYE</span>
+              ) : (
+                <span className="text-sm text-gray-400">vs</span>
+              )}
+            </div>
+            <div className="flex-1 text-right">
+              <span className={`font-medium ${tie.winning_club_id === tie.club_b_id ? 'text-green-700' : ''}`}>
+                {tie.club_b?.name || 'TBD'}
+              </span>
+            </div>
+          </div>
+          {tie.court_number && <div className="text-xs text-center text-green-600 mt-2">肄뷀듃 {tie.court_number}</div>}
+          {tie.status === 'lineup_phase' && (
+            <div className="text-xs text-center text-yellow-600 mt-2">
+              ?쇱씤?? {tie.club_a_lineup_submitted ? '?? : '??} {tie.club_a?.name}
+              {' 쨌 '}
+              {tie.club_b_lineup_submitted ? '?? : '??} {tie.club_b?.name}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ??媛濡?釉뚮옒???뺥깭 (?댁쁺????쒕낫?쒖? ?숈씪)
+function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
+  const ROUND_ORDER = ['round_of_16', 'quarter', 'semi', 'final']
+  const roundLabels: Record<string, string> = {
+    round_of_16: '16媛?, quarter: '8媛?, semi: '4媛?, final: '寃곗듅',
+  }
+
+  const tournamentTies = ties.filter(t =>
+    ['round_of_16', 'quarter', 'semi', 'final'].includes(t.round || '')
+  )
+
+  if (tournamentTies.length === 0) {
+    return <div className="text-center text-gray-400 py-8">?좊꼫癒쇳듃媛 ?꾩쭅 ?쒖옉?섏? ?딆븯?듬땲??</div>
+  }
+
+  const tiesByRound: Record<string, TieWithClubs[]> = {}
+  tournamentTies.forEach(t => {
+    const r = t.round || ''
+    if (!tiesByRound[r]) tiesByRound[r] = []
+    tiesByRound[r].push(t)
+  })
+  const sortedRounds = ROUND_ORDER.filter(r => tiesByRound[r])
+
+  const finalTie = tiesByRound['final']?.[0]
+  const winner = finalTie?.winning_club_id
+    ? (finalTie.winning_club_id === finalTie.club_a_id ? finalTie.club_a?.name : finalTie.club_b?.name)
+    : null
+
+  return (
+    <div className="space-y-4">
+      {winner && (
+        <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-4 text-center">
+          <div className="text-3xl mb-1">?룇</div>
+          <div className="text-xl font-bold">{winner}</div>
+          <div className="text-sm text-yellow-700 mt-1">?곗듅!</div>
+        </div>
+      )}
+      <div className="overflow-x-auto">
+        <div className="flex gap-4 min-w-max pb-2">
+          {sortedRounds.map((round, roundIdx) => {
+            const roundTies = (tiesByRound[round] || []).sort(
+              (a, b) => (a.bracket_position || 0) - (b.bracket_position || 0)
+            )
+            const gap = Math.pow(2, roundIdx) * 12
+            return (
+              <div key={round} className="flex flex-col" style={{ minWidth: 180 }}>
+                <div className="text-center mb-3">
+                  <span className="text-xs font-semibold text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
+                    {roundLabels[round] || round}
+                  </span>
+                </div>
+                <div className="flex flex-col justify-around flex-1" style={{ gap }}>
+                  {roundTies.map(tie => {
+                    const aWin = tie.winning_club_id === tie.club_a_id
+                    const bWin = tie.winning_club_id === tie.club_b_id
+                    return (
+                      <div key={tie.id} className={`border rounded-xl overflow-hidden shadow-sm ${
+                        tie.status === 'completed' ? 'border-green-300' :
+                        tie.status === 'in_progress' ? 'border-red-300' :
+                        tie.is_bye ? 'border-gray-100 bg-gray-50' : 'border-gray-200'
+                      }`} style={{ minHeight: 68 }}>
+                        {tie.status === 'in_progress' && (
+                          <div className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />LIVE
+                          </div>
+                        )}
+                        <div className={`flex items-center justify-between px-3 py-2 text-sm ${aWin ? 'bg-green-50 font-bold' : ''}`}>
+                          <span className="truncate">{tie.club_a?.name || (tie.is_bye && !tie.club_a_id ? 'BYE' : 'TBD')}</span>
+                          {(tie.status === 'completed' || tie.status === 'in_progress') && (
+                            <span className={`ml-2 font-bold flex-shrink-0 ${aWin ? 'text-green-700' : tie.status === 'in_progress' ? 'text-red-600' : 'text-gray-400'}`}>
+                              {tie.club_a_rubbers_won}
+                            </span>
+                          )}
+                        </div>
+                        <div className="border-t border-gray-100" />
+                        <div className={`flex items-center justify-between px-3 py-2 text-sm ${bWin ? 'bg-green-50 font-bold' : ''}`}>
+                          <span className="truncate">{tie.club_b?.name || (tie.is_bye && !tie.club_b_id ? 'BYE' : 'TBD')}</span>
+                          {(tie.status === 'completed' || tie.status === 'in_progress') && (
+                            <span className={`ml-2 font-bold flex-shrink-0 ${bWin ? 'text-green-700' : tie.status === 'in_progress' ? 'text-red-600' : 'text-gray-400'}`}>
+                              {tie.club_b_rubbers_won}
+                            </span>
+                          )}
+                        </div>
+                        {tie.is_bye && (
+                          <div className="text-center py-0.5 border-t border-gray-100 bg-gray-50">
+                            <span className="text-[10px] text-gray-400">遺?꾩듅</span>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })}
+          <div className="flex flex-col justify-center" style={{ minWidth: 120 }}>
+            <div className="text-center mb-3">
+              <span className="text-xs font-semibold text-yellow-600 bg-yellow-50 px-3 py-1 rounded-full">?룇 ?곗듅</span>
+            </div>
+            <div className="border-2 border-dashed border-yellow-200 rounded-xl p-4 text-center">
+              {winner
+                ? <div className="font-bold text-yellow-700">{winner}</div>
+                : <div className="text-gray-300 text-sm">?</div>
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+========== src\app\events\[id]\team\page.tsx ==========
+// ============================================================
+// ?⑥껜??怨듦컻酉?(愿?뚭컼/李멸??먯슜)
+// src/app/events/[id]/team/page.tsx
+// ============================================================
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import { useParams } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
+import { fetchClubs, fetchTies, fetchStandings, fetchEventTeamConfig } from '@/lib/team-api';
+import {
+  getFormatLabel, getRoundLabel, getTieStatusLabel, getTieStatusColor,
+  formatSetScore, getMajority, calculateBracket,
+} from '@/lib/team-utils';
+import type { Club, TieWithClubs, StandingWithClub, EventTeamConfig } from '@/types/team';
+
+type Tab = 'standings' | 'matches' | 'bracket';
+
+export default function TeamPublicViewPage() {
+  const params = useParams();
+  const eventId = params.id as string;
+
+  const [event, setEvent] = useState<any>(null);
+  const [config, setConfig] = useState<EventTeamConfig | null>(null);
+  const [clubs, setClubs] = useState<Club[]>([]);
+  const [ties, setTies] = useState<TieWithClubs[]>([]);
+  const [groups, setGroups] = useState<any[]>([]);
+  const [standingsMap, setStandingsMap] = useState<Record<string, StandingWithClub[]>>({});
+  const [tab, setTab] = useState<Tab>('standings');
+  const [loading, setLoading] = useState(true);
+
+  const loadData = useCallback(async () => {
+    if (!eventId) return;
+    setLoading(true);
+
+    const { data: ev } = await supabase.from('events').select('*').eq('id', eventId).single();
+    setEvent(ev);
+
+    const [cfg, clubList, tieList] = await Promise.all([
+      fetchEventTeamConfig(eventId),
+      fetchClubs(eventId),
+      fetchTies(eventId),
+    ]);
+    setConfig(cfg);
+    setClubs(clubList);
+    setTies(tieList);
+
+    // ?쒖쐞
+    const map: Record<string, StandingWithClub[]> = {};
+    if (cfg?.team_format === 'full_league') {
+      map['full'] = await fetchStandings(eventId, null);
+    } else {
+      const { data: grps } = await supabase
+        .from('groups')
+        .select('*')
+        .eq('event_id', eventId)
+        .order('group_index');
+      setGroups(grps || []);
+      for (const g of (grps || [])) {
+        map[g.id] = await fetchStandings(eventId, g.id);
+      }
+    }
+    setStandingsMap(map);
+    setLoading(false);
+  }, [eventId]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // ?먮룞 ?덈줈怨좎묠 (30珥?
+  useEffect(() => {
+    const interval = setInterval(loadData, 30000);
+    return () => clearInterval(interval);
+  }, [loadData]);
+
+  // ???遺꾨쪟
+  const leagueTies = ties.filter(t => t.round === 'full_league' || t.round === 'group');
+  const tournamentTies = ties.filter(t => ['round_of_16', 'quarter', 'semi', 'final'].includes(t.round || ''));
+  const liveTies = ties.filter(t => t.status === 'in_progress');
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center text-gray-500">濡쒕뵫以?..</div>;
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-4xl mx-auto p-4 space-y-4">
+
+        {/* ?ㅻ뜑 */}
+        <div className="bg-white rounded-xl border p-6 text-center">
+          <h1 className="text-2xl font-bold">{event?.name || '?⑥껜??}</h1>
+          <p className="text-gray-500 mt-1">
+            {config ? getFormatLabel(config.team_format) : ''} 쨌 {clubs.length}? 쨌 {config?.team_rubber_count}蹂듭떇
+          </p>
+        </div>
+
+        {/* ?ㅼ떆媛?寃쎄린 */}
+        {liveTies.length > 0 && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+            <h2 className="font-semibold text-green-800 mb-2">?뵶 吏꾪뻾以묒씤 寃쎄린</h2>
+            <div className="space-y-2">
+              {liveTies.map(tie => (
+                <div key={tie.id} className="bg-white rounded-lg p-3 flex items-center justify-between">
+                  <div>
+                    <span className="font-medium">{tie.club_a?.name}</span>
+                    <span className="text-gray-400 mx-2">vs</span>
+                    <span className="font-medium">{tie.club_b?.name}</span>
+                  </div>
+                  <span className="text-lg font-bold text-green-700">
+                    {tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ??*/}
+        <div className="flex bg-white rounded-xl border overflow-hidden">
+          {(['standings', 'matches', 'bracket'] as Tab[]).map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`flex-1 py-3 text-sm font-medium transition ${
+                tab === t ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {t === 'standings' ? '?뱤 ?쒖쐞' : t === 'matches' ? '?뷂툘 ??? : '?룆 ?좊꼫癒쇳듃'}
+            </button>
+          ))}
+        </div>
+
+        {/* ?? ?쒖쐞 ???? */}
+        {tab === 'standings' && (
+          <div className="space-y-4">
+            {Object.entries(standingsMap).map(([key, standings]) => {
+              const title = key === 'full'
+                ? '?由ш렇 ?쒖쐞'
+                : groups.find(g => g.id === key)?.group_name || '';
+
+              return (
+                <div key={key} className="bg-white rounded-xl border overflow-hidden">
+                  <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">{title}</div>
+                  <table className="w-full text-sm">
+                    <thead className="border-t bg-gray-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left w-12">#</th>
+                        <th className="px-3 py-2 text-left">?대읇</th>
+                        <th className="px-3 py-2 text-center w-10">??/th>
+                        <th className="px-3 py-2 text-center w-10">??/th>
+                        <th className="px-3 py-2 text-center w-14">?앹떎</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {standings.map(s => (
+                        <tr key={s.id} className={s.is_tied ? 'bg-yellow-50' : ''}>
+                          <td className="px-3 py-2 font-bold">
+                            {s.rank ?? <span className="text-yellow-500 text-xs">?좑툘</span>}
+                          </td>
+                          <td className="px-3 py-2 font-medium">
+                            {s.club?.name}
+                            {s.club?.seed_number && (
+                              <span className="ml-1 text-xs text-yellow-600">[{s.club.seed_number}]</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-center font-medium">{s.won}</td>
+                          <td className="px-3 py-2 text-center">{s.lost}</td>
+                          <td className="px-3 py-2 text-center">
+                            <span className={s.rubber_diff > 0 ? 'text-green-600' : s.rubber_diff < 0 ? 'text-red-600' : ''}>
+                              {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
+
+            {Object.keys(standingsMap).length === 0 && (
+              <div className="text-center text-gray-400 py-8">?꾩쭅 ?쒖쐞 ?곗씠?곌? ?놁뒿?덈떎.</div>
+            )}
+          </div>
+        )}
+
+        {/* ?? ??????? */}
+        {tab === 'matches' && (
+          <div className="space-y-2">
+            {ties.length === 0 ? (
+              <div className="text-center text-gray-400 py-8">??꾩씠 ?놁뒿?덈떎.</div>
+            ) : (
+              ties.map(tie => (
+                <div key={tie.id} className={`bg-white rounded-xl border p-4 ${tie.is_bye ? 'opacity-50' : ''}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-gray-400">
+                      {getRoundLabel(tie.round || '')} #{tie.tie_order}
+                    </span>
+                    <span className={`text-xs px-2 py-0.5 rounded ${getTieStatusColor(tie.status)}`}>
+                      {getTieStatusLabel(tie.status)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <span className={`font-medium ${tie.winning_club_id === tie.club_a_id ? 'text-green-700' : ''}`}>
+                        {tie.club_a?.name || 'TBD'}
+                      </span>
+                    </div>
+                    <div className="text-center px-4">
+                      {tie.status === 'completed' || tie.status === 'in_progress' ? (
+                        <span className="text-xl font-bold">
+                          {tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}
+                        </span>
+                      ) : tie.is_bye ? (
+                        <span className="text-sm text-gray-400">BYE</span>
+                      ) : (
+                        <span className="text-sm text-gray-400">vs</span>
+                      )}
+                    </div>
+                    <div className="flex-1 text-right">
+                      <span className={`font-medium ${tie.winning_club_id === tie.club_b_id ? 'text-green-700' : ''}`}>
+                        {tie.club_b?.name || 'TBD'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* ?쇱씤??遊됱씤 ?곹깭 */}
+                  {tie.status === 'lineup_phase' && (
+                    <div className="text-xs text-center text-yellow-600 mt-2">
+                      ?쇱씤?? {tie.club_a_lineup_submitted ? '?? : '??} {tie.club_a?.name}
+                      {' 쨌 '}
+                      {tie.club_b_lineup_submitted ? '?? : '??} {tie.club_b?.name}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* ?? ?좊꼫癒쇳듃 ???? */}
+        {tab === 'bracket' && (
+          <div className="space-y-4">
+            {tournamentTies.length === 0 ? (
+              <div className="text-center text-gray-400 py-8">?좊꼫癒쇳듃媛 ?꾩쭅 ?쒖옉?섏? ?딆븯?듬땲??</div>
+            ) : (
+              (() => {
+                const rounds = [...new Set(tournamentTies.map(t => t.round))].sort(
+                  (a, b) => {
+                    const order = ['round_of_16', 'quarter', 'semi', 'final'];
+                    return order.indexOf(a || '') - order.indexOf(b || '');
+                  }
+                );
+
+                return rounds.map(round => (
+                  <div key={round} className="bg-white rounded-xl border overflow-hidden">
+                    <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">
+                      {getRoundLabel(round || '')}
+                    </div>
+                    <div className="divide-y">
+                      {tournamentTies
+                        .filter(t => t.round === round)
+                        .sort((a, b) => (a.bracket_position || 0) - (b.bracket_position || 0))
+                        .map(tie => (
+                          <div key={tie.id} className="p-3">
+                            <div className="flex items-center">
+                              <div className={`flex-1 ${tie.winning_club_id === tie.club_a_id ? 'font-bold' : ''}`}>
+                                {tie.club_a?.seed_number && (
+                                  <span className="text-xs text-yellow-600 mr-1">[{tie.club_a.seed_number}]</span>
+                                )}
+                                {tie.club_a?.name || (tie.is_bye ? 'BYE' : 'TBD')}
+                              </div>
+                              <div className="px-4 font-bold">
+                                {tie.status === 'completed' || tie.status === 'in_progress'
+                                  ? `${tie.club_a_rubbers_won} - ${tie.club_b_rubbers_won}`
+                                  : tie.is_bye ? 'BYE' : 'vs'
+                                }
+                              </div>
+                              <div className={`flex-1 text-right ${tie.winning_club_id === tie.club_b_id ? 'font-bold' : ''}`}>
+                                {tie.club_b?.name || (tie.is_bye ? 'BYE' : 'TBD')}
+                                {tie.club_b?.seed_number && (
+                                  <span className="text-xs text-yellow-600 ml-1">[{tie.club_b.seed_number}]</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      }
+                    </div>
+                  </div>
+                ));
+              })()
+            )}
+
+            {/* ?곗듅 */}
+            {(() => {
+              const finalTie = tournamentTies.find(t => t.round === 'final');
+              if (finalTie?.winning_club_id) {
+                const winner = finalTie.winning_club_id === finalTie.club_a_id
+                  ? finalTie.club_a?.name
+                  : finalTie.club_b?.name;
+                return (
+                  <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-6 text-center">
+                    <div className="text-4xl mb-2">?룇</div>
+                    <div className="text-2xl font-bold">{winner}</div>
+                    <div className="text-sm text-yellow-700 mt-1">?곗듅!</div>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+          </div>
+        )}
+
+        {/* ?덈줈怨좎묠 */}
+        <div className="text-center">
+          <button
+            onClick={loadData}
+            className="text-sm text-gray-400 hover:text-gray-600"
+          >
+            ?봽 ?덈줈怨좎묠
+          </button>
+          <p className="text-xs text-gray-300 mt-1">30珥덈쭏???먮룞 媛깆떊</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+========== src\app\lineup\[tie_id]\page.tsx ==========
+// ============================================================
+// 주장 통합 페이지: 라인업 봉인 제출 + 점수 입력
+// src/app/lineup/[tie_id]/page.tsx
+//
+// - PIN 자동 인증 (sessionStorage)
+// - submitted 상태에서 5초 폴링 → 상대 제출 시 자동 revealed
+// - 점수: 이긴 팀 선택 → 점수 → 확정 (1회, 수정불가)
+// ★ 수정: events.team_match_type 읽어서 경기방식 표시
+// ============================================================
+'use client';
+
+import { useState, useEffect, useRef } from 'react';
+import { useParams } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
+import { fetchClubMembers, fetchLineups, fetchRevealedLineups, submitLineup, fetchRubbers } from '@/lib/team-api';
+import { getGenderLabel, formatSetScore, getMatchTypeShort } from '@/lib/team-utils';
+import type { Tie, Club, ClubMember, TeamLineup, LineupEntry, TieRubber } from '@/types/team';
+import PinSubscribeButton from '@/components/PinSubscribeButton'
+
+type Step = 'pin' | 'edit' | 'submitted' | 'revealed';
+
+export default function LineupPage() {
+  const params = useParams();
+  const tieId = params.tie_id as string;
+
+  const [tie, setTie] = useState<Tie | null>(null);
+  const [clubA, setClubA] = useState<Club | null>(null);
+  const [clubB, setClubB] = useState<Club | null>(null);
+  const [step, setStep] = useState<Step>('pin');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [pinInput, setPinInput] = useState('');
+  const [myClub, setMyClub] = useState<Club | null>(null);
+  const [opponentClub, setOpponentClub] = useState<Club | null>(null);
+  const [members, setMembers] = useState<ClubMember[]>([]);
+  const [lineups, setLineups] = useState<{ player1_id: string; player2_id: string }[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [revealedLineups, setRevealedLineups] = useState<TeamLineup[]>([]);
+  const [allMembers, setAllMembers] = useState<Record<string, ClubMember>>({});
+  const [rubbers, setRubbers] = useState<TieRubber[]>([]);
+  const [scoringRubber, setScoringRubber] = useState<string | null>(null);
+  const [selectedWinner, setSelectedWinner] = useState<'a' | 'b' | null>(null);
+  const [set1a, setSet1a] = useState('');
+  const [set1b, setSet1b] = useState('');
+  const [set2a, setSet2a] = useState('');
+  const [set2b, setSet2b] = useState('');
+  const [set3a, setSet3a] = useState('');
+  const [set3b, setSet3b] = useState('');
+  const [scoreSaving, setScoreSaving] = useState(false);
+  const [scoreError, setScoreError] = useState('');
+  const [setsPerRubber, setSetsPerRubber] = useState(1);
+  // ★ 신규: 경기방식 표시용
+  const [teamMatchType, setTeamMatchType] = useState<string | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const clubARef = useRef<Club | null>(null);
+  const clubBRef = useRef<Club | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data: t } = await supabase.from('ties').select('*').eq('id', tieId).single();
+      if (!t) { setError('대전을 찾을 수 없습니다.'); setLoading(false); return; }
+      setTie(t);
+      const { data: ca } = await supabase.from('clubs').select('*').eq('id', t.club_a_id).single();
+      const { data: cb } = await supabase.from('clubs').select('*').eq('id', t.club_b_id).single();
+      setClubA(ca); setClubB(cb);
+      clubARef.current = ca; clubBRef.current = cb;
+      // ★ 수정: team_match_type도 함께 조회
+      const { data: ev } = await supabase.from('events')
+        .select('team_sets_per_rubber, team_match_type')
+        .eq('id', t.event_id).single();
+      setSetsPerRubber(ev?.team_sets_per_rubber || 1);
+      setTeamMatchType(ev?.team_match_type || null);
+      // ✅ lineup_revealed OR 경기 진행중/완료 → 바로 revealed 단계
+      if (t.lineup_revealed || (t.club_a_lineup_submitted && t.club_b_lineup_submitted)) {
+        setStep('revealed');
+        await loadRevealedData(tieId, ca, cb);
+        await loadRubbers(tieId);
+        setLoading(false); return;
+      }
+      const savedPin = sessionStorage.getItem('captain_pin');
+      if (savedPin && ca && cb) {
+        const ok = await tryAutoLogin(savedPin, ca, cb, t);
+        if (ok) { setLoading(false); return; }
+      }
+      setLoading(false);
+    })();
+    return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
+  }, [tieId]);
+
+  // 폴링: submitted 상태에서 5초마다 체크
+  useEffect(() => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
+    if (step === 'submitted') {
+      pollingRef.current = setInterval(async () => {
+        const { data: t } = await supabase.from('ties').select('*').eq('id', tieId).single();
+        if (t && t.lineup_revealed) {
+          if (pollingRef.current) clearInterval(pollingRef.current);
+          setTie(t);
+          setStep('revealed');
+          await loadRevealedData(tieId, clubARef.current, clubBRef.current);
+          await loadRubbers(tieId);
+        }
+      }, 5000);
+    }
+    return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
+  }, [step, tieId]);
+
+  async function tryAutoLogin(savedPin: string, ca: Club, cb: Club, t: Tie): Promise<boolean> {
+    let club: Club | null = null; let opponent: Club | null = null;
+    if (ca.captain_pin === savedPin) { club = ca; opponent = cb; }
+    else if (cb.captain_pin === savedPin) { club = cb; opponent = ca; }
+    else return false;
+    setPinInput(savedPin); setMyClub(club); setOpponentClub(opponent);
+    const memberList = await fetchClubMembers(club.id); setMembers(memberList);
+    const existing = await fetchLineups(tieId, club.id);
+    if (existing.length > 0) {
+      if (t.lineup_revealed || (t.club_a_lineup_submitted && t.club_b_lineup_submitted)) {
+        setStep('revealed'); await loadRevealedData(tieId, ca, cb); await loadRubbers(tieId);
+      } else {
+        setLineups(Array.from({ length: t.rubber_count }, (_, i) => {
+          const l = existing.find(e => e.rubber_number === i + 1);
+          return { player1_id: l?.player1_id || '', player2_id: l?.player2_id || '' };
+        }));
+        setStep('submitted');
+      }
+    } else {
+      setLineups(Array.from({ length: t.rubber_count }, () => ({ player1_id: '', player2_id: '' })));
+      setStep('edit');
+    }
+    return true;
+  }
+
+  async function loadRevealedData(tid: string, ca: Club | null, cb: Club | null) {
+    const revealed = await fetchRevealedLineups(tid); setRevealedLineups(revealed);
+    const mm: Record<string, ClubMember> = {};
+    if (ca) { (await fetchClubMembers(ca.id)).forEach(m => { mm[m.id] = m; }); }
+    if (cb) { (await fetchClubMembers(cb.id)).forEach(m => { mm[m.id] = m; }); }
+    setAllMembers(mm);
+  }
+  async function loadRubbers(tid: string) { setRubbers(await fetchRubbers(tid)); }
+
+  async function handlePinSubmit() {
+    if (pinInput.length !== 6) { setError('PIN 6자리를 입력하세요.'); return; }
+    setError('');
+    if (clubA?.captain_pin === pinInput) { setMyClub(clubA); setOpponentClub(clubB); }
+    else if (clubB?.captain_pin === pinInput) { setMyClub(clubB); setOpponentClub(clubA); }
+    else { setError('PIN이 일치하지 않습니다.'); return; }
+    sessionStorage.setItem('captain_pin', pinInput);
+    const club = clubA?.captain_pin === pinInput ? clubA : clubB!;
+    const ml = await fetchClubMembers(club.id); setMembers(ml);
+    const existing = await fetchLineups(tieId, club.id);
+    if (existing.length > 0 && tie) {
+      if (tie.lineup_revealed || tie.status === 'in_progress' || tie.status === 'completed') { setStep('revealed'); await loadRevealedData(tieId, clubA, clubB); await loadRubbers(tieId); }
+      else { setLineups(Array.from({ length: tie.rubber_count }, (_, i) => { const l = existing.find(e => e.rubber_number === i + 1); return { player1_id: l?.player1_id || '', player2_id: l?.player2_id || '' }; })); setStep('submitted'); }
+    } else if (tie) { setLineups(Array.from({ length: tie.rubber_count }, () => ({ player1_id: '', player2_id: '' }))); setStep('edit'); }
+  }
+
+  async function handleSubmit() {
+    if (!tie || !myClub) return;
+    for (let i = 0; i < lineups.length; i++) {
+      if (!lineups[i].player1_id || !lineups[i].player2_id) { setError('복식 '+(i+1)+'의 선수를 모두 선택하세요.'); return; }
+      if (lineups[i].player1_id === lineups[i].player2_id) { setError('복식 '+(i+1)+'에 같은 선수를 두 번 배정할 수 없습니다.'); return; }
+    }
+    setError(''); setSubmitting(true);
+    try {
+      const entries: LineupEntry[] = lineups.map((l, i) => ({ rubber_number: i+1, player1_id: l.player1_id, player2_id: l.player2_id }));
+      const result = await submitLineup(tieId, myClub.id, pinInput, entries);
+      if (!result.success) { setError(result.error || '제출 실패'); return; }
+      if (result.revealed) { setStep('revealed'); await loadRevealedData(tieId, clubA, clubB); await loadRubbers(tieId); }
+      else { setStep('submitted'); }
+      const { data: ut } = await supabase.from('ties').select('*').eq('id', tieId).single();
+      if (ut) setTie(ut);
+    } catch (err: any) { setError(err.message || '제출 실패'); }
+    finally { setSubmitting(false); }
+  }
+
+  function getMemberName(id: string): string { return allMembers[id]?.name || members.find(m => m.id === id)?.name || '-'; }
+
+  function startScoring(rubber: TieRubber) {
+    setScoringRubber(rubber.id); setSelectedWinner(null); setScoreError('');
+    setSet1a(''); setSet1b(''); setSet2a(''); setSet2b(''); setSet3a(''); setSet3b('');
+  }
+
+  async function handleScoreSave() {
+    if (!scoringRubber || !selectedWinner) return;
+    if (!set1a || !set1b) { setScoreError('1세트 점수를 입력하세요.'); return; }
+    if (setsPerRubber === 1) {
+      const a = parseInt(set1a), b = parseInt(set1b);
+      if (selectedWinner === 'a' && a <= b) { setScoreError('이긴 팀의 점수가 더 높아야 합니다.'); return; }
+      if (selectedWinner === 'b' && b <= a) { setScoreError('이긴 팀의 점수가 더 높아야 합니다.'); return; }
+    }
+    if (setsPerRubber === 3) {
+      if (!set2a || !set2b) { setScoreError('2세트 점수를 입력하세요.'); return; }
+      const s1a=parseInt(set1a),s1b=parseInt(set1b),s2a=parseInt(set2a),s2b=parseInt(set2b);
+      if ((s1a>s1b?1:0)+(s2a>s2b?1:0)===1 && (s1b>s1a?1:0)+(s2b>s2a?1:0)===1 && (!set3a||!set3b))
+        { setScoreError('세트 동률입니다. 3세트 점수를 입력하세요.'); return; }
+    }
+    setScoreSaving(true); setScoreError('');
+    try {
+      const { data, error: err } = await supabase.rpc('rpc_admin_record_score', {
+        p_rubber_id: scoringRubber,
+        p_set1_a: parseInt(set1a), p_set1_b: parseInt(set1b),
+        p_set2_a: set2a ? parseInt(set2a) : null, p_set2_b: set2b ? parseInt(set2b) : null,
+        p_set3_a: set3a ? parseInt(set3a) : null, p_set3_b: set3b ? parseInt(set3b) : null,
+      });
+      if (err) { setScoreError(err.message); return; }
+      if (data && !data.success) { setScoreError(data.error || '저장 실패'); return; }
+      await loadRubbers(tieId);
+      const { data: ut } = await supabase.from('ties').select('*').eq('id', tieId).single();
+      if (ut) setTie(ut);
+      setScoringRubber(null);
+    } catch (err: any) { setScoreError(err.message || '저장 실패'); }
+    finally { setScoreSaving(false); }
+  }
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center text-gray-500">로딩중...</div>;
+  if (error && step === 'pin' && !tie) return <div className="min-h-screen flex items-center justify-center text-red-500">{error}</div>;
+  const majority = tie ? Math.floor(tie.rubber_count / 2) + 1 : 0;
+  const tieCompleted = tie?.status === 'completed';
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-lg mx-auto p-6 space-y-6">
+        <div className="text-center">
+          <h1 className="text-xl font-bold">🎾 단체전</h1>
+          {/* ★ 수정: 경기방식 라벨 표시 */}
+          {clubA && clubB && (
+            <p className="text-gray-600 mt-1">
+              {clubA.name} vs {clubB.name} · {tie?.rubber_count}복식
+              {teamMatchType && (
+                <span className="ml-1 text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">
+                  {getMatchTypeShort(teamMatchType)}
+                </span>
+              )}
+            </p>
+          )}
+        </div>
+
+        {step === 'pin' && (
+          <div className="bg-white rounded-xl border p-6 space-y-4">
+            <h2 className="font-semibold text-center">주장 인증</h2>
+            <p className="text-sm text-gray-500 text-center">주장 PIN 6자리를 입력하세요.</p>
+            <input type="tel" maxLength={6} value={pinInput} onChange={e => setPinInput(e.target.value.replace(/\D/g, ''))} placeholder="000000"
+              className="w-full text-center text-3xl tracking-[0.5em] border-2 rounded-xl py-4 focus:border-blue-500 outline-none" autoFocus onKeyDown={e => e.key === 'Enter' && handlePinSubmit()} />
+            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            <button onClick={handlePinSubmit} className="w-full bg-blue-600 text-white py-3 rounded-xl font-medium hover:bg-blue-700">확인</button>
+          </div>
+        )}
+
+        {step === 'edit' && myClub && tie && (
+         <div className="space-y-4">
+
+          {/* 🔔 알림 구독 버튼 */}
+           <PinSubscribeButton pin={pinInput} />
+
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
+              <p className="font-medium text-blue-800">📋 {myClub.name} 라인업 작성</p>
+              <p className="text-sm text-blue-600 mt-1">
+                상대: {opponentClub?.name} · {tie.rubber_count}복식 · 제출 후 봉인됩니다.
+              </p>
+            </div>
+            {lineups.map((lineup, idx) => (
+              <div key={idx} className="bg-white rounded-xl border p-4">
+                <div className="font-medium text-sm text-gray-600 mb-3">복식 {idx+1}</div>
+                <div className="space-y-2">
+                  {[0,1].map(pIdx => (
+                    <div key={pIdx}>
+                      <label className="text-xs text-gray-400">선수 {pIdx+1}</label>
+                      <select value={pIdx===0?lineup.player1_id:lineup.player2_id}
+                        onChange={e => { const u=[...lineups]; if(pIdx===0)u[idx].player1_id=e.target.value;else u[idx].player2_id=e.target.value; setLineups(u); }}
+                        className="w-full border rounded-lg px-3 py-2.5 mt-1">
+                        <option value="">선수 선택</option>
+                        {members.map(m => <option key={m.id} value={m.id}>{m.name} ({getGenderLabel(m.gender)}) {m.grade?'- '+m.grade:''}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            <button onClick={handleSubmit} disabled={submitting} className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-blue-700 disabled:opacity-50">
+              {submitting ? '제출중...' : '🔒 라인업 봉인 제출'}</button>
+          </div>
+        )}
+
+        {step === 'submitted' && myClub && (
+          <div className="space-y-4">
+            <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center">
+              <div className="text-3xl mb-2">✅</div>
+              <p className="font-bold text-green-800">라인업 제출 완료!</p>
+              <p className="text-sm text-green-600 mt-2">상대팀이 제출하면 양쪽 라인업이 동시에 공개됩니다.</p>
+              <p className="text-xs text-gray-400 mt-2">⏳ 자동 확인중... (5초마다)</p>
+            </div>
+            <div className="bg-white rounded-xl border p-4">
+              <h3 className="font-semibold mb-3">내 라인업</h3>
+              {lineups.map((l, idx) => (
+                <div key={idx} className="flex items-center gap-2 py-2 border-b last:border-0">
+                  <span className="text-sm text-gray-400 w-16">복식 {idx+1}</span>
+                  <span className="text-sm">{members.find(m=>m.id===l.player1_id)?.name||'-'} / {members.find(m=>m.id===l.player2_id)?.name||'-'}</span>
+                </div>
+              ))}
+            </div>
+            <div className="bg-gray-50 rounded-xl border p-4 text-center">
+              <p className="text-gray-600">상대팀 ({opponentClub?.name}): ⏳ 대기중...</p>
+            </div>
+            <button onClick={() => setStep('edit')} className="w-full bg-gray-100 py-3 rounded-xl font-medium hover:bg-gray-200">라인업 수정</button>
+          </div>
+        )}
+
+        {step === 'revealed' && (
+          <div className="space-y-4">
+            {tie && (
+              <div className={`rounded-xl p-4 text-center ${tieCompleted ? 'bg-purple-50 border border-purple-200' : 'bg-blue-50 border border-blue-200'}`}>
+                {tieCompleted ? (
+                  <><div className="text-3xl mb-2">🏆</div><p className="font-bold text-purple-800">대전 완료!</p>
+                  <div className="text-2xl font-bold mt-2"><span className={tie.club_a_rubbers_won>tie.club_b_rubbers_won?'text-blue-600':''}>{clubA?.name}</span>
+                  <span className="text-gray-400 mx-2">{tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}</span>
+                  <span className={tie.club_b_rubbers_won>tie.club_a_rubbers_won?'text-blue-600':''}>{clubB?.name}</span></div></>
+                ) : (
+                  <><p className="font-bold text-blue-800">🔓 라인업 확정 · 경기 진행중</p>
+                  <div className="text-2xl font-bold mt-2">{clubA?.name} <span className="text-gray-400">{tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}</span> {clubB?.name}</div>
+                  <p className="text-xs text-blue-600 mt-1">{majority}승 선승제 ({tie.rubber_count}복식)</p></>
+                )}
+              </div>
+            )}
+
+            {Array.from({ length: tie?.rubber_count||0 }, (_,i) => i+1).map(num => {
+              const la = revealedLineups.find(l => l.rubber_number===num && l.club_id===clubA?.id);
+              const lb = revealedLineups.find(l => l.rubber_number===num && l.club_id===clubB?.id);
+              const rubber = rubbers.find(r => r.rubber_number===num);
+              const isScoring = scoringRubber===rubber?.id;
+              const hasScore = rubber?.set1_a!==null && rubber?.set1_a!==undefined;
+              const isCompleted = rubber?.status==='completed';
+              return (
+                <div key={num} className={`bg-white rounded-xl border p-4 ${isCompleted?'border-green-200':''}`}>
+                  <div className="text-sm font-medium text-gray-500 mb-3 text-center flex items-center justify-center gap-2">
+                    복식 {num} {isCompleted && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">완료</span>}
+                  </div>
+                  <div className="grid grid-cols-5 items-center gap-2 mb-3">
+                    <div className="col-span-2 text-right text-sm">
+                      <div className="font-medium">{getMemberName(la?.player1_id||'')}</div>
+                      <div className="font-medium">{getMemberName(la?.player2_id||'')}</div>
+                      <div className="text-xs text-gray-400 mt-1">{clubA?.name}</div>
+                    </div>
+                    <div className="text-center font-bold text-gray-400">vs</div>
+                    <div className="col-span-2 text-left text-sm">
+                      <div className="font-medium">{getMemberName(lb?.player1_id||'')}</div>
+                      <div className="font-medium">{getMemberName(lb?.player2_id||'')}</div>
+                      <div className="text-xs text-gray-400 mt-1">{clubB?.name}</div>
+                    </div>
+                  </div>
+                  {hasScore && !isScoring && (
+                    <div className="text-center py-2 bg-gray-50 rounded-lg">
+                      <div className="text-xl font-bold">{formatSetScore(rubber!.set1_a,rubber!.set1_b)}
+                        {rubber!.set2_a!==null&&' / '+formatSetScore(rubber!.set2_a,rubber!.set2_b)}
+                        {rubber!.set3_a!==null&&' / '+formatSetScore(rubber!.set3_a,rubber!.set3_b)}</div>
+                      {rubber!.winning_club_id && <div className="text-xs text-blue-600 mt-1">승: {rubber!.winning_club_id===clubA?.id?clubA?.name:clubB?.name}</div>}
+                    </div>
+                  )}
+                  {!hasScore && !isScoring && !tieCompleted && rubber && (
+                    <button onClick={() => startScoring(rubber)} className="w-full bg-blue-50 text-blue-700 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-100">점수 입력</button>
+                  )}
+                  {isScoring && rubber && (
+                    <div className="space-y-3 mt-2 border-t pt-3">
+                      <div>
+                        <p className="text-sm font-medium text-gray-600 mb-2">이긴 팀을 선택하세요</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button onClick={() => setSelectedWinner('a')} className={`py-3 rounded-lg text-sm font-bold transition ${selectedWinner==='a'?'bg-blue-600 text-white':'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>{clubA?.name}</button>
+                          <button onClick={() => setSelectedWinner('b')} className={`py-3 rounded-lg text-sm font-bold transition ${selectedWinner==='b'?'bg-blue-600 text-white':'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>{clubB?.name}</button>
+                        </div>
+                      </div>
+                      {selectedWinner && (<>
+                        <ScoreRow label="1세트" aVal={set1a} bVal={set1b} setA={setSet1a} setB={setSet1b} clubA={clubA?.name} clubB={clubB?.name} />
+                        {setsPerRubber===3 && (<>
+                          <ScoreRow label="2세트" aVal={set2a} bVal={set2b} setA={setSet2a} setB={setSet2b} clubA={clubA?.name} clubB={clubB?.name} />
+                          <ScoreRow label="3세트" aVal={set3a} bVal={set3b} setA={setSet3a} setB={setSet3b} clubA={clubA?.name} clubB={clubB?.name} />
+                        </>)}
+                        {scoreError && <p className="text-red-500 text-xs text-center">{scoreError}</p>}
+                        <div className="flex gap-2">
+                          <button onClick={() => {setScoringRubber(null);setScoreError('');}} className="flex-1 bg-gray-100 py-2.5 rounded-lg text-sm">취소</button>
+                          <button onClick={handleScoreSave} disabled={scoreSaving} className="flex-1 bg-green-600 text-white py-2.5 rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
+                            {scoreSaving?'저장중...':'✓ 점수 확정'}</button>
+                        </div>
+                      </>)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {tieCompleted && <div className="bg-gray-100 rounded-xl p-3 text-center text-sm text-gray-500">🔒 대전 완료 — 점수 수정은 운영본부에서만 가능합니다.</div>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ScoreRow({ label, aVal, bVal, setA, setB, clubA, clubB }: {
+  label: string; aVal: string; bVal: string; setA: (v: string) => void; setB: (v: string) => void; clubA?: string; clubB?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-gray-500 w-12">{label}</span>
+      <div className="flex items-center gap-1 flex-1">
+        <div className="flex-1 text-center">
+          <div className="text-[10px] text-gray-400 mb-0.5">{clubA?.slice(0,5)}</div>
+          <input type="number" min="0" max="7" value={aVal} onChange={e => setA(e.target.value)}
+            className="w-full border-2 rounded-lg px-2 py-2 text-center text-lg focus:border-blue-500 outline-none" />
+        </div>
+        <span className="text-gray-400 font-bold">:</span>
+        <div className="flex-1 text-center">
+          <div className="text-[10px] text-gray-400 mb-0.5">{clubB?.slice(0,5)}</div>
+          <input type="number" min="0" max="7" value={bVal} onChange={e => setB(e.target.value)}
+            className="w-full border-2 rounded-lg px-2 py-2 text-center text-lg focus:border-blue-500 outline-none" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+========== src\app\pin\page.tsx ==========
+'use client'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+import { usePushSubscription } from '@/hooks/usePushSubscription'
+
+type Mode = 'select' | 'individual' | 'team';
+
+export default function PinPage() {
+  const router = useRouter()
+  const [events, setEvents] = useState<any[]>([])
+  const [selectedEvent, setSelectedEvent] = useState('')
+  const [pin, setPin] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [mode, setMode] = useState<Mode>('select')
+  const [teamTies, setTeamTies] = useState<any[]>([])
+
+  // ?? ?몄떆 ?뚮┝ 援щ룆 ??
+  const { status: pushStatus, message: pushMessage, subscribeWithPin } = usePushSubscription()
+  const [loginSuccess, setLoginSuccess] = useState(false)
+  const [loginPin, setLoginPin] = useState('')
+
+  useEffect(() => {
+    supabase.from('events').select('id, name, event_type').eq('status', 'active')
+      .then(({ data }) => {
+        setEvents(data || [])
+        if (data?.length === 1) setSelectedEvent(data[0].id)
+      })
+  }, [])
+
+  async function handleIndividualSubmit() {
+    if (!selectedEvent) { setError('??뚮? ?좏깮?댁＜?몄슂.'); return }
+    if (pin.length !== 6) { setError('PIN 6?먮━瑜??낅젰?댁＜?몄슂.'); return }
+    setError(''); setLoading(true)
+    const { data, error: err } = await supabase.rpc('rpc_pin_login', {
+      p_pin_code: pin, p_event_id: selectedEvent,
+    })
+    setLoading(false)
+    if (err) { setError(err.message || 'PIN???щ컮瑜댁? ?딆뒿?덈떎.'); return }
+    sessionStorage.setItem('pin_session', JSON.stringify(data))
+
+    // 濡쒓렇???깃났 ???뚮┝ 援щ룆 ?붾㈃?쇰줈
+    setLoginPin(pin)
+    setLoginSuccess(true)
+  }
+
+  async function handleAllowNotification() {
+    await subscribeWithPin(loginPin)
+    router.push('/pin/matches')
+  }
+
+  function handleSkipNotification() {
+    router.push('/pin/matches')
+  }
+
+  async function handleTeamSubmit() {
+    if (pin.length !== 6) { setError('? PIN 6?먮━瑜??낅젰?댁＜?몄슂.'); return }
+    setError(''); setLoading(true)
+    try {
+      const { data: club } = await supabase
+        .from('clubs').select('id, name, event_id')
+        .eq('captain_pin', pin).limit(1).single()
+      if (!club) { setError('? PIN???대떦?섎뒗 ?대읇??李얠쓣 ???놁뒿?덈떎.'); setLoading(false); return }
+
+      const { data: ties } = await supabase
+        .from('ties')
+        .select('id, tie_order, status, round, club_a:clubs!ties_club_a_id_fkey(id, name), club_b:clubs!ties_club_b_id_fkey(id, name)')
+        .or(`club_a_id.eq.${club.id},club_b_id.eq.${club.id}`)
+        .in('status', ['pending', 'lineup_phase', 'lineup_ready', 'in_progress'])
+        .order('tie_order')
+
+      if (!ties || ties.length === 0) { setError('吏꾪뻾以묒씤 ??닿? ?놁뒿?덈떎.'); setLoading(false); return }
+
+      sessionStorage.setItem('captain_pin', pin)
+
+      if (ties.length === 1) { router.push(`/lineup/${ties[0].id}`); return }
+      setTeamTies(ties)
+    } catch { setError('?쒕쾭 ?ㅻ쪟媛 諛쒖깮?덉뒿?덈떎.') }
+    finally { setLoading(false) }
+  }
+
+  function goToTie(tieId: string) {
+    sessionStorage.setItem('captain_pin', pin)
+    router.push(`/lineup/${tieId}`)
+  }
+
+  function resetMode() { setMode('select'); setPin(''); setError(''); setTeamTies([]) }
+
+  // ?? 濡쒓렇???깃났 ???뚮┝ 援щ룆 ?붾㈃ ??
+  if (loginSuccess) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-4">
+        <div className="text-6xl mb-4">?뵒</div>
+        <h1 className="text-xl font-bold mb-2 text-center">肄뷀듃 諛곗젙 ?뚮┝ 諛쏄린</h1>
+        <p className="text-stone-500 text-sm mb-8 text-center">
+          ??肄뷀듃 李⑤?媛 ?섎㈃<br />?깆씠 爰쇱졇 ?덉뼱???뚮┝?????        </p>
+        <div className="w-full max-w-sm space-y-3">
+          {pushStatus === 'success' ? (
+            <div className="text-center py-4">
+              <div className="text-3xl mb-2">??/div>
+              <p className="text-green-600 font-medium">{pushMessage}</p>
+              <p className="text-stone-400 text-sm mt-2">寃쎄린 紐⑸줉?쇰줈 ?대룞?⑸땲??..</p>
+            </div>
+          ) : (
+            <>
+              <button
+                onClick={handleAllowNotification}
+                disabled={pushStatus === 'loading'}
+                className="w-full bg-amber-500 text-white font-bold py-4 rounded-xl hover:bg-amber-600 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-lg"
+              >
+                {pushStatus === 'loading' ? (
+                  <><span className="animate-spin">??/span> ?깅줉 以?..</>
+                ) : (
+                  <><span>?뵒</span> ?뚮┝ ?덉슜?섍린</>
+                )}
+              </button>
+              {pushStatus === 'error' && (
+                <p className="text-xs text-red-500 text-center">{pushMessage}</p>
+              )}
+              <button
+                onClick={handleSkipNotification}
+                className="w-full text-stone-400 text-sm py-3 hover:text-stone-600"
+              >
+                ?뚮┝ ?놁씠 怨꾩냽?섍린
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center p-4">
+      <Link href="/" className="text-stone-400 hover:text-stone-600 mb-8">???덉쑝濡?/Link>
+      <div className="text-5xl mb-4">?렱</div>
+      <h1 className="text-2xl font-bold mb-2">?먯닔 ?낅젰</h1>
+      <p className="text-stone-500 text-sm mb-8">??? ?꾩슜 PIN ?낅젰</p>
+
+      <div className="w-full max-w-sm space-y-4">
+        {events.length > 1 && mode !== 'select' && (
+          <select value={selectedEvent} onChange={e => setSelectedEvent(e.target.value)}
+            className="w-full border border-stone-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-tennis-600">
+            <option value="">????좏깮</option>
+            {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+          </select>
+        )}
+
+        {mode === 'select' && (
+          <div className="space-y-3">
+            <button onClick={() => setMode('individual')}
+              className="w-full bg-amber-50 border-2 border-amber-200 rounded-2xl p-5 text-left hover:border-amber-400 transition-all">
+              <div className="text-2xl mb-1">?렱</div>
+              <div className="font-bold">媛쒖씤??/div>
+              <div className="text-sm text-stone-500 mt-1">?좎닔 PIN?쇰줈 ?먯닔 ?낅젰</div>
+            </button>
+            <button onClick={() => setMode('team')}
+              className="w-full bg-blue-50 border-2 border-blue-200 rounded-2xl p-5 text-left hover:border-blue-400 transition-all">
+              <div className="text-2xl mb-1">?룇</div>
+              <div className="font-bold">?⑥껜??/div>
+              <div className="text-sm text-stone-500 mt-1">???PIN?쇰줈 濡쒓렇?????먯닔 ?낅젰</div>
+            </button>
+          </div>
+        )}
+
+        {mode === 'individual' && (
+          <>
+            <p className="text-center text-sm text-stone-600 font-medium">媛쒖씤???먯닔?낅젰</p>
+            <input type="tel" maxLength={6} value={pin}
+              onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              onKeyDown={e => e.key === 'Enter' && handleIndividualSubmit()}
+              placeholder="000000"
+              className="w-full text-center text-3xl tracking-[0.5em] border-2 rounded-xl py-4 focus:border-amber-500 outline-none" autoFocus />
+            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            <button onClick={handleIndividualSubmit} disabled={loading || pin.length !== 6}
+              className="w-full bg-amber-600 text-white font-bold py-3.5 rounded-xl hover:bg-amber-700 disabled:opacity-50 transition-all">
+              {loading ? '?뺤씤 以?..' : '濡쒓렇??}</button>
+            <button onClick={resetMode} className="w-full text-stone-400 text-sm py-2 hover:text-stone-600">???ㅻ줈媛湲?/button>
+          </>
+        )}
+
+        {mode === 'team' && teamTies.length === 0 && (
+          <>
+            <p className="text-center text-sm text-stone-600 font-medium">?⑥껜??/p>
+            <p className="text-xs text-stone-400 text-center">???PIN 6?먮━瑜??낅젰?섏꽭??/p>
+            <input type="tel" maxLength={6} value={pin}
+              onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              onKeyDown={e => e.key === 'Enter' && handleTeamSubmit()}
+              placeholder="000000"
+              className="w-full text-center text-3xl tracking-[0.5em] border-2 rounded-xl py-4 focus:border-blue-500 outline-none" autoFocus />
+            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            <button onClick={handleTeamSubmit} disabled={loading || pin.length !== 6}
+              className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-all">
+              {loading ? '?뺤씤 以?..' : '?뺤씤'}</button>
+            <button onClick={resetMode} className="w-full text-stone-400 text-sm py-2 hover:text-stone-600">???ㅻ줈媛湲?/button>
+          </>
+        )}
+
+        {mode === 'team' && teamTies.length > 0 && (
+          <>
+            <p className="text-center text-sm text-stone-600 font-medium">??대? ?좏깮?섏꽭??/p>
+            <div className="space-y-2">
+              {teamTies.map((tie: any) => (
+                <button key={tie.id} onClick={() => goToTie(tie.id)}
+                  className="w-full bg-white border-2 border-blue-200 rounded-xl p-4 text-left hover:border-blue-400 transition-all">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold">{tie.club_a?.name}</span>
+                      <span className="text-stone-400 mx-2">vs</span>
+                      <span className="font-semibold">{tie.club_b?.name}</span>
+                    </div>
+                    <span className="text-xs text-stone-400">#{tie.tie_order}</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <button onClick={resetMode} className="w-full text-stone-400 text-sm py-2 hover:text-stone-600">???ㅻ줈媛湲?/button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+========== src\app\pin\matches\page.tsx ==========
+'use client'
+// ============================================================
+// src/app/pin/matches/page.tsx
+// ???뚮┝ ?먮룞 ?ш뎄??(???ъ떎????援щ룆 ?좏슚??泥댄겕)
+// ???뚮┝ ?곹깭 ?쒖떆 媛쒖꽑 ??爰쇱쭚/耳쒖쭚/?ъ떆??踰꾪듉
+// ??30珥??먮룞媛깆떊 ?좎?
+// ============================================================
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
+import { usePushSubscription } from '@/hooks/usePushSubscription'
+
+interface PinMatch {
+  id: string
+  match_num: string
+  stage: string
+  round: string
+  court: string | null
+  status: string
+  score: string | null
+  team_a_name: string
+  team_b_name: string
+  winner_name: string | null
+  division_name: string
+  started_at: string | null
+  ended_at: string | null
+}
+
+interface PinTie {
+  id: string
+  tie_order: number
+  round: string | null
+  status: string
+  court_number: number | null
+  club_a_rubbers_won: number
+  club_b_rubbers_won: number
+  club_a?: { name: string }
+  club_b?: { name: string }
+  started_at: string | null
+  ended_at: string | null
+}
+
+export default function PinMatchesPage() {
+  const router = useRouter()
+  const [matches, setMatches]         = useState<PinMatch[]>([])
+  const [ties, setTies]               = useState<PinTie[]>([])
+  const [loading, setLoading]         = useState(true)
+  const [tab, setTab]                 = useState<'individual' | 'team'>('individual')
+  const [courtFilter, setCourtFilter] = useState('ALL')
+  const [statusFilter, setStatusFilter] = useState('IN_PROGRESS')
+  const prevMatchIds = useRef<Set<string>>(new Set())
+
+  // ?? 釉뚮씪?곗? Notification ?곹깭 ?????????????????????????????
+  const [notifAllowed, setNotifAllowed]     = useState(false)
+  const [notifRequested, setNotifRequested] = useState(false)
+
+  // ?? Web Push ?먮룞 ?ш뎄??????????????????????????????????????
+  const { autoResubscribe } = usePushSubscription()
+
+  // ?? PIN 寃利?+ 珥덇린????????????????????????????????????????
+  useEffect(() => {
+    const pin     = sessionStorage.getItem('venue_pin')
+    const eventId = sessionStorage.getItem('pin_event_id')
+    if (!pin || !eventId) { router.replace('/pin'); return }
+    loadData()
+
+    // 釉뚮씪?곗? ?뚮┝ 沅뚰븳 ?곹깭 珥덇린??    if ('Notification' in window) {
+      const perm = Notification.permission
+      setNotifAllowed(perm === 'granted')
+      setNotifRequested(perm !== 'default')
+    }
+
+    // ??Web Push ?먮룞 ?ш뎄??(諛깃렇?쇱슫?쒖뿉??議곗슜??泥섎━)
+    autoResubscribe()
+  }, [])
+
+  // ?? 釉뚮씪?곗? ?뚮┝ 沅뚰븳 ?붿껌 ????????????????????????????????
+  async function requestNotification() {
+    setNotifRequested(true)
+    if (!('Notification' in window)) {
+      alert('??釉뚮씪?곗????뚮┝??吏?먰븯吏 ?딆뒿?덈떎.')
+      return
+    }
+    try {
+      const perm = await Notification.requestPermission()
+      setNotifAllowed(perm === 'granted')
+      if (perm === 'granted') {
+        new Notification('?쒖＜ ?뚮땲???좊꼫癒쇳듃', {
+          body: '寃쎄린 ?뚮┝???쒖꽦?붾릺?덉뒿?덈떎.',
+          icon: '/icon.png',
+        })
+        // ??沅뚰븳 ?덉슜?섎㈃ Web Push ?ш뎄?낅룄 媛숈씠 ?쒕룄
+        autoResubscribe()
+      } else if (perm === 'denied') {
+        alert('?뚮┝??李⑤떒?섏뼱 ?덉뒿?덈떎.\n釉뚮씪?곗? ?ㅼ젙 ?????ъ씠?????뚮┝ ?덉슜?쇰줈 蹂寃쏀빐二쇱꽭??')
+      }
+    } catch {
+      setNotifAllowed(false)
+    }
+  }
+
+  // ?? ?뚮┝ 諛쒖넚 (寃쎄린 ?꾨즺 媛먯? ?? ?????????????????????????
+  function sendNotification(title: string, body: string) {
+    if (!('Notification' in window)) return
+    if (Notification.permission === 'granted') {
+      new Notification(title, { body, icon: '/icon.png', silent: false })
+    }
+  }
+
+  // ?? ?곗씠??濡쒕뱶 ????????????????????????????????????????????
+  const loadData = useCallback(async () => {
+    const eventId = sessionStorage.getItem('pin_event_id')
+    if (!eventId) return
+    setLoading(true)
+    try {
+      const [matchRes, tieRes] = await Promise.all([
+        supabase.from('v_matches_with_teams').select('*')
+          .eq('event_id', eventId)
+          .not('court', 'is', null)
+          .order('court').order('match_num'),
+        supabase.from('ties')
+          .select('*, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name)')
+          .eq('event_id', eventId)
+          .not('court_number', 'is', null)
+          .order('tie_order'),
+      ])
+
+      const newMatches: PinMatch[] = (matchRes.data || []).map((m: any) => ({
+        id: m.id, match_num: m.match_num, stage: m.stage, round: m.round,
+        court: m.court, status: m.status, score: m.score,
+        team_a_name: m.team_a_name, team_b_name: m.team_b_name,
+        winner_name: m.winner_name, division_name: m.division_name,
+        started_at: m.started_at, ended_at: m.ended_at,
+      }))
+
+      // ???덈줈 ?꾨즺??寃쎄린 媛먯? ??釉뚮씪?곗? ?뚮┝ 諛쒖넚
+      // (理쒖큹 濡쒕뱶 ?쒖뿉??prevMatchIds媛 鍮꾩뼱?덉쑝誘濡??뚮┝ ??蹂대깂)
+      if (prevMatchIds.current.size > 0) {
+        newMatches.forEach(m => {
+          if (m.status === 'FINISHED' && !prevMatchIds.current.has(m.id)) {
+            sendNotification(
+              `寃쎄린 ?꾨즺 ??${m.court}`,
+              `${m.team_a_name} vs ${m.team_b_name}  ${m.score || ''}`,
+            )
+          }
+        })
+      }
+      prevMatchIds.current = new Set(
+        newMatches.filter(m => m.status === 'FINISHED').map(m => m.id)
+      )
+
+      setMatches(newMatches)
+      setTies(tieRes.data || [])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  // ?? 30珥??먮룞 媛깆떊 ?????????????????????????????????????????
+  useEffect(() => {
+    const interval = setInterval(() => loadData(), 30000)
+    return () => clearInterval(interval)
+  }, [loadData])
+
+  useEffect(() => { loadData() }, [loadData])
+
+  // ?? ?좏떥 ???????????????????????????????????????????????????
+  function formatDuration(start: string, end?: string | null): string {
+    const from = new Date(start).getTime()
+    const to   = end ? new Date(end).getTime() : Date.now()
+    const mins = Math.round((to - from) / 60000)
+    if (mins < 60) return `${mins}遺?
+    return `${Math.floor(mins / 60)}?쒓컙 ${mins % 60}遺?
+  }
+
+  function formatTime(iso: string): string {
+    return new Date(iso).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+  }
+
+  const courts = [...new Set(matches.map(m => m.court).filter(Boolean))]
+
+  const filteredMatches = matches.filter(m => {
+    if (courtFilter !== 'ALL' && m.court !== courtFilter) return false
+    if (statusFilter !== 'ALL' && m.status !== statusFilter) return false
+    return true
+  })
+
+  const filteredTies = ties.filter(t => {
+    if (statusFilter === 'IN_PROGRESS' && t.status !== 'in_progress') return false
+    if (statusFilter === 'FINISHED'    && t.status !== 'completed')    return false
+    return true
+  })
+
+  // ?? ?뚮┝ 踰꾪듉 ?뚮뜑留????????????????????????????????????????
+  function NotifButton() {
+    // ?대? ?덉슜??寃쎌슦
+    if (notifAllowed) {
+      return (
+        <button
+          onClick={() => {
+            // ?ъ떆?? ?쒕쾲 ???ш뎄???쒕룄
+            autoResubscribe()
+            sendNotification('?뚮┝ ?뚯뒪??, '?뚮┝???뺤긽 ?묐룞 以묒엯?덈떎.')
+          }}
+          className="text-xs text-white/60 hover:text-white/90 flex items-center gap-1"
+          title="?뚮┝ 耳쒖쭚 ????븯硫??뚯뒪???뚮┝ 諛쒖넚"
+        >
+          ?뵒 ?뚮┝ 耳쒖쭚
+        </button>
+      )
+    }
+
+    // 嫄곕???寃쎌슦
+    if (notifRequested && !notifAllowed) {
+      return (
+        <button
+          onClick={() => alert('?뚮┝??李⑤떒?섏뼱 ?덉뒿?덈떎.\n釉뚮씪?곗? ?ㅼ젙 ?????ъ씠?????뚮┝ ?덉슜?쇰줈 蹂寃쏀빐二쇱꽭??')}
+          className="text-xs bg-red-500/80 text-white px-2.5 py-1 rounded-full"
+        >
+          ?뵓 ?뚮┝ 李⑤떒??        </button>
+      )
+    }
+
+    // ?꾩쭅 ?붿껌 ????寃쎌슦
+    return (
+      <button
+        onClick={requestNotification}
+        className="text-xs bg-yellow-500 text-white px-2.5 py-1 rounded-full animate-pulse"
+      >
+        ?뵒 ?뚮┝ 耳쒓린
+      </button>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* ?ㅻ뜑 */}
+      <header className="bg-[#2d5016] text-white sticky top-0 z-10">
+        <div className="max-w-3xl mx-auto px-4 py-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="font-bold">寃쎄린 ?꾪솴</h1>
+              <p className="text-xs text-white/60">30珥??먮룞 媛깆떊</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <NotifButton />
+              <button onClick={loadData} className="text-xs bg-white/20 px-2.5 py-1 rounded-full">
+                ?봽
+              </button>
+            </div>
+          </div>
+
+          {/* ??*/}
+          <div className="flex gap-2 mt-3 border-t border-white/10 pt-3">
+            <button
+              onClick={() => setTab('individual')}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium ${tab === 'individual' ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'}`}
+            >
+              ?렱 媛쒖씤??            </button>
+            <button
+              onClick={() => setTab('team')}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium ${tab === 'team' ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'}`}
+            >
+              ?룇 ?⑥껜??            </button>
+          </div>
+
+          {/* ?꾪꽣 */}
+          <div className="flex gap-2 mt-2 overflow-x-auto pb-1">
+            <select
+              value={statusFilter}
+              onChange={e => setStatusFilter(e.target.value)}
+              className="text-xs bg-white/10 text-white border-0 rounded px-2 py-1"
+            >
+              <option value="ALL">?꾩껜 ?곹깭</option>
+              <option value="IN_PROGRESS">吏꾪뻾以?/option>
+              <option value="FINISHED">?꾨즺</option>
+            </select>
+            {tab === 'individual' && courts.length > 0 && (
+              <select
+                value={courtFilter}
+                onChange={e => setCourtFilter(e.target.value)}
+                className="text-xs bg-white/10 text-white border-0 rounded px-2 py-1"
+              >
+                <option value="ALL">?꾩껜 肄뷀듃</option>
+                {courts.map(c => <option key={c} value={c!}>{c}</option>)}
+              </select>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-4 space-y-3">
+        {loading ? (
+          <p className="text-center py-10 text-gray-400">遺덈윭?ㅻ뒗 以?..</p>
+        ) : tab === 'individual' ? (
+          filteredMatches.length === 0 ? (
+            <p className="text-center py-10 text-gray-400">寃쎄린媛 ?놁뒿?덈떎.</p>
+          ) : (
+            filteredMatches.map(m => (
+              <MatchCard key={m.id} match={m} formatTime={formatTime} formatDuration={formatDuration} />
+            ))
+          )
+        ) : (
+          filteredTies.length === 0 ? (
+            <p className="text-center py-10 text-gray-400">?⑥껜?꾩씠 ?놁뒿?덈떎.</p>
+          ) : (
+            filteredTies.map(t => (
+              <TieCard key={t.id} tie={t} formatTime={formatTime} formatDuration={formatDuration} />
+            ))
+          )
+        )}
+      </main>
+    </div>
+  )
+}
+
+// ?? MatchCard ?????????????????????????????????????????????????
+function MatchCard({ match: m, formatTime, formatDuration }: {
+  match: PinMatch
+  formatTime: (s: string) => string
+  formatDuration: (s: string, e?: string | null) => string
+}) {
+  const isLive = m.status === 'IN_PROGRESS'
+  const isDone = m.status === 'FINISHED'
+
+  return (
+    <div className={`bg-white rounded-xl border shadow-sm overflow-hidden ${isLive ? 'border-red-300 shadow-red-100' : isDone ? 'opacity-70' : ''}`}>
+      {isLive && (
+        <div className="bg-red-500 text-white px-4 py-1.5 flex items-center gap-2 text-xs font-bold">
+          <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+          LIVE
+          {m.started_at && <span className="ml-auto font-normal">{formatDuration(m.started_at)} 寃쎄낵</span>}
+        </div>
+      )}
+      <div className="p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <span className={`px-2 py-0.5 rounded font-medium ${isLive ? 'bg-red-100 text-red-700' : isDone ? 'bg-green-100 text-green-700' : 'bg-gray-100'}`}>
+              {m.court}
+            </span>
+            <span>{m.division_name}</span>
+          </div>
+          {isDone && m.ended_at && (
+            <span className="text-xs text-gray-400">
+              醫낅즺 {formatTime(m.ended_at)}
+              {m.started_at && ` (${formatDuration(m.started_at, m.ended_at)})`}
+            </span>
+          )}
+          {!isDone && m.started_at && (
+            <span className="text-xs text-gray-400">?쒖옉 {formatTime(m.started_at)}</span>
+          )}
+        </div>
+        <div className="flex items-center">
+          <div className={`flex-1 font-medium ${m.winner_name === m.team_a_name ? 'text-green-700 font-bold' : ''}`}>
+            {m.team_a_name}
+          </div>
+          <div className="px-4 text-center">
+            {isDone && m.score ? (
+              <span className="text-xl font-black">{m.score}</span>
+            ) : isLive ? (
+              <span className="text-sm font-bold text-red-500">吏꾪뻾以?/span>
+            ) : (
+              <span className="text-sm text-gray-400">vs</span>
+            )}
+          </div>
+          <div className={`flex-1 text-right font-medium ${m.winner_name === m.team_b_name ? 'text-green-700 font-bold' : ''}`}>
+            {m.team_b_name}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ?? TieCard ???????????????????????????????????????????????????
+function TieCard({ tie: t, formatTime, formatDuration }: {
+  tie: PinTie
+  formatTime: (s: string) => string
+  formatDuration: (s: string, e?: string | null) => string
+}) {
+  const isLive = t.status === 'in_progress'
+  const isDone = t.status === 'completed'
+
+  return (
+    <div className={`bg-white rounded-xl border shadow-sm overflow-hidden ${isLive ? 'border-red-300 shadow-red-100' : isDone ? 'opacity-70' : ''}`}>
+      {isLive && (
+        <div className="bg-red-500 text-white px-4 py-1.5 flex items-center gap-2 text-xs font-bold">
+          <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+          LIVE
+          {t.started_at && <span className="ml-auto font-normal">{formatDuration(t.started_at)} 寃쎄낵</span>}
+        </div>
+      )}
+      <div className="p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            {t.court_number && (
+              <span className={`px-2 py-0.5 rounded font-medium ${isLive ? 'bg-red-100 text-red-700' : isDone ? 'bg-green-100 text-green-700' : 'bg-gray-100'}`}>
+                肄뷀듃 {t.court_number}
+              </span>
+            )}
+            <span>?⑥껜??#{t.tie_order}</span>
+          </div>
+          {isDone && t.ended_at && (
+            <span className="text-xs text-gray-400">
+              醫낅즺 {formatTime(t.ended_at)}
+              {t.started_at && ` (${formatDuration(t.started_at, t.ended_at)})`}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center">
+          <div className="flex-1 font-medium">{t.club_a?.name || 'TBD'}</div>
+          <div className="px-4 text-center">
+            {isDone || isLive ? (
+              <span className={`text-xl font-black ${isLive ? 'text-red-600' : ''}`}>
+                {t.club_a_rubbers_won} - {t.club_b_rubbers_won}
+              </span>
+            ) : (
+              <span className="text-sm text-gray-400">vs</span>
+            )}
+          </div>
+          <div className="flex-1 text-right font-medium">{t.club_b?.name || 'TBD'}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+========== src\app\pin\team\page.tsx ==========
+// ============================================================
+// src/app/pin/team/page.tsx
+// ??寃쎄린 ?쒖옉(in_progress) ?놁씠??PIN?쇰줈 ?먯닔 ?낅젰 媛??//    pending / lineup_ready / in_progress 紐⑤몢 ?덉슜
+// ============================================================
+'use client';
+
+import { useState } from 'react';
+import { supabase } from '@/lib/supabase';
+import { pinRecordScore } from '@/lib/team-api';
+import { formatSetScore } from '@/lib/team-utils';
+import type { TieRubber, Tie, Club, ClubMember } from '@/types/team';
+
+type Step = 'pin' | 'score' | 'confirm' | 'done';
+
+export default function TeamPinScorePage() {
+  const [step, setStep]     = useState<Step>('pin');
+  const [error, setError]   = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const [pin, setPin]       = useState('');
+  const [rubber, setRubber] = useState<TieRubber | null>(null);
+  const [tie, setTie]       = useState<Tie | null>(null);
+  const [clubA, setClubA]   = useState<Club | null>(null);
+  const [clubB, setClubB]   = useState<Club | null>(null);
+  const [playersA, setPlayersA] = useState<{ p1: ClubMember | null; p2: ClubMember | null }>({ p1: null, p2: null });
+  const [playersB, setPlayersB] = useState<{ p1: ClubMember | null; p2: ClubMember | null }>({ p1: null, p2: null });
+
+  const [set1a, setSet1a] = useState('');
+  const [set1b, setSet1b] = useState('');
+  const [set2a, setSet2a] = useState('');
+  const [set2b, setSet2b] = useState('');
+  const [set3a, setSet3a] = useState('');
+  const [set3b, setSet3b] = useState('');
+  const [setsPerRubber, setSetsPerRubber] = useState(1);
+
+  // PIN ?뺤씤 ??寃쎄린 李얘린
+  async function handlePinSubmit() {
+    if (pin.length !== 6) { setError('PIN 6?먮━瑜??낅젰?섏꽭??'); return; }
+    setError('');
+    setLoading(true);
+
+    try {
+      // ??pending / lineup_ready / in_progress 紐⑤몢 ?덉슜 (寃쎄린 ?쒖옉 遺덊븘??
+      const { data: rubberData } = await supabase
+        .from('tie_rubbers')
+        .select('*')
+        .eq('pin_code', pin)
+        .in('status', ['pending', 'in_progress', 'lineup_ready'])
+        .limit(1)
+        .single();
+
+      if (!rubberData) {
+        // completed ?щ? ?뺤씤
+        const { data: anyRubber } = await supabase
+          .from('tie_rubbers')
+          .select('status')
+          .eq('pin_code', pin)
+          .limit(1)
+          .single();
+
+        if (anyRubber?.status === 'completed') {
+          setError('?대? ?먯닔媛 ?낅젰??寃쎄린?낅땲??');
+        } else {
+          setError('PIN???쇱튂?섎뒗 寃쎄린瑜?李얠쓣 ???놁뒿?덈떎.');
+        }
+        return;
+      }
+
+      setRubber(rubberData);
+
+      const { data: tieData } = await supabase
+        .from('ties')
+        .select('*')
+        .eq('id', rubberData.tie_id)
+        .single();
+      setTie(tieData);
+
+      if (tieData) {
+        const playerAQueries = rubberData.club_a_player1_id ? [
+          supabase.from('club_members').select('*').eq('id', rubberData.club_a_player1_id).single(),
+          rubberData.club_a_player2_id
+            ? supabase.from('club_members').select('*').eq('id', rubberData.club_a_player2_id).single()
+            : Promise.resolve({ data: null }),
+        ] : [Promise.resolve({ data: null }), Promise.resolve({ data: null })];
+
+        const playerBQueries = rubberData.club_b_player1_id ? [
+          supabase.from('club_members').select('*').eq('id', rubberData.club_b_player1_id).single(),
+          rubberData.club_b_player2_id
+            ? supabase.from('club_members').select('*').eq('id', rubberData.club_b_player2_id).single()
+            : Promise.resolve({ data: null }),
+        ] : [Promise.resolve({ data: null }), Promise.resolve({ data: null })];
+
+        const [
+          { data: ca },
+          { data: cb },
+          { data: ev },
+          [{ data: ap1 }, { data: ap2 }],
+          [{ data: bp1 }, { data: bp2 }],
+        ] = await Promise.all([
+          supabase.from('clubs').select('*').eq('id', tieData.club_a_id).single(),
+          supabase.from('clubs').select('*').eq('id', tieData.club_b_id).single(),
+          supabase.from('events').select('team_sets_per_rubber').eq('id', tieData.event_id).single(),
+          Promise.all(playerAQueries),
+          Promise.all(playerBQueries),
+        ]);
+
+        setClubA(ca);
+        setClubB(cb);
+        setSetsPerRubber(ev?.team_sets_per_rubber || 1);
+        setPlayersA({ p1: ap1, p2: ap2 });
+        setPlayersB({ p1: bp1, p2: bp2 });
+      }
+
+      setStep('score');
+    } catch (err: any) {
+      setError('議고쉶 以??ㅻ쪟媛 諛쒖깮?덉뒿?덈떎.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleScoreNext() {
+    if (!set1a || !set1b) { setError('1?명듃 ?먯닔瑜??낅젰?섏꽭??'); return; }
+
+    if (setsPerRubber === 3) {
+      if (!set2a || !set2b) { setError('2?명듃 ?먯닔瑜??낅젰?섏꽭??'); return; }
+      const s1win = parseInt(set1a) > parseInt(set1b) ? 'a' : 'b';
+      const s2win = parseInt(set2a) > parseInt(set2b) ? 'a' : 'b';
+      if (s1win !== s2win && (!set3a || !set3b)) {
+        setError('?명듃 ?숇쪧?낅땲?? 3?명듃 ?먯닔瑜??낅젰?섏꽭??');
+        return;
+      }
+    }
+
+    setError('');
+    setStep('confirm');
+  }
+
+  async function handleFinalSubmit() {
+    if (!rubber) return;
+    setLoading(true);
+    setError('');
+
+    try {
+      const result = await pinRecordScore(
+        pin,
+        rubber.id,
+        parseInt(set1a), parseInt(set1b),
+        set2a ? parseInt(set2a) : null,
+        set2b ? parseInt(set2b) : null,
+        set3a ? parseInt(set3a) : null,
+        set3b ? parseInt(set3b) : null,
+      );
+
+      if (!result.success) {
+        setError(result.error || '?먯닔 ????ㅽ뙣');
+        setStep('score');
+        return;
+      }
+
+      setStep('done');
+    } catch (err: any) {
+      setError(err.message || '?먯닔 ????ㅽ뙣');
+      setStep('score');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function reset() {
+    setStep('pin');
+    setPin('');
+    setError('');
+    setRubber(null);
+    setTie(null);
+    setSet1a(''); setSet1b('');
+    setSet2a(''); setSet2b('');
+    setSet3a(''); setSet3b('');
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-md mx-auto p-6 space-y-6">
+
+        <div className="text-center">
+          <h1 className="text-xl font-bold">?렱 ?⑥껜???먯닔?낅젰</h1>
+          <div className="flex justify-center gap-2 mt-3">
+            {['PIN', '?먯닔', '?뺤씤'].map((label, i) => {
+              const stepIdx = ['pin', 'score', 'confirm'].indexOf(step);
+              const active  = i <= stepIdx && step !== 'done';
+              return (
+                <div key={label} className={`flex items-center gap-1 ${active ? 'text-blue-600' : 'text-gray-300'}`}>
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${active ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>
+                    {i + 1}
+                  </div>
+                  <span className="text-xs">{label}</span>
+                  {i < 2 && <span className="text-gray-300 mx-1">??/span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Step 1: PIN */}
+        {step === 'pin' && (
+          <div className="bg-white rounded-xl border p-6 space-y-4">
+            <h2 className="font-semibold text-center">寃쎄린 PIN ?낅젰</h2>
+            <p className="text-sm text-gray-500 text-center">肄뷀듃??諛곗젙??6?먮━ PIN???낅젰?섏꽭??</p>
+            <input
+              type="tel"
+              maxLength={6}
+              value={pin}
+              onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
+              placeholder="000000"
+              className="w-full text-center text-3xl tracking-[0.5em] border-2 rounded-xl py-4 focus:border-blue-500 outline-none"
+              autoFocus
+              onKeyDown={e => e.key === 'Enter' && handlePinSubmit()}
+            />
+            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            <button
+              onClick={handlePinSubmit}
+              disabled={loading || pin.length !== 6}
+              className="w-full bg-blue-600 text-white py-3 rounded-xl font-medium hover:bg-blue-700 disabled:opacity-50"
+            >
+              {loading ? '?뺤씤以?..' : '?ㅼ쓬'}
+            </button>
+          </div>
+        )}
+
+        {/* Step 2: ?ㅼ퐫???낅젰 */}
+        {step === 'score' && rubber && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-xl border p-4 text-center">
+              <p className="text-sm text-gray-500">?щ쾭 {rubber.rubber_number}</p>
+              <div className="flex items-center justify-center gap-4 mt-2">
+                <div>
+                  <div className="font-bold">{clubA?.name}</div>
+                  <div className="text-xs text-gray-500">
+                    {playersA.p1?.name || '-'} / {playersA.p2?.name || '-'}
+                  </div>
+                </div>
+                <span className="text-gray-400 font-bold">vs</span>
+                <div>
+                  <div className="font-bold">{clubB?.name}</div>
+                  <div className="text-xs text-gray-500">
+                    {playersB.p1?.name || '-'} / {playersB.p2?.name || '-'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl border p-4 space-y-4">
+              <ScoreInput label="1?명듃" aVal={set1a} bVal={set1b} setA={setSet1a} setB={setSet1b} clubA={clubA?.name} clubB={clubB?.name} />
+              {setsPerRubber === 3 && (<>
+                <ScoreInput label="2?명듃" aVal={set2a} bVal={set2b} setA={setSet2a} setB={setSet2b} clubA={clubA?.name} clubB={clubB?.name} />
+                <ScoreInput label="3?명듃" aVal={set3a} bVal={set3b} setA={setSet3a} setB={setSet3b} clubA={clubA?.name} clubB={clubB?.name} />
+              </>)}
+            </div>
+
+            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+
+            <div className="flex gap-3">
+              <button onClick={() => setStep('pin')} className="flex-1 bg-gray-100 py-3 rounded-xl font-medium">?댁쟾</button>
+              <button onClick={handleScoreNext} className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-medium hover:bg-blue-700">?ㅼ쓬</button>
+            </div>
+          </div>
+        )}
+
+        {/* Step 3: ?뺤씤 */}
+        {step === 'confirm' && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-xl border p-6">
+              <h2 className="font-semibold text-center mb-4">?먯닔 ?뺤씤</h2>
+              <div className="text-center mb-4">
+                <span className="font-bold">{clubA?.name}</span>
+                <span className="text-gray-400 mx-2">vs</span>
+                <span className="font-bold">{clubB?.name}</span>
+              </div>
+              <div className="space-y-2 text-center">
+                <div className="text-2xl font-bold">{set1a} - {set1b}</div>
+                {set2a && set2b && <div className="text-2xl font-bold">{set2a} - {set2b}</div>}
+                {set3a && set3b && <div className="text-2xl font-bold">{set3a} - {set3b}</div>}
+              </div>
+            </div>
+            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            <div className="flex gap-3">
+              <button onClick={() => { setStep('score'); setError(''); }} className="flex-1 bg-gray-100 py-3 rounded-xl font-medium">?섏젙</button>
+              <button
+                onClick={handleFinalSubmit}
+                disabled={loading}
+                className="flex-1 bg-green-600 text-white py-3 rounded-xl font-bold hover:bg-green-700 disabled:opacity-50"
+              >
+                {loading ? '??μ쨷...' : '???먯닔 ?뺤젙'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Done */}
+        {step === 'done' && (
+          <div className="bg-white rounded-xl border p-8 text-center space-y-4">
+            <div className="text-4xl">??/div>
+            <h2 className="text-xl font-bold">?먯닔媛 ??λ릺?덉뒿?덈떎!</h2>
+            <button
+              onClick={reset}
+              className="bg-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-blue-700"
+            >
+              ?ㅻⅨ 寃쎄린 ?낅젰
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ScoreInput({ label, aVal, bVal, setA, setB, clubA, clubB }: {
+  label: string; aVal: string; bVal: string;
+  setA: (v: string) => void; setB: (v: string) => void;
+  clubA?: string; clubB?: string;
+}) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-600 mb-2">{label}</label>
+      <div className="flex items-center gap-3">
+        <div className="flex-1 text-center">
+          <div className="text-xs text-gray-400 mb-1">{clubA?.slice(0, 6)}</div>
+          <input
+            type="number" min="0" max="7"
+            value={aVal}
+            onChange={e => setA(e.target.value)}
+            className="w-full border-2 rounded-xl px-3 py-3 text-center text-2xl focus:border-blue-500 outline-none"
+          />
+        </div>
+        <span className="text-gray-400 font-bold text-xl">:</span>
+        <div className="flex-1 text-center">
+          <div className="text-xs text-gray-400 mb-1">{clubB?.slice(0, 6)}</div>
+          <input
+            type="number" min="0" max="7"
+            value={bVal}
+            onChange={e => setB(e.target.value)}
+            className="w-full border-2 rounded-xl px-3 py-3 text-center text-2xl focus:border-blue-500 outline-none"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+========== src\app\venue\page.tsx ==========
+'use client'
+import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+
+export default function VenueLoginPage() {
+  const router = useRouter()
+  const [events, setEvents] = useState<any[]>([])
+  const [selectedEvent, setSelectedEvent] = useState('')
+  const [pin, setPin] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    supabase.from('events').select('id, name').eq('status', 'active')
+      .then(({ data }) => {
+        setEvents(data || [])
+        if (data?.length === 1) setSelectedEvent(data[0].id)
+      })
+  }, [])
+
+  async function handleSubmit() {
+    if (!selectedEvent) { setError('??뚮? ?좏깮?댁＜?몄슂.'); return }
+    if (pin.length !== 6) { setError('寃쎄린??PIN 6?먮━瑜??낅젰?댁＜?몄슂.'); return }
+    setError(''); setLoading(true)
+
+    const { data, error: err } = await supabase.rpc('rpc_venue_login', {
+      p_pin_code: pin,
+      p_event_id: selectedEvent,
+    })
+    setLoading(false)
+    if (err) { setError(err.message || '寃쎄린??PIN???щ컮瑜댁? ?딆뒿?덈떎.'); return }
+
+    sessionStorage.setItem('venue_session', JSON.stringify(data))
+    router.push('/venue/manage')
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-stone-50">
+      <Link href="/" className="text-stone-400 hover:text-stone-600 mb-8 text-sm">???덉쑝濡?/Link>
+      <div className="text-5xl mb-4">?룦截?/div>
+      <h1 className="text-2xl font-bold mb-2">遺??寃쎄린??愿由?/h1>
+      <p className="text-stone-500 text-sm mb-8">諛곗젙諛쏆? 寃쎄린??PIN 6?먮━瑜??낅젰?섏꽭??/p>
+      <div className="w-full max-w-sm space-y-4">
+        {events.length > 1 && (
+          <select value={selectedEvent} onChange={e => setSelectedEvent(e.target.value)}
+            className="w-full border border-stone-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-orange-500">
+            <option value="">????좏깮</option>
+            {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+          </select>
+        )}
+        <input type="tel" maxLength={6} value={pin}
+          onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+          placeholder="000000"
+          className="pin-input w-full" autoFocus />
+        {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+        <button onClick={handleSubmit} disabled={loading || pin.length !== 6}
+          className="w-full bg-orange-500 text-white font-bold py-3.5 rounded-xl hover:bg-orange-600 disabled:opacity-50 transition-all">
+          {loading ? '?뺤씤 以?..' : '寃쎄린??濡쒓렇??}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+
+========== src\app\venue\manage\page.tsx ==========
+'use client'
+import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import { supabase } from '@/lib/supabase'
+
+interface VenueMatch {
+  id: string; match_num: string; stage: string; round: string
+  court: string | null; court_order: number | null
+  status: string; score: string | null; locked_by_participant: boolean
+  team_a_name: string; team_b_name: string; team_a_id: string; team_b_id: string
+  winner_team_id: string | null; division_name: string
+  is_team_tie?: boolean  // BUG#3: ???뚮옒洹몃줈 ?⑥껜???먮퀎
+}
+
+export default function VenueManagePage() {
+  const router = useRouter()
+  const [session, setSession] = useState<any>(null)
+  const [matches, setMatches] = useState<VenueMatch[]>([])
+  const [loading, setLoading] = useState(true)
+  const [msg, setMsg] = useState('')
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+  const [filterDiv, setFilterDiv] = useState('ALL')
+
+  const [editMatch, setEditMatch] = useState<VenueMatch | null>(null)
+  const [editScore, setEditScore] = useState('')
+  const [editWinner, setEditWinner] = useState<'A' | 'B' | ''>('')
+  const [submitting, setSubmitting] = useState(false)
+  const [dragMatch, setDragMatch] = useState<string | null>(null)
+
+  useEffect(() => {
+    const raw = sessionStorage.getItem('venue_session')
+    if (!raw) { router.push('/venue'); return }
+    setSession(JSON.parse(raw))
+  }, [router])
+
+  const loadData = useCallback(async () => {
+    if (!session) return
+    const { data, error } = await supabase.rpc('rpc_venue_list_matches', { p_token: session.token })
+    if (error) {
+      sessionStorage.removeItem('venue_session')
+      router.push('/venue')
+      return
+    }
+    const individual: VenueMatch[] = (data.matches || []).map((m: any) => ({ ...m, is_team_tie: false }))
+    const ties: VenueMatch[] = (data.ties || []).map((t: any) => ({ ...t, is_team_tie: true }))
+    setMatches([...individual, ...ties])
+    setLoading(false)
+    setLastUpdate(new Date())
+  }, [session, router])
+
+  useEffect(() => { loadData() }, [loadData])
+  useEffect(() => {
+    if (!session) return
+    const interval = setInterval(loadData, 15000)
+    return () => clearInterval(interval)
+  }, [session, loadData])
+
+  // 遺??紐⑸줉 異붿텧
+  const divisionNames = Array.from(new Set(matches.map(m => m.division_name).filter(Boolean)))
+
+  const myCourts: string[] = session?.courts || []
+  const byCourt = new Map<string, VenueMatch[]>()
+  for (const c of myCourts) byCourt.set(c, [])
+  for (const m of matches) {
+    if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m)
+  }
+
+  const allUnassigned = matches.filter(m => !m.court && m.status !== 'FINISHED')
+  const unassigned = filterDiv === 'ALL' ? allUnassigned : allUnassigned.filter(m => m.division_name === filterDiv)
+
+  function openScoreEdit(m: VenueMatch) {
+    setEditMatch(m)
+    setEditScore(m.score || '')
+    setEditWinner(
+      m.winner_team_id === m.team_a_id ? 'A' :
+      m.winner_team_id === m.team_b_id ? 'B' : ''
+    )
+    setMsg('')
+  }
+
+  async function submitScore() {
+    if (!editMatch || !editScore || !editWinner) { setMsg('?먯닔? ?뱀옄瑜?紐⑤몢 ?낅젰?섏꽭??'); return }
+    if (editMatch.is_team_tie) { setMsg('?⑥껜?꾩? ?쇱씤???섏씠吏?먯꽌 寃곌낵瑜??낅젰?섏꽭??'); return }
+    setSubmitting(true); setMsg('')
+    const winnerId = editWinner === 'A' ? editMatch.team_a_id : editMatch.team_b_id
+    const { error } = await supabase.rpc('rpc_venue_submit_score', {
+      p_token: session.token, p_match_id: editMatch.id,
+      p_score: editScore, p_winner_team_id: winnerId,
+    })
+    setSubmitting(false)
+    if (error) { setMsg('! ' + error.message); return }
+    setMsg('OK 寃곌낵 ??λ맖')
+    setEditMatch(null)
+    loadData()
+  }
+
+  async function startMatch(matchId: string) {
+    const { error } = await supabase.rpc('rpc_venue_start_match', {
+      p_token: session.token, p_match_id: matchId,
+    })
+    if (error) { setMsg('! ' + error.message); return }
+    loadData()
+  }
+
+  async function assignToCourt(matchId: string, court: string, isTie: boolean) {
+    if (isTie) {
+      const courtNum = parseInt(court.replace(/\D/g, ''))
+      const { error } = await supabase.from('ties').update({ court_number: courtNum }).eq('id', matchId)
+      if (error) { setMsg('! ' + error.message); return }
+      loadData()
+      return
+    }
+    const courtMatches = byCourt.get(court) || []
+    const nextOrder = courtMatches.length + 1
+    const { error } = await supabase.rpc('rpc_venue_assign_court', {
+      p_token: session.token, p_match_id: matchId, p_court: court, p_court_order: nextOrder,
+    })
+    if (error) { setMsg('! ' + error.message); return }
+    loadData()
+  }
+
+  async function unassignFromCourt(matchId: string, isTie: boolean) {
+    if (isTie) {
+      const { error } = await supabase.from('ties').update({ court_number: null }).eq('id', matchId)
+      if (error) { setMsg('! ' + error.message); return }
+      loadData()
+      return
+    }
+    const { error } = await supabase.rpc('rpc_venue_unassign_court', {
+      p_token: session.token, p_match_id: matchId,
+    })
+    if (error) { setMsg('! ' + error.message); return }
+    loadData()
+  }
+
+  function handleLogout() {
+    sessionStorage.removeItem('venue_session')
+    router.push('/venue')
+  }
+
+  function handleDragOver(e: React.DragEvent) { e.preventDefault() }
+  function handleDropOnCourt(court: string) {
+    if (!dragMatch) return
+    const m = matches.find(x => x.id === dragMatch)
+    if (m) assignToCourt(m.id, court, !!m.is_team_tie)
+    setDragMatch(null)
+  }
+  function handleDropOnUnassigned() {
+    if (!dragMatch) return
+    const m = matches.find(x => x.id === dragMatch)
+    if (m) unassignFromCourt(m.id, !!m.is_team_tie)
+    setDragMatch(null)
+  }
+
+  if (!session) return null
+
+  return (
+    <div className="min-h-screen bg-stone-50">
+      <header className="bg-orange-500 text-white sticky top-0 z-10">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div>
+            <h1 className="font-bold text-lg">{session.venue_name}</h1>
+            <p className="text-xs text-white/70">{session.manager_name} / {myCourts.join(', ')}</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-white/60">{lastUpdate.toLocaleTimeString('ko-KR')}</span>
+            <button onClick={handleLogout} className="text-sm text-white/70 hover:text-white">濡쒓렇?꾩썐</button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-6xl mx-auto px-4 py-4">
+        {msg && (
+          <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('OK') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
+            {msg}
+          </div>
+        )}
+
+        {loading ? (
+          <p className="text-center py-10 text-stone-400">遺덈윭?ㅻ뒗 以?..</p>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            {/* 誘몃같??*/}
+            <div className="lg:col-span-1" onDragOver={handleDragOver} onDrop={handleDropOnUnassigned}>
+              <div className="bg-white rounded-xl border overflow-hidden">
+                <div className="bg-stone-500 text-white px-4 py-2 font-bold text-sm flex items-center justify-between">
+                  <span>誘몃같??({unassigned.length}/{allUnassigned.length})</span>
+                </div>
+
+                {/* 遺???꾪꽣 ??*/}
+                <div className="px-2 py-2 border-b flex flex-wrap gap-1">
+                  <button onClick={() => setFilterDiv('ALL')}
+                    className={`px-2 py-1 rounded text-xs font-medium transition-all ${filterDiv === 'ALL' ? 'bg-stone-700 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}>
+                    ?꾩껜 ({allUnassigned.length})
+                  </button>
+                  {divisionNames.map(dn => {
+                    const cnt = allUnassigned.filter(m => m.division_name === dn).length
+                    if (cnt === 0) return null
+                    // BUG#3: 臾몄옄??鍮꾧탳 ???is_team_tie ?뚮옒洹몃줈 ?먮퀎
+                    const isTie = allUnassigned.find(m => m.division_name === dn)?.is_team_tie === true
+                    return (
+                      <button key={dn} onClick={() => setFilterDiv(dn)}
+                        className={`px-2 py-1 rounded text-xs font-medium transition-all ${
+                          filterDiv === dn
+                            ? (isTie ? 'bg-blue-600 text-white' : 'bg-amber-600 text-white')
+                            : (isTie ? 'bg-blue-50 text-blue-600 hover:bg-blue-100' : 'bg-amber-50 text-amber-600 hover:bg-amber-100')
+                        }`}>
+                        {dn} ({cnt})
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <div className="p-2 max-h-[60vh] overflow-y-auto space-y-1">
+                  {unassigned.length === 0 ? (
+                    <p className="text-xs text-stone-400 text-center py-4">誘몃같??寃쎄린 ?놁쓬</p>
+                  ) : (
+                    unassigned.map(m => (
+                      <MatchChip key={m.id} m={m} onDragStart={setDragMatch} onClickScore={() => !m.is_team_tie && openScoreEdit(m)} />
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* 肄뷀듃??*/}
+            <div className="lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {myCourts.map(court => {
+                const courtMatches = (byCourt.get(court) || []).sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
+                const finished = courtMatches.filter(m => m.status === 'FINISHED').length
+                const currentIdx = courtMatches.findIndex(m => m.status === 'IN_PROGRESS')
+                const pendingIdx = courtMatches.findIndex(m => m.status === 'PENDING')
+                const activeIdx = currentIdx >= 0 ? currentIdx : pendingIdx
+                const isLive = currentIdx >= 0
+
+                return (
+                  <div key={court} onDragOver={handleDragOver} onDrop={() => handleDropOnCourt(court)}
+                    className="bg-white rounded-xl border overflow-hidden">
+                    <div className={`px-4 py-3 flex items-center justify-between ${isLive ? 'bg-red-700' : 'bg-[#2d5016]'} text-white`}>
+                      <div>
+                        <span className="font-bold">{court}</span>
+                        {isLive && <span className="ml-2 text-xs bg-white/20 px-2 py-0.5 rounded-full animate-pulse">LIVE</span>}
+                      </div>
+                      <span className="text-white/60 text-sm">{finished}/{courtMatches.length}</span>
+                    </div>
+                    <div className="p-2 space-y-1">
+                      {courtMatches.map((m, i) => {
+                        let badge = ''
+                        let badgeColor = ''
+                        if (m.status === 'IN_PROGRESS') { badge = '吏꾪뻾以?; badgeColor = 'bg-red-50 border-red-200' }
+                        else if (m.status === 'FINISHED') { badgeColor = m.is_team_tie ? 'bg-blue-50 border-blue-200' : 'bg-green-50 border-green-200' }
+                        else if (activeIdx >= 0 && i === activeIdx) { badge = '?꾩옱'; badgeColor = 'bg-red-50 border-red-200' }
+                        else if (activeIdx >= 0 && i === activeIdx + 1) { badge = '?湲?'; badgeColor = 'bg-amber-50 border-amber-200' }
+                        else if (activeIdx >= 0 && i === activeIdx + 2) { badge = '?湲?'; badgeColor = 'bg-green-50 border-green-200' }
+
+                        // BUG#3: is_team_tie ?뚮옒洹?湲곕컲?쇰줈 ?⑥껜???먮퀎
+                        const canStart = !m.is_team_tie && m.status === 'PENDING' && (activeIdx < 0 || i === activeIdx)
+
+                        return (
+                          <div key={m.id} draggable onDragStart={() => setDragMatch(m.id)}
+                            className={`rounded-lg border p-2.5 cursor-grab active:cursor-grabbing transition-all ${badgeColor || (m.is_team_tie ? 'border-blue-200' : 'border-stone-200')}`}>
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-stone-400 font-bold">#{m.court_order}</span>
+                                {m.is_team_tie && <span className="text-[10px] bg-blue-600 text-white px-1 rounded">?⑥껜</span>}
+                                {badge && <span className="text-xs font-bold">{badge}</span>}
+                                <span className="text-xs text-stone-400">{m.division_name} {m.round}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                {canStart && (
+                                  <button onClick={() => startMatch(m.id)}
+                                    className="text-xs bg-red-500 text-white px-2 py-0.5 rounded hover:bg-red-600">?쒖옉</button>
+                                )}
+                                {!m.is_team_tie && (
+                                  <button onClick={() => openScoreEdit(m)}
+                                    className="text-xs text-stone-400 hover:text-blue-500"></button>
+                                )}
+                                <button onClick={() => unassignFromCourt(m.id, !!m.is_team_tie)}
+                                  className="text-xs text-stone-400 hover:text-red-500">x</button>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <div className="flex-1 min-w-0">
+                                <div className={`text-sm truncate ${m.winner_team_id === m.team_a_id ? (m.is_team_tie ? 'font-bold text-blue-700' : 'font-bold text-green-700') : 'font-medium'}`}>
+                                  {m.team_a_name || 'TBD'}
+                                </div>
+                                <div className="text-xs text-stone-300">vs</div>
+                                <div className={`text-sm truncate ${m.winner_team_id === m.team_b_id ? (m.is_team_tie ? 'font-bold text-blue-700' : 'font-bold text-green-700') : 'font-medium'}`}>
+                                  {m.team_b_name || 'TBD'}
+                                </div>
+                              </div>
+                              {m.status === 'FINISHED' && m.score && (
+                                <div className={`text-lg font-bold ${m.is_team_tie ? 'text-blue-600' : 'text-green-600'}`}>{m.score}</div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                      {courtMatches.length === 0 && (
+                        <div className="text-center py-8 text-stone-300 border-2 border-dashed rounded-lg">
+                          <div className="text-2xl mb-1"></div>
+                          <div className="text-xs">寃쎄린瑜??쒕옒洹명븯?몄슂</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </main>
+
+      {editMatch && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setEditMatch(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="font-bold text-lg mb-1">寃쎄린 寃곌낵 ?낅젰</h3>
+            <p className="text-xs text-stone-400 mb-4">
+              {editMatch.match_num} / {editMatch.division_name} / {editMatch.round}
+              {editMatch.court && <span className="ml-1 text-green-700 font-medium">({editMatch.court} #{editMatch.court_order})</span>}
+            </p>
+            <div className="flex items-center justify-center gap-4 my-4">
+              <div className="text-center flex-1 font-medium">{editMatch.team_a_name || 'TBD'}</div>
+              <span className="text-xl text-stone-300">VS</span>
+              <div className="text-center flex-1 font-medium">{editMatch.team_b_name || 'TBD'}</div>
+            </div>
+            {editMatch.locked_by_participant && (
+              <div className="mb-3 p-2 bg-amber-50 rounded-lg text-xs text-amber-700">李멸??먭? ?대? ?낅젰??寃곌낵?낅땲??</div>
+            )}
+            <div className="mb-4">
+              <label className="text-xs text-stone-500 mb-1 block">?먯닔</label>
+              <input type="text" placeholder="6:4" value={editScore}
+                onChange={e => setEditScore(e.target.value)}
+                className="w-full border rounded-xl px-4 py-3 text-center text-lg font-bold" autoFocus />
+            </div>
+            <div className="mb-4">
+              <label className="text-xs text-stone-500 mb-1 block">?뱀옄</label>
+              <div className="flex gap-2">
+                <button onClick={() => setEditWinner('A')}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium border-2 transition-all ${
+                    editWinner === 'A' ? 'bg-orange-500 text-white border-orange-500' : 'border-stone-200 hover:border-orange-400'
+                  }`}>{editMatch.team_a_name || 'A'}</button>
+                <button onClick={() => setEditWinner('B')}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-medium border-2 transition-all ${
+                    editWinner === 'B' ? 'bg-orange-500 text-white border-orange-500' : 'border-stone-200 hover:border-orange-400'
+                  }`}>{editMatch.team_b_name || 'B'}</button>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setEditMatch(null)}
+                className="flex-1 py-2.5 rounded-xl border border-stone-300 text-sm text-stone-600">痍⑥냼</button>
+              <button onClick={submitScore} disabled={submitting || !editScore || !editWinner}
+                className="flex-1 py-2.5 rounded-xl bg-orange-500 text-white font-bold text-sm hover:bg-orange-600 disabled:opacity-50">
+                {submitting ? '???以?..' : '寃곌낵 ???}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MatchChip({ m, onDragStart, onClickScore }: {
+  m: VenueMatch
+  onDragStart: (id: string) => void
+  onClickScore: () => void
+}) {
+  return (
+    <div draggable onDragStart={() => onDragStart(m.id)}
+      className={`rounded-lg border p-2 text-xs cursor-grab active:cursor-grabbing transition-all ${
+        m.is_team_tie ? 'bg-blue-50 border-blue-200 hover:border-blue-300' : 'bg-white border-stone-200 hover:border-stone-300'
+      }`}>
+      <div className="flex items-center gap-1 mb-1">
+        {m.is_team_tie && <span className="bg-blue-600 text-white text-[9px] px-1 rounded">?⑥껜</span>}
+        <span className="text-stone-400 truncate flex-1">{m.division_name} 쨌 {m.round}</span>
+        {!m.is_team_tie && (
+          <button onClick={e => { e.stopPropagation(); onClickScore() }} className="text-stone-300 hover:text-blue-500"></button>
+        )}
+      </div>
+      <div className="font-medium truncate">{m.team_a_name} <span className="text-stone-300">v</span> {m.team_b_name}</div>
+    </div>
+  )
+}
+
+
