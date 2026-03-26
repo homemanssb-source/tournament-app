@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -9,7 +9,6 @@ type Mode = 'select' | 'individual' | 'team';
 
 export default function PinPage() {
   const router = useRouter()
-  const [events, setEvents] = useState<any[]>([])
   const [selectedEvent, setSelectedEvent] = useState('')
   const [pin, setPin] = useState('')
   const [error, setError] = useState('')
@@ -17,21 +16,27 @@ export default function PinPage() {
   const [mode, setMode] = useState<Mode>('select')
   const [teamTies, setTeamTies] = useState<any[]>([])
 
-  // ── 푸시 알림 구독 ──
   const { status: pushStatus, message: pushMessage, subscribeWithPin } = usePushSubscription()
   const [loginSuccess, setLoginSuccess] = useState(false)
   const [loginPin, setLoginPin] = useState('')
 
   useEffect(() => {
-    supabase.from('events').select('id, name, event_type').eq('status', 'active')
+    // ✅ 운영자 대시보드에서 선택한 대회 우선 사용
+    const dashboardEventId = sessionStorage.getItem('dashboard_event_id')
+    if (dashboardEventId) {
+      setSelectedEvent(dashboardEventId)
+      return
+    }
+    // 없으면 가장 최근 active 대회 자동 선택
+    supabase.from('events').select('id').eq('status', 'active')
+      .order('date', { ascending: false }).limit(1)
       .then(({ data }) => {
-        setEvents(data || [])
-        if (data?.length === 1) setSelectedEvent(data[0].id)
+        if (data?.[0]?.id) setSelectedEvent(data[0].id)
       })
   }, [])
 
   async function handleIndividualSubmit() {
-    if (!selectedEvent) { setError('대회를 선택해주세요.'); return }
+    if (!selectedEvent) { setError('대회 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.'); return }
     if (pin.length !== 6) { setError('PIN 6자리를 입력해주세요.'); return }
     setError(''); setLoading(true)
     const { data, error: err } = await supabase.rpc('rpc_pin_login', {
@@ -42,10 +47,7 @@ export default function PinPage() {
     sessionStorage.setItem('pin_session', JSON.stringify(data))
     sessionStorage.setItem('venue_pin', pin)
     sessionStorage.setItem('pin_event_id', selectedEvent)
-    sessionStorage.setItem('venue_pin', pin)
-    sessionStorage.setItem('pin_event_id', selectedEvent)
 
-    // 로그인 성공 → 알림 구독 화면으로
     setLoginPin(pin)
     setLoginSuccess(true)
   }
@@ -92,7 +94,7 @@ export default function PinPage() {
 
   function resetMode() { setMode('select'); setPin(''); setError(''); setTeamTies([]) }
 
-  // ── 로그인 성공 후 알림 구독 화면 ──
+  // 로그인 성공 후 알림 구독 화면
   if (loginSuccess) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4">
@@ -145,14 +147,6 @@ export default function PinPage() {
       <p className="text-stone-500 text-sm mb-8">내 팀 전용 PIN 입력</p>
 
       <div className="w-full max-w-sm space-y-4">
-        {events.length > 1 && mode !== 'select' && (
-          <select value={selectedEvent} onChange={e => setSelectedEvent(e.target.value)}
-            className="w-full border border-stone-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-tennis-600">
-            <option value="">대회 선택</option>
-            {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
-          </select>
-        )}
-
         {mode === 'select' && (
           <div className="space-y-3">
             <button onClick={() => setMode('individual')}
@@ -181,7 +175,8 @@ export default function PinPage() {
             {error && <p className="text-red-500 text-sm text-center">{error}</p>}
             <button onClick={handleIndividualSubmit} disabled={loading || pin.length !== 6}
               className="w-full bg-amber-600 text-white font-bold py-3.5 rounded-xl hover:bg-amber-700 disabled:opacity-50 transition-all">
-              {loading ? '확인 중...' : '로그인'}</button>
+              {loading ? '확인 중...' : '로그인'}
+            </button>
             <button onClick={resetMode} className="w-full text-stone-400 text-sm py-2 hover:text-stone-600">← 뒤로가기</button>
           </>
         )}
@@ -198,7 +193,8 @@ export default function PinPage() {
             {error && <p className="text-red-500 text-sm text-center">{error}</p>}
             <button onClick={handleTeamSubmit} disabled={loading || pin.length !== 6}
               className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-all">
-              {loading ? '확인 중...' : '확인'}</button>
+              {loading ? '확인 중...' : '확인'}
+            </button>
             <button onClick={resetMode} className="w-full text-stone-400 text-sm py-2 hover:text-stone-600">← 뒤로가기</button>
           </>
         )}

@@ -6,22 +6,28 @@ import { supabase } from '@/lib/supabase'
 
 export default function AdminPinPage() {
   const router = useRouter()
-  const [events, setEvents] = useState<any[]>([])
   const [selectedEvent, setSelectedEvent] = useState('')
   const [pin, setPin] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    supabase.from('events').select('id, name').eq('status', 'active')
+    // ✅ 운영자 대시보드에서 선택한 대회 우선 사용
+    const dashboardEventId = sessionStorage.getItem('dashboard_event_id')
+    if (dashboardEventId) {
+      setSelectedEvent(dashboardEventId)
+      return
+    }
+    // 없으면 가장 최근 active 대회 자동 선택
+    supabase.from('events').select('id').eq('status', 'active')
+      .order('date', { ascending: false }).limit(1)
       .then(({ data }) => {
-        setEvents(data || [])
-        if (data?.length === 1) setSelectedEvent(data[0].id)
+        if (data?.[0]?.id) setSelectedEvent(data[0].id)
       })
   }, [])
 
   async function handleSubmit() {
-    if (!selectedEvent) { setError('대회를 선택해주세요.'); return }
+    if (!selectedEvent) { setError('대회 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.'); return }
     if (!pin) { setError('마스터 PIN을 입력해주세요.'); return }
     setError(''); setLoading(true)
 
@@ -46,14 +52,6 @@ export default function AdminPinPage() {
       <p className="text-stone-500 text-sm mb-8">마스터 PIN을 입력하세요 (30분 세션)</p>
 
       <div className="w-full max-w-sm space-y-4">
-        {events.length > 1 && (
-          <select value={selectedEvent} onChange={e => setSelectedEvent(e.target.value)}
-            className="w-full border border-stone-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-red-500">
-            <option value="">대회 선택</option>
-            {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
-          </select>
-        )}
-
         <input type="tel" value={pin}
           onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
           onKeyDown={e => e.key === 'Enter' && handleSubmit()}
