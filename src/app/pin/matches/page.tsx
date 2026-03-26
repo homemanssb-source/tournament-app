@@ -4,6 +4,7 @@
 // ✅ 알림 자동 재구독 (앱 재실행 시 구독 유효성 체크)
 // ✅ 알림 상태 표시 개선 — 꺼짐/켜짐/재시도 버튼
 // ✅ 30초 자동갱신 유지
+// ✅ 단체전 코트 표시를 venues short_name 기반으로 수정
 // ============================================================
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
@@ -40,6 +41,12 @@ interface PinTie {
   ended_at: string | null
 }
 
+// ✅ venue 정보 (short_name 기반 코트 이름 변환용)
+interface VenueInfo {
+  short_name: string
+  court_count: number
+}
+
 export default function PinMatchesPage() {
   const router = useRouter()
   const [matches, setMatches]         = useState<PinMatch[]>([])
@@ -50,32 +57,49 @@ export default function PinMatchesPage() {
   const [statusFilter, setStatusFilter] = useState('IN_PROGRESS')
   const prevMatchIds = useRef<Set<string>>(new Set())
 
-  // ── 브라우저 Notification 상태 ─────────────────────────────
+  // ✅ venues 정보 (코트 이름 변환용)
+  const [venues, setVenues] = useState<VenueInfo[]>([])
+
   const [notifAllowed, setNotifAllowed]     = useState(false)
   const [notifRequested, setNotifRequested] = useState(false)
 
-  // ── Web Push 자동 재구독 ────────────────────────────────────
   const { autoResubscribe } = usePushSubscription()
 
-  // ── PIN 검증 + 초기화 ──────────────────────────────────────
   useEffect(() => {
     const pin     = sessionStorage.getItem('venue_pin')
     const eventId = sessionStorage.getItem('pin_event_id')
     if (!pin || !eventId) { router.replace('/pin'); return }
+
+    // ✅ venues 로드 (short_name 기반 코트 이름 변환)
+    supabase.from('venues')
+      .select('short_name, court_count, courts')
+      .eq('event_id', eventId)
+      .then(({ data }) => setVenues(data || []))
+
     loadData()
 
-    // 브라우저 알림 권한 상태 초기화
     if ('Notification' in window) {
       const perm = Notification.permission
       setNotifAllowed(perm === 'granted')
       setNotifRequested(perm !== 'default')
     }
 
-    // ✅ Web Push 자동 재구독 (백그라운드에서 조용히 처리)
     autoResubscribe()
   }, [])
 
-  // ── 브라우저 알림 권한 요청 ────────────────────────────────
+  // ✅ court_number(숫자) → "short_name-N" 변환 함수
+  function getCourtName(courtNumber: number): string {
+    for (const v of venues) {
+      const count = v.court_count || 0
+      if (courtNumber >= 1 && courtNumber <= count) {
+        const sn = v.short_name?.trim() || '코트'
+        return `${sn}-${courtNumber}`
+      }
+    }
+    // fallback: venues 없으면 기존 방식
+    return `코트 ${courtNumber}`
+  }
+
   async function requestNotification() {
     setNotifRequested(true)
     if (!('Notification' in window)) {
@@ -90,7 +114,6 @@ export default function PinMatchesPage() {
           body: '경기 알림이 활성화되었습니다.',
           icon: '/icon.png',
         })
-        // ✅ 권한 허용되면 Web Push 재구독도 같이 시도
         autoResubscribe()
       } else if (perm === 'denied') {
         alert('알림이 차단되어 있습니다.\n브라우저 설정 → 이 사이트 → 알림 허용으로 변경해주세요.')
@@ -100,7 +123,6 @@ export default function PinMatchesPage() {
     }
   }
 
-  // ── 알림 발송 (경기 완료 감지 시) ─────────────────────────
   function sendNotification(title: string, body: string) {
     if (!('Notification' in window)) return
     if (Notification.permission === 'granted') {
@@ -108,7 +130,6 @@ export default function PinMatchesPage() {
     }
   }
 
-  // ── 데이터 로드 ────────────────────────────────────────────
   const loadData = useCallback(async () => {
     const eventId = sessionStorage.getItem('pin_event_id')
     if (!eventId) return
@@ -134,8 +155,6 @@ export default function PinMatchesPage() {
         started_at: m.started_at, ended_at: m.ended_at,
       }))
 
-      // ✅ 새로 완료된 경기 감지 → 브라우저 알림 발송
-      // (최초 로드 시에는 prevMatchIds가 비어있으므로 알림 안 보냄)
       if (prevMatchIds.current.size > 0) {
         newMatches.forEach(m => {
           if (m.status === 'FINISHED' && !prevMatchIds.current.has(m.id)) {
@@ -157,7 +176,6 @@ export default function PinMatchesPage() {
     }
   }, [])
 
-  // ── 30초 자동 갱신 ─────────────────────────────────────────
   useEffect(() => {
     const interval = setInterval(() => loadData(), 30000)
     return () => clearInterval(interval)
@@ -165,7 +183,6 @@ export default function PinMatchesPage() {
 
   useEffect(() => { loadData() }, [loadData])
 
-  // ── 유틸 ───────────────────────────────────────────────────
   function formatDuration(start: string, end?: string | null): string {
     const from = new Date(start).getTime()
     const to   = end ? new Date(end).getTime() : Date.now()
@@ -192,14 +209,11 @@ export default function PinMatchesPage() {
     return true
   })
 
-  // ── 알림 버튼 렌더링 ───────────────────────────────────────
   function NotifButton() {
-    // 이미 허용된 경우
     if (notifAllowed) {
       return (
         <button
           onClick={() => {
-            // 재시도: 한번 더 재구독 시도
             autoResubscribe()
             sendNotification('알림 테스트', '알림이 정상 작동 중입니다.')
           }}
@@ -210,8 +224,6 @@ export default function PinMatchesPage() {
         </button>
       )
     }
-
-    // 거부된 경우
     if (notifRequested && !notifAllowed) {
       return (
         <button
@@ -222,8 +234,6 @@ export default function PinMatchesPage() {
         </button>
       )
     }
-
-    // 아직 요청 안 한 경우
     return (
       <button
         onClick={requestNotification}
@@ -236,7 +246,6 @@ export default function PinMatchesPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* 헤더 */}
       <header className="bg-[#2d5016] text-white sticky top-0 z-10">
         <div className="max-w-3xl mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
@@ -252,7 +261,6 @@ export default function PinMatchesPage() {
             </div>
           </div>
 
-          {/* 탭 */}
           <div className="flex gap-2 mt-3 border-t border-white/10 pt-3">
             <button
               onClick={() => setTab('individual')}
@@ -268,7 +276,6 @@ export default function PinMatchesPage() {
             </button>
           </div>
 
-          {/* 필터 */}
           <div className="flex gap-2 mt-2 overflow-x-auto pb-1">
             <select
               value={statusFilter}
@@ -309,7 +316,13 @@ export default function PinMatchesPage() {
             <p className="text-center py-10 text-gray-400">단체전이 없습니다.</p>
           ) : (
             filteredTies.map(t => (
-              <TieCard key={t.id} tie={t} formatTime={formatTime} formatDuration={formatDuration} />
+              <TieCard
+                key={t.id}
+                tie={t}
+                formatTime={formatTime}
+                formatDuration={formatDuration}
+                courtName={t.court_number ? getCourtName(t.court_number) : null}
+              />
             ))
           )
         )}
@@ -318,7 +331,6 @@ export default function PinMatchesPage() {
   )
 }
 
-// ── MatchCard ─────────────────────────────────────────────────
 function MatchCard({ match: m, formatTime, formatDuration }: {
   match: PinMatch
   formatTime: (s: string) => string
@@ -376,11 +388,11 @@ function MatchCard({ match: m, formatTime, formatDuration }: {
   )
 }
 
-// ── TieCard ───────────────────────────────────────────────────
-function TieCard({ tie: t, formatTime, formatDuration }: {
+function TieCard({ tie: t, formatTime, formatDuration, courtName }: {
   tie: PinTie
   formatTime: (s: string) => string
   formatDuration: (s: string, e?: string | null) => string
+  courtName: string | null  // ✅ short_name 기반 코트 이름
 }) {
   const isLive = t.status === 'in_progress'
   const isDone = t.status === 'completed'
@@ -397,9 +409,10 @@ function TieCard({ tie: t, formatTime, formatDuration }: {
       <div className="p-4">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2 text-xs text-gray-400">
-            {t.court_number && (
+            {/* ✅ short_name 기반 코트 이름 표시 */}
+            {courtName && (
               <span className={`px-2 py-0.5 rounded font-medium ${isLive ? 'bg-red-100 text-red-700' : isDone ? 'bg-green-100 text-green-700' : 'bg-gray-100'}`}>
-                코트 {t.court_number}
+                {courtName}
               </span>
             )}
             <span>단체전 #{t.tie_order}</span>

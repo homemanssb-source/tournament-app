@@ -42,19 +42,21 @@ export default function TiesPage() {
   const [saveError, setSaveError] = useState('');
   const [copiedTieId, setCopiedTieId] = useState<string | null>(null);
 
-  const [courtCount, setCourtCount]     = useState(20);
   const [editingCourt, setEditingCourt] = useState<string | null>(null);
   const [courtInput, setCourtInput]     = useState('');
+  // ✅ venues 기반 코트 이름 목록
+  const [courtNames, setCourtNames]     = useState<string[]>([]);
 
   const loadData = useCallback(async () => {
     if (!eventId) return;
     setLoading(true);
     try {
-      const [cfg, tieList, grpsRes, divsRes] = await Promise.all([
+      const [cfg, tieList, grpsRes, divsRes, venueRes] = await Promise.all([
         fetchEventTeamConfig(eventId),
         fetchTies(eventId),
         supabase.from('groups').select('*').eq('event_id', eventId).order('division_id').order('group_num'),
         supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
+        supabase.from('venues').select('short_name, court_count, courts').eq('event_id', eventId).order('created_at'),
       ]);
       setConfig(cfg);
       setTies(tieList);
@@ -62,6 +64,14 @@ export default function TiesPage() {
       const divList = divsRes.data || [];
       setDivisions(divList);
       setSelectedDiv(prev => prev || (divList[0]?.id ?? ''));
+      // ✅ venues → 코트 이름 목록 생성
+      const venueList = venueRes.data || [];
+      const names: string[] = venueList.flatMap((v: any) => {
+        const sn = v.short_name?.trim() || '코트';
+        const count = v.court_count || v.courts?.length || 0;
+        return Array.from({ length: count }, (_, i) => `${sn}-${i + 1}`);
+      });
+      setCourtNames(names.length > 0 ? names : Array.from({ length: 20 }, (_, i) => `코트-${i + 1}`));
     } finally {
       setLoading(false);
     }
@@ -338,7 +348,9 @@ export default function TiesPage() {
                         {bWin && '🏆 '}{tie.club_b?.name || 'TBD'}
                       </span>
                       {tie.court_number && (
-                        <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">코트 {tie.court_number}</span>
+                        <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
+                          {courtNames[tie.court_number - 1] || `코트 ${tie.court_number}`}
+                        </span>
                       )}
                       {tie.is_bye && (
                         <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">부전승</span>
@@ -424,8 +436,8 @@ export default function TiesPage() {
                         <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
                           <select value={courtInput} onChange={e => setCourtInput(e.target.value)} className="border rounded px-2 py-1 text-xs">
                             <option value="">미배정</option>
-                            {Array.from({ length: courtCount }, (_, i) => i + 1).map(n => (
-                              <option key={n} value={n}>코트 {n}</option>
+                            {courtNames.map((name, idx) => (
+                              <option key={idx + 1} value={idx + 1}>{name}</option>
                             ))}
                           </select>
                           <button onClick={() => handleCourtAssign(tie.id, courtInput ? parseInt(courtInput) : null)}
