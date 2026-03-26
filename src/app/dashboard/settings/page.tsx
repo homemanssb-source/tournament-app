@@ -6,7 +6,7 @@ interface Venue {
   id: string
   event_id: string
   name: string
-  courts: string[]
+  court_count: number        // ✅ courts[] 대신 court_count 사용
   pin_plain: string
   manager_name: string
   phone: string | null
@@ -16,7 +16,6 @@ export default function SettingsPage() {
   const [eventId, setEventId] = useState('')
   const [eventName, setEventName] = useState('')
 
-  // ── 대회 공개 상태 (추가된 부분) ──
   const [eventStatus, setEventStatus] = useState<string>('')
   const [statusLoading, setStatusLoading] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
@@ -31,17 +30,12 @@ export default function SettingsPage() {
   const [newVenueName, setNewVenueName] = useState('')
   const [newVenuePin, setNewVenuePin] = useState('')
   const [newVenueManager, setNewVenueManager] = useState('')
-  const [selectedCourts, setSelectedCourts] = useState<string[]>([])
+  const [newCourtCount, setNewCourtCount] = useState(8)   // ✅ 코트 수 입력
   const [venueMsg, setVenueMsg] = useState('')
   const [venueLoading, setVenueLoading] = useState(true)
 
-  const [totalCourts, setTotalCourts] = useState(10)
-  const allCourtNames = Array.from({ length: totalCourts }, (_, i) => '코트 ' + (i + 1))
-
-  const usedCourts = venues.flatMap(v => Array.isArray(v.courts) ? v.courts : [])
-
   const [editVenueId, setEditVenueId] = useState<string | null>(null)
-  const [editCourts, setEditCourts] = useState<string[]>([])
+  const [editCourtCount, setEditCourtCount] = useState(8) // ✅ 편집용 코트 수
 
   useEffect(() => {
     const stored = sessionStorage.getItem('dashboard_event_id')
@@ -57,19 +51,15 @@ export default function SettingsPage() {
     if (data) {
       setEventName(data.name)
       setHasMasterPin(!!data.master_pin_hash)
-      setEventStatus(data.status || 'preparing') // ← 추가
+      setEventStatus(data.status || 'preparing')
     }
   }
 
-  // ── 대회 공개/잠금 토글 (추가된 함수) ──
   async function toggleEventStatus() {
     setStatusLoading(true)
     setStatusMsg('')
     const newStatus = eventStatus === 'active' ? 'preparing' : 'active'
-    const { error } = await supabase
-      .from('events')
-      .update({ status: newStatus })
-      .eq('id', eventId)
+    const { error } = await supabase.from('events').update({ status: newStatus }).eq('id', eventId)
     setStatusLoading(false)
     if (error) { setStatusMsg('❌ ' + error.message); return }
     setEventStatus(newStatus)
@@ -78,8 +68,7 @@ export default function SettingsPage() {
 
   async function loadVenues(eid: string) {
     setVenueLoading(true)
-    const { data } = await supabase.from('venues').select('*')
-      .eq('event_id', eid).order('created_at')
+    const { data } = await supabase.from('venues').select('*').eq('event_id', eid).order('created_at')
     setVenues(data || [])
     setVenueLoading(false)
   }
@@ -99,54 +88,40 @@ export default function SettingsPage() {
     setNewPin(''); setConfirmPin('')
   }
 
-  function toggleCourt(court: string) {
-    setSelectedCourts(prev =>
-      prev.includes(court) ? prev.filter(c => c !== court) : [...prev, court]
-    )
-  }
-
-  function toggleEditCourt(court: string) {
-    setEditCourts(prev =>
-      prev.includes(court) ? prev.filter(c => c !== court) : [...prev, court]
-    )
-  }
-
+  // ✅ 코트 수 기반으로 courts[] 자동 생성 후 저장
   async function addVenue() {
     if (!newVenueName.trim()) { setVenueMsg('! 경기장 이름을 입력하세요.'); return }
     if (!newVenuePin.trim() || newVenuePin.length < 4) { setVenueMsg('! PIN 4자리 이상 입력하세요.'); return }
-    if (selectedCourts.length === 0) { setVenueMsg('! 코트를 최소 1개 선택하세요.'); return }
+    if (newCourtCount < 1) { setVenueMsg('! 코트 수는 1개 이상이어야 합니다.'); return }
 
     setVenueMsg('')
-    const sortedCourts = [...selectedCourts].sort((a, b) => {
-      const na = parseInt(a.replace(/\D/g, ''))
-      const nb = parseInt(b.replace(/\D/g, ''))
-      return na - nb
-    })
+    const courts = Array.from({ length: newCourtCount }, (_, i) => '코트 ' + (i + 1))
 
     const { error } = await supabase.from('venues').insert({
       event_id: eventId,
       name: newVenueName.trim(),
-      courts: sortedCourts,
+      courts,                                          // 기존 courts[] 호환 유지
+      court_count: newCourtCount,                      // ✅ court_count 저장
       pin_plain: newVenuePin.trim(),
       pin_hash: newVenuePin.trim(),
       manager_name: newVenueManager.trim() || newVenueName.trim() + ' 관리자',
     })
     if (error) { setVenueMsg('! ' + error.message); return }
-    setVenueMsg('OK 경기장 추가됨 (' + sortedCourts.length + '코트)')
-    setNewVenueName(''); setNewVenuePin(''); setNewVenueManager(''); setSelectedCourts([])
+    setVenueMsg('OK 경기장 추가됨 (' + newCourtCount + '코트)')
+    setNewVenueName(''); setNewVenuePin(''); setNewVenueManager(''); setNewCourtCount(8)
     loadVenues(eventId)
   }
 
-  async function saveEditCourts(venueId: string) {
-    if (editCourts.length === 0) { setVenueMsg('! 코트를 최소 1개 선택하세요.'); return }
-    const sortedCourts = [...editCourts].sort((a, b) => {
-      const na = parseInt(a.replace(/\D/g, ''))
-      const nb = parseInt(b.replace(/\D/g, ''))
-      return na - nb
-    })
-    const { error } = await supabase.from('venues').update({ courts: sortedCourts }).eq('id', venueId)
+  // ✅ 코트 수 변경 시 courts[]도 함께 업데이트
+  async function saveEditCourtCount(venueId: string) {
+    if (editCourtCount < 1) { setVenueMsg('! 코트 수는 1개 이상이어야 합니다.'); return }
+    const courts = Array.from({ length: editCourtCount }, (_, i) => '코트 ' + (i + 1))
+    const { error } = await supabase.from('venues').update({
+      courts,
+      court_count: editCourtCount,
+    }).eq('id', venueId)
     if (error) { setVenueMsg('! ' + error.message); return }
-    setVenueMsg('OK 코트 변경됨')
+    setVenueMsg('OK 코트 수 변경됨')
     setEditVenueId(null)
     loadVenues(eventId)
   }
@@ -170,7 +145,7 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold">설정</h1>
       <p className="text-sm text-stone-500">{eventName}</p>
 
-      {/* ── 대회 공개 설정 (추가된 섹션) ── */}
+      {/* 대회 공개 설정 */}
       <div className="bg-white rounded-xl border p-5 space-y-4">
         <div className="flex items-center gap-2">
           <h2 className="font-bold text-lg">대회 공개 설정</h2>
@@ -179,10 +154,7 @@ export default function SettingsPage() {
             : <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">비공개</span>
           }
         </div>
-        <p className="text-xs text-stone-400">
-          공개 상태일 때만 선수들이 대회 목록에서 이 대회를 볼 수 있습니다.
-        </p>
-
+        <p className="text-xs text-stone-400">공개 상태일 때만 선수들이 대회 목록에서 이 대회를 볼 수 있습니다.</p>
         <div className={`rounded-xl p-4 flex items-center justify-between ${
           eventStatus === 'active' ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'
         }`}>
@@ -191,29 +163,17 @@ export default function SettingsPage() {
               {eventStatus === 'active' ? '🔓 현재 공개 상태' : '🔒 현재 비공개 상태'}
             </p>
             <p className="text-xs text-stone-500 mt-0.5">
-              {eventStatus === 'active'
-                ? '선수들이 대회 목록에서 이 대회를 볼 수 있어요.'
-                : '선수들에게 대회가 보이지 않아요.'}
+              {eventStatus === 'active' ? '선수들이 대회 목록에서 이 대회를 볼 수 있어요.' : '선수들에게 대회가 보이지 않아요.'}
             </p>
           </div>
-          <button
-            onClick={toggleEventStatus}
-            disabled={statusLoading}
+          <button onClick={toggleEventStatus} disabled={statusLoading}
             className={`px-4 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 ${
-              eventStatus === 'active'
-                ? 'bg-amber-500 text-white hover:bg-amber-600'
-                : 'bg-green-500 text-white hover:bg-green-600'
-            }`}
-          >
+              eventStatus === 'active' ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-green-500 text-white hover:bg-green-600'
+            }`}>
             {statusLoading ? '변경 중...' : eventStatus === 'active' ? '🔒 비공개로 변경' : '🔓 대회 오픈하기'}
           </button>
         </div>
-
-        {statusMsg && (
-          <p className={`text-sm ${statusMsg.startsWith('✅') ? 'text-green-600' : 'text-red-500'}`}>
-            {statusMsg}
-          </p>
-        )}
+        {statusMsg && <p className={`text-sm ${statusMsg.startsWith('✅') ? 'text-green-600' : 'text-red-500'}`}>{statusMsg}</p>}
       </div>
 
       {/* 마스터 PIN */}
@@ -253,17 +213,10 @@ export default function SettingsPage() {
 
       {/* 경기장(부설) 관리 */}
       <div className="bg-white rounded-xl border p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="font-bold text-lg">경기장(부설) 관리</h2>
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-stone-500">전체 코트:</label>
-            <select value={totalCourts} onChange={e => setTotalCourts(Number(e.target.value))}
-              className="border rounded px-2 py-1 text-sm">
-              {[6, 8, 10, 12, 14, 16, 18, 20].map(n => <option key={n} value={n}>{n}개</option>)}
-            </select>
-          </div>
-        </div>
-        <p className="text-xs text-stone-400">경기장마다 PIN과 해당 코트를 설정하면 해당 경기장 관리자가 로그인해서 입력할 수 있습니다.</p>
+        <h2 className="font-bold text-lg">경기장(부설) 관리</h2>
+        <p className="text-xs text-stone-400">
+          경기장마다 PIN과 코트 수를 설정하면, 현장 담당자가 로그인 후 해당 코트(1번~N번)를 자동으로 관리할 수 있습니다.
+        </p>
 
         {/* 추가 폼 */}
         <div className="space-y-3 bg-stone-50 rounded-lg p-4">
@@ -284,31 +237,19 @@ export default function SettingsPage() {
               className="text-xs bg-white text-stone-600 px-3 py-2 rounded-lg hover:bg-stone-100 border">랜덤</button>
           </div>
 
-          <div>
-            <p className="text-xs text-stone-600 mb-2">해당 코트 선택:</p>
-            <div className="flex flex-wrap gap-1.5">
-              {allCourtNames.map(court => {
-                const isUsed = usedCourts.includes(court)
-                const isSelected = selectedCourts.includes(court)
-                return (
-                  <button key={court} onClick={() => !isUsed && toggleCourt(court)}
-                    disabled={isUsed}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                      isUsed ? 'bg-stone-200 text-stone-400 cursor-not-allowed line-through' :
-                      isSelected ? 'bg-blue-600 text-white' : 'bg-white border border-stone-300 text-stone-600 hover:border-blue-400'
-                    }`}>
-                    {court.replace('코트 ', '#')}
-                  </button>
-                )
-              })}
-            </div>
-            {selectedCourts.length > 0 && (
-              <p className="text-xs text-blue-600 mt-1">{selectedCourts.length}개 선택됨</p>
-            )}
+          {/* ✅ 코트 선택 버튼 → 코트 수 숫자 입력으로 교체 */}
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-stone-600 whitespace-nowrap">코트 수:</label>
+            <input
+              type="number" min={1} max={30} value={newCourtCount}
+              onChange={e => setNewCourtCount(Math.max(1, Math.min(30, Number(e.target.value))))}
+              className="w-20 border border-stone-300 rounded-lg px-3 py-2 text-sm text-center bg-white"
+            />
+            <span className="text-xs text-stone-400">개 (코트 1 ~ 코트 {newCourtCount} 자동 생성)</span>
           </div>
 
           <button onClick={addVenue}
-            disabled={!newVenueName.trim() || !newVenuePin.trim() || selectedCourts.length === 0}
+            disabled={!newVenueName.trim() || !newVenuePin.trim() || newCourtCount < 1}
             className="w-full bg-green-600 text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50">
             + 경기장 추가
           </button>
@@ -325,8 +266,8 @@ export default function SettingsPage() {
           <div className="space-y-3">
             {venues.map(v => {
               const isEditing = editVenueId === v.id
-              const venueCourts = Array.isArray(v.courts) ? v.courts : []
-              const otherUsedCourts = venues.filter(ov => ov.id !== v.id).flatMap(ov => Array.isArray(ov.courts) ? ov.courts : [])
+              // ✅ court_count 우선, 없으면 courts[] 길이로 fallback
+              const courtCount = v.court_count || (Array.isArray((v as any).courts) ? (v as any).courts.length : 0)
 
               return (
                 <div key={v.id} className="rounded-lg border overflow-hidden">
@@ -337,47 +278,38 @@ export default function SettingsPage() {
                         <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{v.pin_plain}</span>
                         {v.manager_name && <span className="text-xs text-stone-400">{v.manager_name}</span>}
                       </div>
-                      <div className="flex flex-wrap gap-1">
-                        {venueCourts.map(c => (
-                          <span key={c} className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">{c}</span>
-                        ))}
-                      </div>
+                      {/* ✅ 코트 수 표시 */}
+                      <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
+                        코트 {courtCount}개 (1~{courtCount})
+                      </span>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0 ml-2">
                       <button onClick={() => {
                         if (isEditing) { setEditVenueId(null) }
-                        else { setEditVenueId(v.id); setEditCourts([...venueCourts]) }
+                        else { setEditVenueId(v.id); setEditCourtCount(courtCount) }
                       }} className="text-xs text-blue-600 hover:underline">
-                        {isEditing ? '취소' : '코트변경'}
+                        {isEditing ? '취소' : '수정'}
                       </button>
                       <button onClick={() => deleteVenue(v)}
                         className="text-xs text-stone-400 hover:text-red-500">삭제</button>
                     </div>
                   </div>
 
+                  {/* ✅ 코트 수 수정 UI */}
                   {isEditing && (
                     <div className="bg-blue-50 px-4 py-3 space-y-2 border-t">
-                      <p className="text-xs text-blue-700 font-medium">코트 재선택</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {allCourtNames.map(court => {
-                          const isOtherUsed = otherUsedCourts.includes(court)
-                          const isSelected = editCourts.includes(court)
-                          return (
-                            <button key={court} onClick={() => !isOtherUsed && toggleEditCourt(court)}
-                              disabled={isOtherUsed}
-                              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                                isOtherUsed ? 'bg-stone-200 text-stone-400 cursor-not-allowed line-through' :
-                                isSelected ? 'bg-blue-600 text-white' : 'bg-white border border-stone-300 text-stone-600 hover:border-blue-400'
-                              }`}>
-                              {court.replace('코트 ', '#')}
-                            </button>
-                          )
-                        })}
+                      <p className="text-xs text-blue-700 font-medium">코트 수 변경</p>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="number" min={1} max={30} value={editCourtCount}
+                          onChange={e => setEditCourtCount(Math.max(1, Math.min(30, Number(e.target.value))))}
+                          className="w-20 border border-stone-300 rounded-lg px-3 py-2 text-sm text-center bg-white"
+                        />
+                        <span className="text-xs text-stone-400">개 (코트 1 ~ 코트 {editCourtCount})</span>
                       </div>
-                      <button onClick={() => saveEditCourts(v.id)}
-                        disabled={editCourts.length === 0}
-                        className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-medium hover:bg-blue-700 disabled:opacity-50">
-                        코트 저장 ({editCourts.length}개)
+                      <button onClick={() => saveEditCourtCount(v.id)}
+                        className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-medium hover:bg-blue-700">
+                        저장
                       </button>
                     </div>
                   )}
@@ -390,8 +322,8 @@ export default function SettingsPage() {
         {venues.length > 0 && (
           <button onClick={() => {
             const text = venues.map(v => {
-              const courts = Array.isArray(v.courts) ? v.courts.join(', ') : ''
-              return v.name + ' (PIN: ' + v.pin_plain + ') - ' + courts
+              const count = v.court_count || 0
+              return v.name + ' (PIN: ' + v.pin_plain + ') - 코트 ' + count + '개'
             }).join('\n')
             navigator.clipboard.writeText(text)
             setVenueMsg('OK PIN 목록을 복사했습니다.')

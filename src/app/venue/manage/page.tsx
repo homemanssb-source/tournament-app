@@ -9,7 +9,7 @@ interface VenueMatch {
   status: string; score: string | null; locked_by_participant: boolean
   team_a_name: string; team_b_name: string; team_a_id: string; team_b_id: string
   winner_team_id: string | null; division_name: string
-  is_team_tie?: boolean  // BUG#3: 이 플래그로 단체전 판별
+  is_team_tie?: boolean
 }
 
 export default function VenueManagePage() {
@@ -42,7 +42,11 @@ export default function VenueManagePage() {
       return
     }
     const individual: VenueMatch[] = (data.matches || []).map((m: any) => ({ ...m, is_team_tie: false }))
-    const ties: VenueMatch[] = (data.ties || []).map((t: any) => ({ ...t, is_team_tie: true }))
+    const ties: VenueMatch[] = (data.ties || []).map((t: any) => ({
+      ...t,
+      is_team_tie: true,
+      court: t.court_number != null ? `코트 ${t.court_number}` : null,
+    }))
     setMatches([...individual, ...ties])
     setLoading(false)
     setLastUpdate(new Date())
@@ -55,10 +59,12 @@ export default function VenueManagePage() {
     return () => clearInterval(interval)
   }, [session, loadData])
 
-  // 부서 목록 추출
   const divisionNames = Array.from(new Set(matches.map(m => m.division_name).filter(Boolean)))
 
-  const myCourts: string[] = session?.courts || []
+  // ✅ court_count 기반으로 코트 목록 동적 생성 (기존 courts[] fallback 유지)
+  const courtCount: number = session?.court_count || session?.courts?.length || 0
+  const myCourts: string[] = Array.from({ length: courtCount }, (_, i) => '코트 ' + (i + 1))
+
   const byCourt = new Map<string, VenueMatch[]>()
   for (const c of myCourts) byCourt.set(c, [])
   for (const m of matches) {
@@ -121,7 +127,7 @@ export default function VenueManagePage() {
 
   async function unassignFromCourt(matchId: string, isTie: boolean) {
     if (isTie) {
-      const { error } = await supabase.from('ties').update({ court_number: null }).eq('id', matchId)
+      const { error } = await supabase.from('ties').update({ court_number: null, court_order: null }).eq('id', matchId)
       if (error) { setMsg('! ' + error.message); return }
       loadData()
       return
@@ -160,10 +166,14 @@ export default function VenueManagePage() {
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div>
             <h1 className="font-bold text-lg">{session.venue_name}</h1>
-            <p className="text-xs text-white/70">{session.manager_name} / {myCourts.join(', ')}</p>
+            {/* ✅ 코트 수 표시 */}
+            <p className="text-xs text-white/70">
+              {session.manager_name} / 코트 {courtCount}개 (1~{courtCount})
+            </p>
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs text-white/60">{lastUpdate.toLocaleTimeString('ko-KR')}</span>
+            <button onClick={loadData} className="text-sm text-white/70 hover:text-white">↻</button>
             <button onClick={handleLogout} className="text-sm text-white/70 hover:text-white">로그아웃</button>
           </div>
         </div>
@@ -196,7 +206,6 @@ export default function VenueManagePage() {
                   {divisionNames.map(dn => {
                     const cnt = allUnassigned.filter(m => m.division_name === dn).length
                     if (cnt === 0) return null
-                    // BUG#3: 문자열 비교 대신 is_team_tie 플래그로 판별
                     const isTie = allUnassigned.find(m => m.division_name === dn)?.is_team_tie === true
                     return (
                       <button key={dn} onClick={() => setFilterDiv(dn)}
@@ -216,7 +225,11 @@ export default function VenueManagePage() {
                     <p className="text-xs text-stone-400 text-center py-4">미배정 경기 없음</p>
                   ) : (
                     unassigned.map(m => (
-                      <MatchChip key={m.id} m={m} onDragStart={setDragMatch} onClickScore={() => !m.is_team_tie && openScoreEdit(m)} />
+                      <MatchChip key={m.id} m={m} onDragStart={setDragMatch}
+                        onClickScore={() => !m.is_team_tie && openScoreEdit(m)}
+                        onAssign={court => assignToCourt(m.id, court, !!m.is_team_tie)}
+                        courts={myCourts}
+                      />
                     ))
                   )}
                 </div>
@@ -253,7 +266,6 @@ export default function VenueManagePage() {
                         else if (activeIdx >= 0 && i === activeIdx + 1) { badge = '대기1'; badgeColor = 'bg-amber-50 border-amber-200' }
                         else if (activeIdx >= 0 && i === activeIdx + 2) { badge = '대기2'; badgeColor = 'bg-green-50 border-green-200' }
 
-                        // BUG#3: is_team_tie 플래그 기반으로 단체전 판별
                         const canStart = !m.is_team_tie && m.status === 'PENDING' && (activeIdx < 0 || i === activeIdx)
 
                         return (
@@ -273,7 +285,7 @@ export default function VenueManagePage() {
                                 )}
                                 {!m.is_team_tie && (
                                   <button onClick={() => openScoreEdit(m)}
-                                    className="text-xs text-stone-400 hover:text-blue-500"></button>
+                                    className="text-xs text-stone-400 hover:text-blue-500">✏</button>
                                 )}
                                 <button onClick={() => unassignFromCourt(m.id, !!m.is_team_tie)}
                                   className="text-xs text-stone-400 hover:text-red-500">x</button>
@@ -298,7 +310,7 @@ export default function VenueManagePage() {
                       })}
                       {courtMatches.length === 0 && (
                         <div className="text-center py-8 text-stone-300 border-2 border-dashed rounded-lg">
-                          <div className="text-2xl mb-1"></div>
+                          <div className="text-2xl mb-1">🎾</div>
                           <div className="text-xs">경기를 드래그하세요</div>
                         </div>
                       )}
@@ -360,11 +372,15 @@ export default function VenueManagePage() {
   )
 }
 
-function MatchChip({ m, onDragStart, onClickScore }: {
+function MatchChip({ m, onDragStart, onClickScore, onAssign, courts }: {
   m: VenueMatch
   onDragStart: (id: string) => void
   onClickScore: () => void
+  onAssign: (court: string) => void
+  courts: string[]
 }) {
+  const [showAssign, setShowAssign] = useState(false)
+
   return (
     <div draggable onDragStart={() => onDragStart(m.id)}
       className={`rounded-lg border p-2 text-xs cursor-grab active:cursor-grabbing transition-all ${
@@ -374,10 +390,24 @@ function MatchChip({ m, onDragStart, onClickScore }: {
         {m.is_team_tie && <span className="bg-blue-600 text-white text-[9px] px-1 rounded">단체</span>}
         <span className="text-stone-400 truncate flex-1">{m.division_name} · {m.round}</span>
         {!m.is_team_tie && (
-          <button onClick={e => { e.stopPropagation(); onClickScore() }} className="text-stone-300 hover:text-blue-500"></button>
+          <button onClick={e => { e.stopPropagation(); onClickScore() }} className="text-stone-300 hover:text-blue-500">✏</button>
         )}
+        {/* ✅ 코트 직접 배정 버튼 (모바일 터치 대응) */}
+        <button onClick={e => { e.stopPropagation(); setShowAssign(v => !v) }}
+          className="text-stone-300 hover:text-green-500 ml-1">▶</button>
       </div>
       <div className="font-medium truncate">{m.team_a_name} <span className="text-stone-300">v</span> {m.team_b_name}</div>
+      {/* ✅ 코트 선택 드롭다운 */}
+      {showAssign && (
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {courts.map(c => (
+            <button key={c} onClick={e => { e.stopPropagation(); onAssign(c); setShowAssign(false) }}
+              className="px-2 py-0.5 rounded bg-green-600 text-white text-[10px] hover:bg-green-700">
+              {c.replace('코트 ', '#')}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
