@@ -40,7 +40,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       .then(({ data }) => data.session)
       .catch(() => null)
 
-    const getEventId = stored
+    const getEventId: Promise<string> = stored
       ? Promise.resolve(stored)
       : supabase.from('events').select('id').order('date', { ascending: false }).limit(1)
           .then(({ data }) => {
@@ -48,7 +48,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             if (id) sessionStorage.setItem('dashboard_event_id', id)
             return id
           })
-          .catch(() => '')
+          .then(id => id, () => '')
 
     Promise.all([getSession, getEventId])
       .then(([session, resolvedEventId]) => {
