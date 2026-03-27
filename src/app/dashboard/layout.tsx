@@ -1,8 +1,11 @@
-'use client'
 // ============================================================
 // src/app/dashboard/layout.tsx
 // ✅ 타임테이블 메뉴 추가 (/dashboard/timetable)
+// ✅ 대회 선택 드롭다운 복구
+// ✅ 페이지 이동 시 대회 고정 (router.refresh 제거)
+// ✅ AggregateError 방지 (async/await + try/finally)
 // ============================================================
+'use client'
 import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
@@ -11,10 +14,11 @@ import { supabase } from '@/lib/supabase'
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router   = useRouter()
   const pathname = usePathname()
-  const [user, setUser]       = useState<any>(null)
-  const [checking, setChecking] = useState(true)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [eventId, setEventId] = useState('')
+  const [user, setUser]           = useState<any>(null)
+  const [checking, setChecking]   = useState(true)
+  const [menuOpen, setMenuOpen]   = useState(false)
+  const [eventId, setEventId]     = useState('')
+  const [events, setEvents]       = useState<{ id: string; name: string }[]>([])
   const [openIndiv, setOpenIndiv] = useState(false)
   const [openTeam, setOpenTeam]   = useState(false)
 
@@ -24,40 +28,67 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     const indivPaths = ['/dashboard/teams', '/dashboard/groups', '/dashboard/tournament']
     const teamPaths  = ['/dashboard/teams/clubs', '/dashboard/teams/groups', '/dashboard/teams/ties', '/dashboard/teams/standings', '/dashboard/teams/bracket']
-    if (teamPaths.some(p => pathname.startsWith(p)))                              { setOpenTeam(true);  setOpenIndiv(false) }
+    if (teamPaths.some(p => pathname.startsWith(p)))                               { setOpenTeam(true);  setOpenIndiv(false) }
     else if (indivPaths.some(p => pathname === p || pathname.startsWith(p + '/'))) { setOpenIndiv(true); setOpenTeam(false)  }
   }, [pathname])
 
   useEffect(() => {
     if (isLoginPage) { setChecking(false); return }
 
-    const stored = sessionStorage.getItem('dashboard_event_id')
+    let unsubFn = () => {}
 
-    const authPromise  = supabase.auth.getSession()
-    const eventPromise = stored
-      ? Promise.resolve(stored)
-      : supabase.from('events').select('id').order('date', { ascending: false }).limit(1)
-          .then(({ data }) => {
-            const id = data?.[0]?.id || ''
-            if (id) sessionStorage.setItem('dashboard_event_id', id)
-            return id
-          })
+    async function init() {
+      try {
+        // 1. 세션 확인
+        const { data: authData } = await supabase.auth.getSession()
+        const session = authData?.session ?? null
+        if (!session) { router.push('/dashboard/login'); return }
+        setUser(session.user)
 
-    Promise.all([authPromise, eventPromise]).then(([{ data: { session } }, resolvedEventId]) => {
-      if (!session) { router.push('/dashboard/login'); return }
-      setUser(session.user)
-      if (resolvedEventId) setEventId(resolvedEventId)
-      setChecking(false)
-    })
+        // 2. 대회 ID — sessionStorage 우선, 없으면 최신 대회
+        const stored = sessionStorage.getItem('dashboard_event_id')
+        if (stored) {
+          setEventId(stored)
+        } else {
+          const { data: ev } = await supabase
+            .from('events').select('id')
+            .order('date', { ascending: false }).limit(1)
+          const id = ev?.[0]?.id ?? ''
+          if (id) { setEventId(id); sessionStorage.setItem('dashboard_event_id', id) }
+        }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        // 3. 대회 목록 로드
+        const { data: evList } = await supabase
+          .from('events').select('id, name')
+          .order('date', { ascending: false })
+        setEvents(evList ?? [])
+
+      } catch (e) {
+        console.error('[Dashboard] init error:', e)
+        router.push('/dashboard/login')
+      } finally {
+        setChecking(false)
+      }
+    }
+
+    init()
+
+    // 4. 인증 상태 변화 감지
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_ev, session) => {
       if (!session && !isLoginPage) router.push('/dashboard/login')
       else if (session) setUser(session.user)
     })
-    return () => subscription.unsubscribe()
+    unsubFn = () => subscription.unsubscribe()
+    return () => unsubFn()
   }, [router, isLoginPage])
 
   async function handleLogout() { await supabase.auth.signOut(); router.push('/') }
+
+  // ✅ 대회 변경 시 sessionStorage 저장 (router.refresh 없음 → 페이지 유지)
+  function handleEventChange(id: string) {
+    setEventId(id)
+    sessionStorage.setItem('dashboard_event_id', id)
+  }
 
   if (isLoginPage) return <>{children}</>
   if (checking) return <div className="min-h-screen flex items-center justify-center text-stone-400">인증 확인 중...</div>
@@ -94,11 +125,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <p className="text-xs text-stone-400 mt-0.5 truncate">{user?.email}</p>
         </div>
 
+        {/* 대회 선택 드롭다운 */}
+        <div className="p-3 border-b bg-stone-50">
+          <label className="text-xs text-stone-400 block mb-1">📅 대회 선택</label>
+          <select
+            value={eventId}
+            onChange={e => handleEventChange(e.target.value)}
+            className="w-full text-xs border border-stone-200 rounded-lg px-2 py-1.5 bg-white text-stone-700 focus:outline-none focus:border-tennis-400"
+          >
+            {events.length === 0 && <option value="">대회 없음</option>}
+            {events.map(ev => (
+              <option key={ev.id} value={ev.id}>{ev.name}</option>
+            ))}
+          </select>
+        </div>
+
         <nav className="p-2 space-y-0.5">
-          {/* 홈 */}
           {navLink('/dashboard', '홈', '🏠')}
 
-          {/* ── 개인전 ── */}
+          {/* 개인전 */}
           <button onClick={() => setOpenIndiv(!openIndiv)}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-all ${
               openIndiv ? 'bg-stone-100 text-stone-800 font-bold' : 'text-stone-600 hover:bg-stone-50'
@@ -114,7 +159,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </div>
           )}
 
-          {/* ── 단체전 ── */}
+          {/* 단체전 */}
           <button onClick={() => setOpenTeam(!openTeam)}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-all ${
               openTeam ? 'bg-stone-100 text-stone-800 font-bold' : 'text-stone-600 hover:bg-stone-50'
@@ -133,17 +178,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           )}
 
           <hr className="my-2" />
-
-          {/* ── 코트 배정 ── */}
-          {navLink('/dashboard/courts',    '코트 배정',   '🏟')}
-          {/* ✅ 타임테이블 추가 */}
-          {navLink('/dashboard/timetable', '타임테이블',  '⏱')}
-
-          {/* ── 기타 ── */}
-          {navLink('/dashboard/sync',     '앱A 연동',    '🔄')}
-          {navLink('/dashboard/settings', '설정',        '⚙️')}
-
+          {navLink('/dashboard/courts',    '코트 배정',  '🏟')}
+          {navLink('/dashboard/timetable', '타임테이블', '⏱')}
+          {navLink('/dashboard/sync',      '앱A 연동',  '🔄')}
+          {navLink('/dashboard/settings',  '설정',      '⚙️')}
           <hr className="my-2" />
+
           <button onClick={handleLogout}
             className="hidden md:flex w-full items-center gap-2 px-3 py-2.5 rounded-lg text-sm text-stone-400 hover:text-red-500 hover:bg-red-50">
             🚪 로그아웃
