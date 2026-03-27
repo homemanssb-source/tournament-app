@@ -12,6 +12,7 @@ interface Venue {
   pin_plain: string
   manager_name: string
   phone: string | null
+  division_ids: string[] | null
 }
 
 function makeCourtNames(shortName: string, count: number): string[] {
@@ -45,10 +46,20 @@ export default function SettingsPage() {
   const [editCourtCount, setEditCourtCount] = useState(8)
   const [editShortName, setEditShortName] = useState('')
 
+  // 담당 부서
+  const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([])
+  const [newDivisionIds, setNewDivisionIds] = useState<string[]>([])
+  const [editDivisionIds, setEditDivisionIds] = useState<string[]>([])
+
   useEffect(() => {
     const stored = sessionStorage.getItem('dashboard_event_id')
-    if (stored) { setEventId(stored); loadEvent(stored); loadVenues(stored) }
+    if (stored) { setEventId(stored); loadEvent(stored); loadVenues(stored); loadDivisions(stored) }
   }, [])
+
+  async function loadDivisions(eid: string) {
+    const { data } = await supabase.from('divisions').select('id, name').eq('event_id', eid).order('sort_order')
+    setDivisions(data || [])
+  }
 
   async function loadEvent(eid: string) {
     const { data } = await supabase.from('events').select('name, master_pin_hash, status').eq('id', eid).single()
@@ -100,10 +111,11 @@ export default function SettingsPage() {
       pin_plain: newVenuePin.trim(),
       pin_hash: newVenuePin.trim(),
       manager_name: newVenueManager.trim() || newVenueName.trim() + ' 관리자',
+      division_ids: newDivisionIds.length > 0 ? newDivisionIds : null,
     })
     if (error) { setVenueMsg('! ' + error.message); return }
     setVenueMsg(`OK 경기장 추가됨 (${newVenueShortName}-1 ~ ${newVenueShortName}-${newCourtCount})`)
-    setNewVenueName(''); setNewVenueShortName(''); setNewVenuePin(''); setNewVenueManager(''); setNewCourtCount(8)
+    setNewVenueName(''); setNewVenueShortName(''); setNewVenuePin(''); setNewVenueManager(''); setNewCourtCount(8); setNewDivisionIds([])
     loadVenues(eventId)
   }
 
@@ -113,6 +125,7 @@ export default function SettingsPage() {
     const courts = makeCourtNames(editShortName, editCourtCount)
     const { error } = await supabase.from('venues').update({
       short_name: editShortName.trim(), courts, court_count: editCourtCount,
+      division_ids: editDivisionIds.length > 0 ? editDivisionIds : null,
     }).eq('id', venueId)
     if (error) { setVenueMsg('! ' + error.message); return }
     setVenueMsg('OK 변경됨'); setEditVenueId(null); loadVenues(eventId)
@@ -246,6 +259,31 @@ export default function SettingsPage() {
             }
           </div>
 
+          {/* 담당 부서 선택 */}
+          {divisions.length > 0 && (
+            <div>
+              <label className="text-xs text-stone-600 block mb-1">담당 부서 <span className="text-stone-400">(미선택 시 전 부서 표시)</span></label>
+              <div className="flex flex-wrap gap-1.5">
+                {divisions.map(d => (
+                  <button key={d.id} type="button"
+                    onClick={() => setNewDivisionIds(prev =>
+                      prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id]
+                    )}
+                    className={`text-xs px-3 py-1 rounded-full border transition-all ${
+                      newDivisionIds.includes(d.id)
+                        ? 'bg-green-600 text-white border-green-600'
+                        : 'bg-white text-stone-600 border-stone-300 hover:border-green-400'
+                    }`}>
+                    {d.name}
+                  </button>
+                ))}
+              </div>
+              {newDivisionIds.length > 0 && (
+                <p className="text-xs text-green-600 mt-1">✅ {newDivisionIds.map(id => divisions.find(d=>d.id===id)?.name).join(', ')} 담당</p>
+              )}
+            </div>
+          )}
+
           <button onClick={addVenue}
             disabled={!newVenueName.trim() || !newVenueShortName.trim() || !newVenuePin.trim() || newCourtCount < 1}
             className="w-full bg-green-600 text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50">
@@ -280,12 +318,20 @@ export default function SettingsPage() {
                         {makeCourtNames(shortName, courtCount).map(c => (
                           <span key={c} className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">{c}</span>
                         ))}
+                        {v.division_ids && v.division_ids.length > 0
+                          ? v.division_ids.map(did => (
+                              <span key={did} className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                                {divisions.find(d => d.id === did)?.name || did}
+                              </span>
+                            ))
+                          : <span className="text-xs bg-stone-100 text-stone-500 px-2 py-0.5 rounded">전 부서</span>
+                        }
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0 ml-2">
                       <button onClick={() => {
                         if (isEditing) { setEditVenueId(null) }
-                        else { setEditVenueId(v.id); setEditCourtCount(courtCount); setEditShortName(shortName) }
+                        else { setEditVenueId(v.id); setEditCourtCount(courtCount); setEditShortName(shortName); setEditDivisionIds(v.division_ids || []) }
                       }} className="text-xs text-blue-600 hover:underline">
                         {isEditing ? '취소' : '수정'}
                       </button>
@@ -312,6 +358,31 @@ export default function SettingsPage() {
                           <span className="text-xs text-blue-600 pb-1">→ {editShortName}-1 ~ {editShortName}-{editCourtCount}</span>
                         )}
                       </div>
+                      {/* 담당 부서 선택 */}
+                      {divisions.length > 0 && (
+                        <div>
+                          <label className="text-xs text-stone-500 block mb-1">담당 부서</label>
+                          <div className="flex flex-wrap gap-1.5">
+                            {divisions.map(d => (
+                              <button key={d.id} type="button"
+                                onClick={() => setEditDivisionIds(prev =>
+                                  prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id]
+                                )}
+                                className={`text-xs px-3 py-1 rounded-full border transition-all ${
+                                  editDivisionIds.includes(d.id)
+                                    ? 'bg-blue-600 text-white border-blue-600'
+                                    : 'bg-white text-stone-600 border-stone-300 hover:border-blue-400'
+                                }`}>
+                                {d.name}
+                              </button>
+                            ))}
+                          </div>
+                          {editDivisionIds.length === 0 && (
+                            <p className="text-xs text-stone-400 mt-1">미선택 시 전 부서 미배정 표시</p>
+                          )}
+                        </div>
+                      )}
+
                       <button onClick={() => saveEditVenue(v.id)}
                         className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-medium hover:bg-blue-700">
                         저장
