@@ -45,20 +45,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             return id
           })
 
-    Promise.all([authPromise, eventPromise]).then(([{ data: { session } }, resolvedEventId]) => {
-      if (!session) { router.push('/dashboard/login'); return }
-      setUser(session.user)
-      if (resolvedEventId) setEventId(resolvedEventId)
-      setChecking(false)
-    })
+    Promise.all([authPromise, eventPromise])
+      .then(([{ data: { session } }, resolvedEventId]) => {
+        if (!session) { router.push('/dashboard/login'); return }
+        setUser(session.user)
+        if (resolvedEventId) setEventId(resolvedEventId)
+        setChecking(false)
+      })
+      // ✅ catch 추가 — 에러 시에도 백지 방지
+      .catch(() => {
+        router.push('/dashboard/login')
+        setChecking(false)
+      })
 
-    // 대회 목록 로드 — eventId가 이미 있으면 덮어쓰지 않음
+    // 대회 목록 로드 — sessionStorage 값 있으면 덮어쓰지 않음
     supabase.from('events')
       .select('id, name')
       .order('date', { ascending: false })
       .then(({ data }) => {
         setEvents(data || [])
-        // ✅ sessionStorage에 저장된 값이 없을 때만 첫 번째 대회로 설정
         const current = sessionStorage.getItem('dashboard_event_id')
         if (!current && data && data.length > 0) {
           setEventId(data[0].id)
@@ -79,7 +84,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     setEventId(id)
     sessionStorage.setItem('dashboard_event_id', id)
     // ✅ router.refresh() 제거 — 리마운트 시 eventId 초기화 방지
-    // 각 페이지는 useDashboard hook으로 sessionStorage를 직접 읽으므로 불필요
   }
 
   if (isLoginPage) return <>{children}</>
