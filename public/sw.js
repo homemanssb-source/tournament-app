@@ -1,5 +1,5 @@
-﻿// JTA 제주시테니스 Service Worker
-const CACHE_NAME = 'jta-ranking-v2';
+// JTA 제주시테니스 Service Worker
+const CACHE_NAME = 'jta-ranking-v3';
 
 const STATIC_ASSETS = ['/icon-192x192.png', '/icon-512x512.png', '/manifest.json'];
 
