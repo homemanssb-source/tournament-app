@@ -292,7 +292,7 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
             {g.teams.map((t: any, i: number) => (
               <div key={t.team_id} className="flex items-center gap-2 py-2 border-b border-stone-100 last:border-0">
                 <span className="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-500">{i + 1}</span>
-                <span className="font-medium text-sm">{t.team_name}</span>
+                <span className="font-bold text-base text-stone-800">{t.team_name}</span>
               </div>
             ))}
           </div>
@@ -320,20 +320,12 @@ function TournamentView({ eventId, divisionId }: { eventId: string; divisionId: 
 function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: string }) {
   const [matches, setMatches] = useState<Match[]>([])
   const [loading, setLoading] = useState(true)
-
-  function loadResults() {
+  useEffect(() => {
+    setLoading(true)
     supabase.from('v_matches_with_teams').select('*')
       .eq('event_id', eventId).eq('division_id', divisionId).eq('status', 'FINISHED')
       .neq('score', 'BYE').order('updated_at', { ascending: false }).limit(50)
       .then(({ data }) => { setMatches(data || []); setLoading(false) })
-  }
-
-  useEffect(() => {
-    setLoading(true)
-    loadResults()
-    // ✅ 30초 자동갱신 추가 — 점수 입력 후 자동 반영
-    const interval = setInterval(loadResults, 30000)
-    return () => clearInterval(interval)
   }, [eventId, divisionId])
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
   if (!matches.length) return <p className="text-center py-10 text-stone-400">완료된 경기가 없습니다.</p>
@@ -346,9 +338,9 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
             {m.court && <span className="text-green-700 font-medium">{m.court}</span>}
           </div>
           <div className="flex items-center justify-between">
-            <span className={`font-medium ${m.winner_team_id === m.team_a_id ? 'text-green-700 font-bold' : ''}`}>{m.team_a_name}</span>
-            <span className="text-xl font-black mx-4">{m.score}</span>
-            <span className={`font-medium ${m.winner_team_id === m.team_b_id ? 'text-green-700 font-bold' : ''}`}>{m.team_b_name}</span>
+            <span className={`font-bold text-base ${m.winner_team_id === m.team_a_id ? 'text-green-700' : 'text-stone-800'}`}>{m.team_a_name}</span>
+            <span className="text-2xl font-black mx-4 text-stone-900">{m.score}</span>
+            <span className={`font-bold text-base ${m.winner_team_id === m.team_b_id ? 'text-green-700' : 'text-stone-800'}`}>{m.team_b_name}</span>
           </div>
         </div>
       ))}

@@ -157,7 +157,7 @@ export default function VenueManagePage() {
       <header className="bg-orange-500 text-white sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div>
-            <h1 className="font-bold text-lg">{session.venue_name}</h1>
+            <h1 className="font-bold text-xl">{session.venue_name}</h1>
             {/* ✅ 약칭 기반 코트 범위 표시 */}
             <p className="text-xs text-white/70">
               {session.manager_name} / {shortName}-1 ~ {shortName}-{courtCount}
@@ -258,7 +258,7 @@ export default function VenueManagePage() {
 
                         return (
                           <div key={m.id} draggable onDragStart={() => setDragMatch(m.id)}
-                            className={`rounded-lg border p-2.5 cursor-grab active:cursor-grabbing ${badgeColor || (m.is_team_tie ? 'border-blue-200' : 'border-stone-200')}`}>
+                            className={`rounded-xl border p-3 cursor-grab active:cursor-grabbing ${badgeColor || (m.is_team_tie ? 'border-blue-200 bg-blue-50/30' : 'border-stone-200 bg-white')}`}>
                             <div className="flex items-center justify-between mb-1">
                               <div className="flex items-center gap-2">
                                 <span className="text-xs text-stone-400 font-bold">#{m.court_order}</span>
@@ -269,22 +269,22 @@ export default function VenueManagePage() {
                               <div className="flex items-center gap-1">
                                 {canStart && (
                                   <button onClick={() => startMatch(m.id)}
-                                    className="text-xs bg-red-500 text-white px-2 py-0.5 rounded hover:bg-red-600">시작</button>
+                                    className="text-sm bg-red-500 text-white px-3 py-1.5 rounded-lg font-bold hover:bg-red-600 min-h-[36px]">시작</button>
                                 )}
                                 {!m.is_team_tie && (
-                                  <button onClick={() => openScoreEdit(m)} className="text-xs text-stone-400 hover:text-blue-500">✏</button>
+                                  <button onClick={() => openScoreEdit(m)} className="text-sm text-stone-400 hover:text-blue-500 p-1.5 min-h-[36px] min-w-[36px] flex items-center justify-center">✏</button>
                                 )}
                                 <button onClick={() => unassignFromCourt(m.id, !!m.is_team_tie)}
-                                  className="text-xs text-stone-400 hover:text-red-500">x</button>
+                                  className="text-sm text-stone-400 hover:text-red-500 p-1.5 min-h-[36px] min-w-[36px] flex items-center justify-center">✕</button>
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
                               <div className="flex-1 min-w-0">
-                                <div className={`text-sm truncate ${m.winner_team_id === m.team_a_id ? (m.is_team_tie ? 'font-bold text-blue-700' : 'font-bold text-green-700') : 'font-medium'}`}>
+                                <div className={`text-sm break-words ${m.winner_team_id === m.team_a_id ? (m.is_team_tie ? 'font-bold text-blue-700' : 'font-bold text-green-700') : 'font-medium'}`}>
                                   {m.team_a_name || 'TBD'}
                                 </div>
                                 <div className="text-xs text-stone-300">vs</div>
-                                <div className={`text-sm truncate ${m.winner_team_id === m.team_b_id ? (m.is_team_tie ? 'font-bold text-blue-700' : 'font-bold text-green-700') : 'font-medium'}`}>
+                                <div className={`text-sm break-words ${m.winner_team_id === m.team_b_id ? (m.is_team_tie ? 'font-bold text-blue-700' : 'font-bold text-green-700') : 'font-medium'}`}>
                                   {m.team_b_name || 'TBD'}
                                 </div>
                               </div>
