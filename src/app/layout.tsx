@@ -33,53 +33,46 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     if (isLoginPage) { setChecking(false); return }
 
-    const stored = sessionStorage.getItem('dashboard_event_id')
+    let cleanup = () => {}
 
-    // ✅ AggregateError 방지 — 각 Promise 개별 try/catch
-    const getSession = supabase.auth.getSession()
-      .then(({ data }) => data.session)
-      .catch(() => null)
-
-    const getEventId: Promise<string> = stored
-      ? Promise.resolve(stored)
-      : supabase.from('events').select('id').order('date', { ascending: false }).limit(1)
-          .then(({ data }) => {
-            const id = data?.[0]?.id || ''
-            if (id) sessionStorage.setItem('dashboard_event_id', id)
-            return id
-          })
-          .then(id => id, () => '')
-
-    Promise.all([getSession, getEventId])
-      .then(([session, resolvedEventId]) => {
-        if (!session) { router.push('/dashboard/login'); return }
+    async function init() {
+      try {
+        const { data: authData } = await supabase.auth.getSession()
+        const session = authData?.session || null
+        if (!session) { router.push('/dashboard/login'); setChecking(false); return }
         setUser(session.user)
-        if (resolvedEventId) setEventId(resolvedEventId as string)
-        setChecking(false)
-      })
-      .catch(() => {
-        router.push('/dashboard/login')
-        setChecking(false)
-      })
 
-    // 대회 목록 로드 — sessionStorage 값 있으면 덮어쓰지 않음
-    supabase.from('events')
-      .select('id, name')
-      .order('date', { ascending: false })
-      .then(({ data }) => {
-        setEvents(data || [])
-        const current = sessionStorage.getItem('dashboard_event_id')
-        if (!current && data && data.length > 0) {
-          setEventId(data[0].id)
-          sessionStorage.setItem('dashboard_event_id', data[0].id)
+        const stored = sessionStorage.getItem('dashboard_event_id')
+        if (stored) {
+          setEventId(stored)
+        } else {
+          const { data: evData } = await supabase.from('events').select('id').order('date', { ascending: false }).limit(1)
+          const id: string = evData?.[0]?.id || ''
+          if (id) { setEventId(id); sessionStorage.setItem('dashboard_event_id', id) }
         }
-      })
+
+        const { data: evList } = await supabase.from('events').select('id, name').order('date', { ascending: false })
+        setEvents(evList || [])
+        const current = sessionStorage.getItem('dashboard_event_id')
+        if (!current && evList && evList.length > 0) {
+          setEventId(evList[0].id)
+          sessionStorage.setItem('dashboard_event_id', evList[0].id)
+        }
+      } catch {
+        router.push('/dashboard/login')
+      } finally {
+        setChecking(false)
+      }
+    }
+
+    init()
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session && !isLoginPage) router.push('/dashboard/login')
       else if (session) setUser(session.user)
     })
-    return () => subscription.unsubscribe()
+    cleanup = () => subscription.unsubscribe()
+    return () => cleanup()
   }, [router, isLoginPage])
 
   async function handleLogout() { await supabase.auth.signOut(); router.push('/') }
