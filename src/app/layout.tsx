@@ -35,8 +35,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
     const stored = sessionStorage.getItem('dashboard_event_id')
 
-    const authPromise  = supabase.auth.getSession()
-    const eventPromise = stored
+    // ✅ AggregateError 방지 — 각 Promise 개별 try/catch
+    const getSession = supabase.auth.getSession()
+      .then(({ data }) => data.session)
+      .catch(() => null)
+
+    const getEventId = stored
       ? Promise.resolve(stored)
       : supabase.from('events').select('id').order('date', { ascending: false }).limit(1)
           .then(({ data }) => {
@@ -44,15 +48,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             if (id) sessionStorage.setItem('dashboard_event_id', id)
             return id
           })
+          .catch(() => '')
 
-    Promise.all([authPromise, eventPromise])
-      .then(([{ data: { session } }, resolvedEventId]) => {
+    Promise.all([getSession, getEventId])
+      .then(([session, resolvedEventId]) => {
         if (!session) { router.push('/dashboard/login'); return }
         setUser(session.user)
-        if (resolvedEventId) setEventId(resolvedEventId)
+        if (resolvedEventId) setEventId(resolvedEventId as string)
         setChecking(false)
       })
-      // ✅ catch 추가 — 에러 시에도 백지 방지
       .catch(() => {
         router.push('/dashboard/login')
         setChecking(false)
