@@ -60,6 +60,8 @@ export default function CourtsPage() {
   const tiesRef    = useRef<TieWithClubs[]>([])
 
   const courtNames = React.useMemo(() => {
+    // ✅ 날짜 필터 적용: 해당 날짜 경기에 배정된 코트만 표시
+    // dateFilter가 특정 날짜면 → 그 날짜 division 경기의 코트만 포함
     if (selectedVenue === 'ALL') {
       if (venues.length === 0) return Array.from({ length: 10 }, (_, i) => `코트-${i + 1}`)
       return venues.flatMap(v => makeCourtNames(v.short_name || v.name, v.court_count || v.courts?.length || 0))
@@ -68,6 +70,23 @@ export default function CourtsPage() {
     if (!venue) return []
     return makeCourtNames(venue.short_name || venue.name, venue.court_count || venue.courts?.length || 0)
   }, [selectedVenue, venues])
+
+  // ✅ 날짜 필터 적용된 코트 목록 (경기장 탭 + 날짜 탭 동시 적용)
+  const filteredCourtNames = React.useMemo(() => {
+    if (dateFilter === 'ALL') return courtNames
+    // 해당 날짜 division의 경기에 실제 배정된 코트만
+    const divIds = Object.entries(divMatchDates)
+      .filter(([, d]) => d === dateFilter).map(([id]) => id)
+    if (divIds.length === 0) return courtNames
+    const usedCourts = new Set(
+      matches
+        .filter(m => divIds.includes(m.division_id) && m.court)
+        .map(m => m.court!)
+    )
+    // 배정된 코트가 없으면 전체 표시 (배정 전 상태)
+    if (usedCourts.size === 0) return courtNames
+    return courtNames.filter(c => usedCourts.has(c))
+  }, [courtNames, dateFilter, divMatchDates, matches])
 
   const [autoDiv, setAutoDiv]       = useState('')
   const [autoStage, setAutoStage]   = useState<StageKey>('GROUP')
@@ -576,7 +595,7 @@ export default function CourtsPage() {
   const tieMatches  = tiesToMatchSlim(ties)
   const allItems    = [...matches, ...tieMatches]
   const byCourt     = new Map<string, MatchSlim[]>()
-  for (const name of courtNames) byCourt.set(name, [])
+  for (const name of filteredCourtNames) byCourt.set(name, [])
   for (const m of allItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
 
   const divColors: Record<string,string> = { TEAM:'#2563eb' }
@@ -686,12 +705,12 @@ export default function CourtsPage() {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <label className="text-xs text-stone-500">배정 코트</label>
-            <button onClick={() => setAutoCourts(autoCourts.length===courtNames.length ? [] : [...courtNames])} className="text-xs px-2 py-0.5 rounded border border-dashed border-stone-400 text-stone-500 hover:border-tennis-500 hover:text-tennis-600 transition-all">
-              {autoCourts.length===courtNames.length ? '전체 해제' : '전체 선택'}
+            <button onClick={() => setAutoCourts(autoCourts.length===filteredCourtNames.length ? [] : [...filteredCourtNames])} className="text-xs px-2 py-0.5 rounded border border-dashed border-stone-400 text-stone-500 hover:border-tennis-500 hover:text-tennis-600 transition-all">
+              {autoCourts.length===filteredCourtNames.length ? '전체 해제' : '전체 선택'}
             </button>
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {courtNames.map(c => (
+            {filteredCourtNames.map(c => (
               <button key={c} onClick={() => setAutoCourts(prev => prev.includes(c) ? prev.filter(x=>x!==c) : [...prev,c])}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${autoCourts.includes(c) ? 'bg-tennis-600 text-white border-tennis-600' : 'bg-white text-stone-600 border-stone-300 hover:border-tennis-400'}`}>
                 {c}
@@ -738,7 +757,7 @@ export default function CourtsPage() {
                       <span className="text-xs font-medium text-stone-700 truncate">{div.name}</span>
                     </div>
                     <div className="flex flex-wrap gap-1">
-                      {courtNames.map(c => {
+                      {filteredCourtNames.map(c => {
                         const inZone = selected.includes(c)
                         return (
                           <button key={c} onClick={() => toggleZoneCourt(div.id, c)}
@@ -782,7 +801,7 @@ export default function CourtsPage() {
           </div>
         </div>
         <div className="lg:col-span-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-          {courtNames.map(court => {
+          {filteredCourtNames.map(court => {
             const courtItems = (byCourt.get(court)||[]).sort((a,b)=>(a.court_order||0)-(b.court_order||0))
             const finished   = courtItems.filter(m=>m.status==='FINISHED').length
             const activeIdx  = courtItems.findIndex(m=>m.status==='IN_PROGRESS')
