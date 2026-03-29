@@ -583,10 +583,6 @@ export default function CourtsPage() {
 
   const tieMatches  = tiesToMatchSlim(ties)
   const allItems    = [...matches, ...tieMatches]
-  const byCourt     = new Map<string, MatchSlim[]>()
-  for (const name of filteredCourtNames) byCourt.set(name, [])
-  // ✅ allItems → dateFilteredItems: 날짜 필터 적용된 경기만 코트 배치도에 표시
-  for (const m of dateFilteredItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
 
   const divColors: Record<string,string> = { TEAM:'#2563eb' }
   const colors = ['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#10b981','#ef4444']
@@ -610,6 +606,12 @@ export default function CourtsPage() {
   const dateFilteredItems = dateDivIds
     ? allItems.filter(m => dateDivIds.includes(m.division_id) || m.is_team_tie)
     : allItems
+
+  // ✅ byCourt: 날짜 필터 적용된 경기만 코트 배치도에 표시
+  const byCourt = new Map<string, MatchSlim[]>()
+  for (const name of filteredCourtNames) byCourt.set(name, [])
+  for (const m of dateFilteredItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
+
   const filteredAll = viewFilter==='ALL' ? dateFilteredItems : viewFilter==='TEAM' ? dateFilteredItems.filter(m=>m.is_team_tie) : dateFilteredItems.filter(m=>m.division_id===viewFilter)
   const unassigned  = filteredAll.filter(m => !m.court && m.status !== 'FINISHED')
 
