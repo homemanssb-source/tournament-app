@@ -1,6 +1,7 @@
 // ============================================================
 // src/app/events/[id]/page.tsx
 // ✅ TeamBracketView: 가로 브래킷 형태로 교체 (운영자와 동일)
+// ✅ preparing 상태 대회 잠금 처리 추가
 // ============================================================
 'use client'
 import { useEffect, useState, useCallback } from 'react'
@@ -112,7 +113,29 @@ export default function EventDetailPage() {
   }, [mode, loadTeamData])
 
   if (loading) return <div className="min-h-screen flex items-center justify-center text-stone-400">불러오는 중...</div>
-  if (!event) return <div className="min-h-screen flex items-center justify-center text-stone-400">대회를 찾을 수 없습니다.</div>
+  if (!event)  return <div className="min-h-screen flex items-center justify-center text-stone-400">대회를 찾을 수 없습니다.</div>
+
+  // ✅ 준비중 대회 → 잠금 화면 (이 블록만 추가)
+  if (event.status === 'preparing') {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-8 bg-stone-50">
+        <div className="text-center max-w-sm">
+          <div className="text-6xl mb-6">🔒</div>
+          <h1 className="text-2xl font-bold text-stone-700 mb-2">{event.name}</h1>
+          <p className="text-stone-400 text-sm mb-2">{event.date} · {event.location}</p>
+          <div className="mt-6 bg-amber-50 border border-amber-200 rounded-2xl px-6 py-5">
+            <p className="text-amber-700 font-medium text-base mb-1">준비중인 대회입니다</p>
+            <p className="text-amber-600 text-sm">대회 준비가 완료되면 열람이 가능합니다.</p>
+          </div>
+          <Link href="/events" className="mt-6 inline-block text-sm text-stone-400 hover:text-stone-600 transition-colors">
+            ← 대회 목록으로
+          </Link>
+        </div>
+      </div>
+    )
+  }
+
+  // ── 이하 기존 코드 그대로 ──────────────────────────────────
 
   const individualTabs: { key: IndividualTab; label: string; emoji: string }[] = [
     { key: 'groups', label: '조편성', emoji: '📋' },

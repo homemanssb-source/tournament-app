@@ -27,34 +27,66 @@ export default function EventsPage() {
           <p className="text-center py-20 text-stone-400">등록된 대회가 없습니다.</p>
         ) : (
           <div className="space-y-3">
-            {events.map(e => (
-              <Link key={e.id} href={'/events/' + e.id}
-                className="block bg-white rounded-xl border p-4 hover:border-stone-400 transition-all">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="font-bold text-lg">{e.name}</h2>
-                      {e.event_type && (
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          e.event_type === 'both' ? 'bg-purple-100 text-purple-700' :
-                          e.event_type === 'team' ? 'bg-green-100 text-green-700' :
-                          'bg-blue-100 text-blue-700'
-                        }`}>
-                          {e.event_type === 'both' ? '개인+단체' : e.event_type === 'team' ? '단체전' : '개인전'}
+            {events.map(e => {
+              const isPreparing = e.status === 'preparing'
+
+              // ✅ 준비중 → 클릭 불가, 잠금 표시
+              if (isPreparing) {
+                return (
+                  <div key={e.id}
+                    className="block bg-stone-50 rounded-xl border border-stone-200 p-4 opacity-60 cursor-not-allowed">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="font-bold text-lg text-stone-400">{e.name}</h2>
+                          {e.event_type && (
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-stone-100 text-stone-400">
+                              {e.event_type === 'both' ? '개인+단체' : e.event_type === 'team' ? '단체전' : '개인전'}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-stone-400 mt-1">{e.date} · {e.location}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs px-2 py-1 rounded-full bg-amber-100 text-amber-700">
+                          🔒 준비중
                         </span>
-                      )}
+                      </div>
                     </div>
-                    <p className="text-sm text-stone-500 mt-1">{e.date} · {e.location}</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className={'text-xs px-2 py-1 rounded-full ' + (e.status === 'active' ? 'bg-green-100 text-green-700' : e.status === 'completed' ? 'bg-stone-100 text-stone-500' : 'bg-amber-100 text-amber-700')}>
-                      {e.status === 'active' ? '진행중' : e.status === 'completed' ? '완료' : '준비중'}
-                    </span>
-                    <span className="text-stone-400">→</span>
+                )
+              }
+
+              // 기존 코드 그대로
+              return (
+                <Link key={e.id} href={'/events/' + e.id}
+                  className="block bg-white rounded-xl border p-4 hover:border-stone-400 transition-all">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h2 className="font-bold text-lg">{e.name}</h2>
+                        {e.event_type && (
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            e.event_type === 'both' ? 'bg-purple-100 text-purple-700' :
+                            e.event_type === 'team' ? 'bg-green-100 text-green-700' :
+                            'bg-blue-100 text-blue-700'
+                          }`}>
+                            {e.event_type === 'both' ? '개인+단체' : e.event_type === 'team' ? '단체전' : '개인전'}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm text-stone-500 mt-1">{e.date} · {e.location}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={'text-xs px-2 py-1 rounded-full ' + (e.status === 'active' ? 'bg-green-100 text-green-700' : e.status === 'completed' ? 'bg-stone-100 text-stone-500' : 'bg-amber-100 text-amber-700')}>
+                        {e.status === 'active' ? '진행중' : e.status === 'completed' ? '완료' : '준비중'}
+                      </span>
+                      <span className="text-stone-400">→</span>
+                    </div>
                   </div>
-                </div>
-              </Link>
-            ))}
+                </Link>
+              )
+            })}
           </div>
         )}
       </main>
