@@ -191,9 +191,10 @@ export default function CourtsPage() {
   // ✅ 자동 경기시작 체크
   // 수정 2B: 시작시간 미설정 시에도 자동시작 ON이면 즉시 시작하도록 fallback 추가
   async function autoStartCheck() {
-    if (!autoStartRef.current) return
+    if (!autoStartRef.current) { console.log('[AutoStart] OFF — skip'); return }
     const now = new Date()
     const current = matchesRef.current
+    console.log('[AutoStart] 체크 시작. 경기수:', current.length, '시각:', now.toLocaleTimeString())
 
     const byCourt = new Map<string, MatchSlim[]>()
     for (const m of current) {
@@ -208,48 +209,52 @@ export default function CourtsPage() {
       const hasLive    = sorted.some(m => m.status === 'IN_PROGRESS')
       const hasPending = sorted.some(m => m.status === 'PENDING')
 
-      if (!hasPending) continue
+      if (!hasPending) { console.log('[AutoStart]', court, '→ PENDING 없음, 스킵'); continue }
 
       const courtStartTime = getCourtStartTime(court)
+      console.log('[AutoStart]', court, '→ hasLive:', hasLive, 'hasPending:', hasPending, 'startTime:', courtStartTime)
 
-      if (hasLive) continue
+      if (hasLive) { console.log('[AutoStart]', court, '→ IN_PROGRESS 있음, 스킵'); continue }
 
       const lastFinished = sorted.filter(m => m.status === 'FINISHED').pop()
       const firstPending = sorted.find(m => m.status === 'PENDING')
 
-      if (!firstPending || firstPending.is_team_tie) continue
+      console.log('[AutoStart]', court, '→ lastFinished:', lastFinished?.id, 'firstPending:', firstPending?.id, 'is_team_tie:', firstPending?.is_team_tie)
+
+      if (!firstPending || firstPending.is_team_tie) { console.log('[AutoStart]', court, '→ firstPending 없거나 단체전, 스킵'); continue }
 
       if (lastFinished) {
-        // 앞 경기 완료 → 즉시 시작
-        await supabase.from('matches').update({
+        console.log('[AutoStart]', court, '→ 앞경기 완료, 즉시 시작:', firstPending.id)
+        const { error } = await supabase.from('matches').update({
           status: 'IN_PROGRESS',
           started_at: new Date().toISOString()
         }).eq('id', firstPending.id)
-        sendCourtNotify(court, 'finished', firstPending.id)
-        changed = true
+        if (error) console.error('[AutoStart] 업데이트 실패:', error.message)
+        else { sendCourtNotify(court, 'finished', firstPending.id); changed = true }
       } else if (courtStartTime) {
-        // 시작시간 설정됨 → 시간 체크
         const [h, mn] = courtStartTime.split(':').map(Number)
         const target = new Date(now)
         target.setHours(h, mn, 0, 0)
+        console.log('[AutoStart]', court, '→ 시작시간 체크: now', now.toLocaleTimeString(), 'target', target.toLocaleTimeString(), 'pass:', now >= target)
         if (now >= target) {
-          await supabase.from('matches').update({
+          const { error } = await supabase.from('matches').update({
             status: 'IN_PROGRESS',
             started_at: new Date().toISOString()
           }).eq('id', firstPending.id)
-          sendCourtNotify(court, 'manual', firstPending.id)
-          changed = true
+          if (error) console.error('[AutoStart] 업데이트 실패:', error.message)
+          else { sendCourtNotify(court, 'manual', firstPending.id); changed = true }
         }
       } else {
-        // ✅ [수정 2B] 시작시간 미설정 + 자동시작 ON → 즉시 첫 경기 시작
-        await supabase.from('matches').update({
+        console.log('[AutoStart]', court, '→ 시작시간 없음, fallback 즉시 시작:', firstPending.id)
+        const { error } = await supabase.from('matches').update({
           status: 'IN_PROGRESS',
           started_at: new Date().toISOString()
         }).eq('id', firstPending.id)
-        sendCourtNotify(court, 'manual', firstPending.id)
-        changed = true
+        if (error) console.error('[AutoStart] 업데이트 실패:', error.message)
+        else { sendCourtNotify(court, 'manual', firstPending.id); changed = true }
       }
     }
+    console.log('[AutoStart] 완료. changed:', changed)
     if (changed) await loadMatches()
   }
 
