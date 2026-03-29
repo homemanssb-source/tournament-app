@@ -137,8 +137,6 @@ export default function EventDetailPage() {
     )
   }
 
-  // ── 이하 기존 코드 그대로 ──
-
   const individualTabs: { key: IndividualTab; label: string; emoji: string }[] = [
     { key: 'groups', label: '조편성', emoji: '📋' },
     { key: 'tournament', label: '토너먼트', emoji: '🏆' },
@@ -368,7 +366,6 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
     if (!divisionId) return
     setLoading(true)
     ;(async () => {
-      // 완료된 경기
       const { data: mData } = await supabase
         .from('v_matches_with_teams').select('*')
         .eq('event_id', eventId).eq('division_id', divisionId)
@@ -376,21 +373,18 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
         .order('updated_at', { ascending: false }).limit(100)
       setMatches(mData || [])
 
-      // 조 목록
       const { data: gData } = await supabase
         .from('groups').select('*')
         .eq('event_id', eventId).eq('division_id', divisionId)
         .order('group_num')
       setGroups(gData || [])
 
-      // 조별 순위 — v_group_standings 또는 v_group_board 기반
       const map: Record<string, any[]> = {}
       for (const g of (gData || [])) {
         const { data: sData } = await supabase
           .from('v_matches_with_teams').select('*')
           .eq('event_id', eventId).eq('group_id', g.id)
           .eq('status', 'FINISHED').neq('score', 'BYE')
-        // 팀별 승패 집계
         const teamMap: Record<string, { name: string; win: number; lose: number; scored: number; against: number }> = {}
         for (const m of (sData || [])) {
           if (!teamMap[m.team_a_id]) teamMap[m.team_a_id] = { name: m.team_a_name, win:0, lose:0, scored:0, against:0 }
@@ -398,12 +392,8 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
           const parts = (m.score || '0:0').split(':').map(Number)
           let sa = parts[0] ?? 0
           let sb = parts[1] ?? 0
-          // ✅ winner_team_id와 score 방향이 불일치하면 보정
-          // 규칙: 승리팀은 항상 6점, 패배팀은 0~5점
-          // team_a가 winner인데 sa < sb이면 뒤집힌 것
           if (m.winner_team_id === m.team_a_id && sa < sb) { [sa, sb] = [sb, sa] }
           if (m.winner_team_id === m.team_b_id && sb < sa) { [sa, sb] = [sb, sa] }
-
           if (m.winner_team_id === m.team_a_id) {
             teamMap[m.team_a_id].win++; teamMap[m.team_b_id].lose++
           } else if (m.winner_team_id === m.team_b_id) {
@@ -412,7 +402,6 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
           teamMap[m.team_a_id].scored  += sa; teamMap[m.team_a_id].against += sb
           teamMap[m.team_b_id].scored  += sb; teamMap[m.team_b_id].against += sa
         }
-        // 순위 정렬: 승 → 게임 득실 → 이름
         const ranked = Object.values(teamMap).sort((a, b) =>
           b.win - a.win || (b.scored - b.against) - (a.scored - a.against)
         )
@@ -423,7 +412,7 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
     })()
   }, [eventId, divisionId])
 
-  const groupMatches = matches.filter(m => m.stage === 'GROUP')
+  const groupMatches  = matches.filter(m => m.stage === 'GROUP')
   const finalsMatches = matches.filter(m => m.stage === 'FINALS')
 
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
@@ -481,9 +470,7 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
                             <span className={`font-medium ${isFirst && !isTied ? 'text-green-800' : 'text-stone-800'}`}>
                               {t.name}
                             </span>
-                            {isFirst && !isTied && (
-                              <span className="ml-1.5 text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">통과</span>
-                            )}
+                            {/* ✅ '통과' 뱃지 제거 */}
                             {isTied && (
                               <span className="ml-1.5 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">동률</span>
                             )}
@@ -655,7 +642,6 @@ function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
   )
 }
 
-// ✅ 가로 브래킷 형태 (기존 그대로)
 function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
   const ROUND_ORDER = ['round_of_16', 'quarter', 'semi', 'final']
   const roundLabels: Record<string, string> = {

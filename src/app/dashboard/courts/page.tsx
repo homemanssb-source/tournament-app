@@ -73,7 +73,7 @@ export default function CourtsPage() {
   const [autoStage, setAutoStage]   = useState<StageKey>('GROUP')
   const [autoCourts, setAutoCourts] = useState<string[]>([])
   const [assigning, setAssigning]   = useState(false)
-  useEffect(() => { setAutoCourts([]) }, [selectedVenue]) // 경기장 바뀌면 코트 초기화
+  useEffect(() => { setAutoCourts([]) }, [selectedVenue])
 
   const [courtZones, setCourtZones] = useState<CourtZones>({})
   const [zoneTab, setZoneTab]       = useState<'group' | 'finals'>('group')
@@ -142,11 +142,9 @@ export default function CourtsPage() {
 
   async function loadVenues() {
     if (!eventId) return
-    // ✅ start_time 포함해서 로드 (경기장별 시작시간)
     const { data } = await supabase.from('venues').select('id, name, short_name, court_count, courts, pin_plain, start_time').eq('event_id', eventId).order('created_at')
     const list = (data || []) as (Venue & { start_time?: string })[]
     setVenues(list as Venue[])
-    // 경기장별 시작시간 맵
     const vtMap: Record<string, string> = {}
     list.forEach(v => { if (v.start_time) vtMap[v.id] = v.start_time.slice(0,5) })
     setVenueStartTimes(vtMap)
@@ -159,7 +157,6 @@ export default function CourtsPage() {
     } catch {}
   }
 
-  // ✅ 대회 시작시간 + 부서별 날짜 로드
   async function loadEventSchedule() {
     if (!eventId) return
     try {
@@ -176,9 +173,7 @@ export default function CourtsPage() {
     } catch {}
   }
 
-  // ✅ 코트가 속한 경기장의 시작시간 반환
   function getCourtStartTime(court: string): string {
-    // court 이름 예: "제주-1" → 경기장 short_name "제주" 매칭
     const venue = venuesRef.current.find(v => {
       const sn = (v as any).short_name || v.name
       return court.startsWith(sn + '-') || court === sn
@@ -190,13 +185,13 @@ export default function CourtsPage() {
     return startTimeRef.current
   }
 
-  // ✅ 자동 경기시작 체크 — 완전 재작성
+  // ✅ 자동 경기시작 체크
+  // 수정 2B: 시작시간 미설정 시에도 자동시작 ON이면 즉시 시작하도록 fallback 추가
   async function autoStartCheck() {
     if (!autoStartRef.current) return
     const now = new Date()
     const current = matchesRef.current
 
-    // 코트별 그룹핑
     const byCourt = new Map<string, MatchSlim[]>()
     for (const m of current) {
       if (!m.court) continue
@@ -210,33 +205,27 @@ export default function CourtsPage() {
       const hasLive    = sorted.some(m => m.status === 'IN_PROGRESS')
       const hasPending = sorted.some(m => m.status === 'PENDING')
 
-      if (!hasPending) continue  // 이 코트에 대기 경기 없음
+      if (!hasPending) continue
 
-      // 이 코트의 시작시간 체크
       const courtStartTime = getCourtStartTime(court)
 
-      if (hasLive) {
-        // ✅ 진행중 경기 있음 → 스킵 (다음 체크 때 FINISHED 감지)
-        continue
-      }
+      if (hasLive) continue
 
-      // 진행중 없음
       const lastFinished = sorted.filter(m => m.status === 'FINISHED').pop()
       const firstPending = sorted.find(m => m.status === 'PENDING')
 
       if (!firstPending || firstPending.is_team_tie) continue
 
       if (lastFinished) {
-        // ✅ 앞 경기 완료됨 → 즉시 다음 경기 시작 (시간 무관)
+        // 앞 경기 완료 → 즉시 시작
         await supabase.from('matches').update({
           status: 'IN_PROGRESS',
           started_at: new Date().toISOString()
         }).eq('id', firstPending.id)
-        // ✅ 경기 시작 알림 발송
         sendCourtNotify(court, 'finished', firstPending.id)
         changed = true
       } else if (courtStartTime) {
-        // ✅ 아직 시작 경기 없음 → 시작시간 됐으면 첫 경기 시작
+        // 시작시간 설정됨 → 시간 체크
         const [h, mn] = courtStartTime.split(':').map(Number)
         const target = new Date(now)
         target.setHours(h, mn, 0, 0)
@@ -245,16 +234,23 @@ export default function CourtsPage() {
             status: 'IN_PROGRESS',
             started_at: new Date().toISOString()
           }).eq('id', firstPending.id)
-          // ✅ 경기 시작 알림 발송
           sendCourtNotify(court, 'manual', firstPending.id)
           changed = true
         }
+      } else {
+        // ✅ [수정 2B] 시작시간 미설정 + 자동시작 ON → 즉시 첫 경기 시작
+        await supabase.from('matches').update({
+          status: 'IN_PROGRESS',
+          started_at: new Date().toISOString()
+        }).eq('id', firstPending.id)
+        sendCourtNotify(court, 'manual', firstPending.id)
+        changed = true
       }
     }
     if (changed) await loadMatches()
   }
 
-  // ✅ 자동시작 인터벌 (30초마다 체크)
+  // 자동시작 인터벌 (30초마다 체크)
   useEffect(() => {
     if (!eventId) return
     const iv = setInterval(() => autoStartCheck(), 30000)
@@ -316,7 +312,7 @@ export default function CourtsPage() {
   }
 
   function getCourtPool(divId: string, round: string): string[] {
-    const zoneKey   = ZONE_FINALS.has(round) ? 'finals' : 'group'
+    const zoneKey    = ZONE_FINALS.has(round) ? 'finals' : 'group'
     const zoneCourts = courtZones[divId]?.[zoneKey] || []
     const pool = zoneCourts.length > 0 ? autoCourts.filter(c => zoneCourts.includes(c)) : autoCourts
     return pool.length > 0 ? pool : autoCourts
@@ -473,6 +469,8 @@ export default function CourtsPage() {
     setEditWinner(m.winner_team_id === m.team_a_id ? 'A' : m.winner_team_id === m.team_b_id ? 'B' : '')
     setMsg('')
   }
+
+  // ✅ [수정 2A] submitResult 완료 후 autoStartCheck 즉시 호출
   async function submitResult() {
     if (!editMatch || !editScore || !editWinner) { setMsg('점수와 승자를 모두 입력해주세요.'); return }
     setSubmitting(true); setMsg('')
@@ -489,9 +487,14 @@ export default function CourtsPage() {
         setMsg('✅ 결과 저장됨')
         if (editMatch.court) sendCourtNotify(editMatch.court, 'finished')
       }
-      setEditMatch(null); loadMatches()
+      setEditMatch(null)
+      await loadMatches()             // matchesRef 먼저 최신화
+      if (autoStartRef.current) {    // 자동시작 ON이면 즉시 체크
+        await autoStartCheck()
+      }
     } finally { setSubmitting(false) }
   }
+
   async function startMatch(matchId: string) {
     if (matchId.startsWith('tie_')) return
     await supabase.from('matches').update({ status:'IN_PROGRESS' }).eq('id', matchId); loadMatches()
@@ -543,7 +546,6 @@ export default function CourtsPage() {
 
   const tieMatches  = tiesToMatchSlim(ties)
   const allItems    = [...matches, ...tieMatches]
-  // filteredAll/unassigned는 return 이후 dateDivIds 선언 후 계산
   const byCourt     = new Map<string, MatchSlim[]>()
   for (const name of courtNames) byCourt.set(name, [])
   for (const m of allItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
@@ -558,13 +560,10 @@ export default function CourtsPage() {
   if (!eventId) return <p className="text-stone-400">설정에서 대회를 선택해주세요.</p>
   if (loading)  return <p className="text-stone-400">불러오는 중..</p>
 
-  // ✅ 날짜별 고유 날짜 목록
   const uniqueDates = [...new Set(Object.values(divMatchDates))].sort()
-  // ✅ 날짜 필터 적용 — divMatchDates 없으면 전체 표시
   const dateDivIds = dateFilter === 'ALL'
     ? null
     : Object.entries(divMatchDates).filter(([, d]) => d === dateFilter).map(([id]) => id)
-  // ✅ filteredAll + unassigned (dateDivIds 선언 후 계산)
   const dateFilteredItems = dateDivIds
     ? allItems.filter(m => dateDivIds.includes(m.division_id) || m.is_team_tie)
     : allItems
@@ -575,7 +574,6 @@ export default function CourtsPage() {
     <div>
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h1 className="text-2xl font-bold">🎾 코트 배정</h1>
-        {/* ✅ 자동시작 토글 */}
         <div className="flex items-center gap-3">
           {startTime && (
             <span className="text-xs text-stone-500">⏰ {startTime} 자동시작</span>
@@ -594,7 +592,6 @@ export default function CourtsPage() {
 
       {msg && <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('✅') ? 'bg-tennis-50 text-tennis-700' : 'bg-red-50 text-red-600'}`}>{msg}</div>}
 
-      {/* ✅ 날짜별 탭 (2일 대회) */}
       {uniqueDates.length > 0 && (
         <div className="bg-white rounded-xl border p-3 mb-4">
           <div className="flex items-center gap-2 flex-wrap">
@@ -617,7 +614,6 @@ export default function CourtsPage() {
         </div>
       )}
 
-      {/* 경기장 탭 */}
       {venues.length > 0 && (
         <div className="bg-white rounded-xl border p-3 mb-4">
           <div className="flex items-center gap-2 flex-wrap">
@@ -632,7 +628,6 @@ export default function CourtsPage() {
         </div>
       )}
 
-      {/* 자동배정 패널 */}
       <div className="bg-white rounded-xl border p-4 mb-4 space-y-4">
         <h3 className="font-bold text-sm">🎯 자동 코트 배정</h3>
         <div className="flex flex-wrap gap-3 items-start">
@@ -691,7 +686,6 @@ export default function CourtsPage() {
           )}
         </div>
 
-        {/* 구역 설정 */}
         <div className="border-t pt-3">
           <button onClick={() => setZoneOpen(!zoneOpen)} className="flex items-center gap-2 text-xs font-medium text-stone-600 hover:text-stone-800 transition-all">
             <span>{zoneOpen ? '▾' : '▸'}</span><span>부서별 코트 구역 설정</span><span className="text-stone-400 font-normal">(예선용 / 본선 16강~)</span>
@@ -734,7 +728,6 @@ export default function CourtsPage() {
         </div>
       </div>
 
-      {/* 필터 + 초기화 */}
       <div className="bg-white rounded-xl border p-3 mb-4">
         <div className="flex flex-wrap gap-2 items-center">
           <div className="flex gap-1 bg-stone-100 rounded-lg p-0.5">
@@ -749,7 +742,6 @@ export default function CourtsPage() {
         </div>
       </div>
 
-      {/* 코트 배치도 */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         <div className="lg:col-span-1" data-unassigned onDragOver={handleDragOver} onDrop={handleDropOnUnassigned}>
           <div className="bg-white rounded-xl border overflow-hidden">
@@ -810,7 +802,6 @@ export default function CourtsPage() {
         </div>
       </div>
 
-      {/* 점수 모달 */}
       {editMatch && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setEditMatch(null)}>
           <div className="bg-white rounded-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
