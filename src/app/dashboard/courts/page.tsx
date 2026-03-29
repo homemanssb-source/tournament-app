@@ -813,7 +813,7 @@ export default function CourtsPage() {
                     }
                     // ✅ 수정: IN_PROGRESS 경기가 있어도 운영자는 PENDING 경기 수동 시작 가능
                     // 단, 한 번에 하나씩만 — 현재 PENDING 중 첫 번째만 활성화
-                    const firstPendingIdx = sorted.findIndex(mm => mm.status === 'PENDING')
+                    const firstPendingIdx = courtItems.findIndex(mm => mm.status === 'PENDING')
                     const canStart = !m.is_team_tie && m.status === 'PENDING' && i === firstPendingIdx
                     return <MatchChip key={m.id} m={m} order={m.court_order||i+1} badge={badge} divColor={divColors[m.division_id]} onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)} onClickStart={canStart?()=>startMatch(m.id):undefined} onClickUnassign={() => unassignItem(m.id)} onMoveUp={!m.is_team_tie&&i>0?()=>moveMatchOrder(m.id,'up'):undefined} onMoveDown={!m.is_team_tie&&i<courtItems.length-1?()=>moveMatchOrder(m.id,'down'):undefined} onTouchStart={()=>handleTouchStart(m.id)} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} />
                   })}
