@@ -65,8 +65,6 @@ export default function CourtsPage() {
   const tiesRef    = useRef<TieWithClubs[]>([])
 
   const courtNames = React.useMemo(() => {
-    // ✅ 날짜 필터 적용: 해당 날짜 경기에 배정된 코트만 표시
-    // dateFilter가 특정 날짜면 → 그 날짜 division 경기의 코트만 포함
     if (selectedVenue === 'ALL') {
       if (venues.length === 0) return Array.from({ length: 10 }, (_, i) => `코트-${i + 1}`)
       return venues.flatMap(v => makeCourtNames(v.short_name || v.name, v.court_count || v.courts?.length || 0))
@@ -112,20 +110,8 @@ export default function CourtsPage() {
   const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({})
   const [dateFilter, setDateFilter]       = useState<string>('ALL')
 
-  // ✅ 날짜 필터 적용된 코트 목록 (dateFilter 선언 이후에 위치해야 함)
-  const filteredCourtNames = React.useMemo(() => {
-    if (dateFilter === 'ALL') return courtNames
-    const divIds = Object.entries(divMatchDates)
-      .filter(([, d]) => d === dateFilter).map(([id]) => id)
-    if (divIds.length === 0) return courtNames
-    const usedCourts = new Set(
-      matches
-        .filter(m => divIds.includes(m.division_id) && m.court)
-        .map(m => m.court!)
-    )
-    if (usedCourts.size === 0) return courtNames
-    return courtNames.filter(c => usedCourts.has(c))
-  }, [courtNames, dateFilter, divMatchDates, matches])
+  // 코트 목록은 날짜 무관하게 전체 사용
+  const filteredCourtNames = courtNames
 
   // ref sync (모든 state 선언 후)
   useEffect(() => { venuesRef.current  = venues  }, [venues])
