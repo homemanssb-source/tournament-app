@@ -340,14 +340,23 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
 }
 
 function TournamentView({ eventId, divisionId }: { eventId: string; divisionId: string }) {
-  const [matches, setMatches] = useState<Match[]>([])
+  const [matches, setMatches] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     setLoading(true)
-    supabase.from('matches').select('*')
+    // ✅ v_matches_with_teams 뷰 사용 → team_a_name, team_b_name 포함
+    supabase.from('v_matches_with_teams').select('*')
       .eq('event_id', eventId).eq('division_id', divisionId).eq('stage', 'FINALS')
-      .order('round').order('match_num')
-      .then(({ data }) => { setMatches(data || []); setLoading(false) })
+      .order('slot')
+      .then(({ data }) => {
+        // TournamentBracket이 기대하는 match_id 필드로 매핑
+        const mapped = (data || []).map((m: any) => ({
+          ...m,
+          match_id: m.id,  // TournamentBracket은 match_id 사용
+        }))
+        setMatches(mapped)
+        setLoading(false)
+      })
   }, [eventId, divisionId])
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
   if (!matches.length) return <p className="text-center py-10 text-stone-400">아직 토너먼트가 없습니다.</p>
