@@ -113,6 +113,15 @@ export default function CourtsPage() {
   // 코트 목록은 날짜 무관하게 전체 사용
   const filteredCourtNames = courtNames
 
+  // ✅ 날짜 탭: 2일 대회면 첫 번째 날짜 자동 선택
+  useEffect(() => {
+    if (Object.keys(divMatchDates).length === 0) return
+    const dates = [...new Set(Object.values(divMatchDates))].sort()
+    if (dates.length > 0 && dateFilter === 'ALL') {
+      setDateFilter(dates[0])
+    }
+  }, [divMatchDates])
+
   // ref sync (모든 state 선언 후)
   useEffect(() => { venuesRef.current  = venues  }, [venues])
   useEffect(() => { matchesRef.current = matches }, [matches])
@@ -641,10 +650,6 @@ export default function CourtsPage() {
         <div className="bg-white rounded-xl border p-3 mb-4">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-stone-500 font-medium whitespace-nowrap">📅 날짜:</span>
-            <button onClick={() => { setDateFilter('ALL'); setAutoDiv(''); setViewFilter('ALL') }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${dateFilter === 'ALL' ? 'bg-[#2d5016] text-white border-[#2d5016]' : 'bg-white text-stone-600 border-stone-300 hover:border-stone-400'}`}>
-              전체
-            </button>
             {uniqueDates.map(date => {
               const label = new Date(date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short' })
               const divsOnDate = Object.entries(divMatchDates).filter(([, d]) => d === date).map(([id]) => divisions.find(div => div.id === id)?.name).filter(Boolean)
