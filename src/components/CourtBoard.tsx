@@ -51,20 +51,32 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
 
     setMatches([...indivMatches, ...tieMatches])
 
-    // ✅ 부서별 날짜 로드
-    const { data: divData } = await supabase.from('divisions')
-      .select('id, match_date').eq('event_id', eventId)
-    if (divData) {
-      const map: Record<string, string> = {}
-      divData.forEach((d: any) => { if (d.match_date) map[d.id] = d.match_date })
-      setDivMatchDates(map)
-    }
-
     setLoading(false)
     setLastUpdate(new Date())
   }, [eventId])
 
   useEffect(() => { loadData(); const i = setInterval(loadData, 15000); return () => clearInterval(i) }, [loadData])
+
+  // ✅ 첫 번째 날짜 자동 선택
+  useEffect(() => {
+    const dates = [...new Set(Object.values(divMatchDates))].sort()
+    if (dates.length > 1 && dateFilter === 'ALL') {
+      setDateFilter(dates[0])
+    }
+  }, [divMatchDates])
+
+  // ✅ 부서별 날짜 별도 로드 (한 번만)
+  useEffect(() => {
+    if (!eventId) return
+    supabase.from('divisions').select('id, match_date').eq('event_id', eventId)
+      .then(({ data }) => {
+        if (data) {
+          const map: Record<string, string> = {}
+          data.forEach((d: any) => { if (d.match_date) map[d.id] = d.match_date })
+          setDivMatchDates(map)
+        }
+      })
+  }, [eventId])
 
   // 외부 클릭 시 드롭다운 닫기
   useEffect(() => {
@@ -82,7 +94,9 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     if (dateFilter === 'ALL') return matches
     const divIds = Object.entries(divMatchDates)
       .filter(([, d]) => d === dateFilter).map(([id]) => id)
-    if (divIds.length === 0) return matches
+    // divIds가 비어있으면 해당 날짜에 부서가 없는 것 → 빈 배열 반환
+    if (divIds.length === 0) return []
+    // 단체전은 날짜 무관하게 표시, 개인전은 해당 날짜 부서만
     return matches.filter(m => m.is_team_tie || divIds.includes(m.division_id))
   }, [matches, dateFilter, divMatchDates])
 
@@ -181,10 +195,6 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
           <div className="bg-white rounded-xl border p-3">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs text-stone-500 font-medium whitespace-nowrap">📅 날짜:</span>
-              <button onClick={() => setDateFilter('ALL')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${dateFilter === 'ALL' ? 'bg-[#2d5016] text-white border-[#2d5016]' : 'bg-white text-stone-600 border-stone-300 hover:border-stone-400'}`}>
-                전체
-              </button>
               {uniqueDates.map(date => {
                 const label = new Date(date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short' })
                 const divsOnDate = Object.entries(divMatchDates)
