@@ -1,6 +1,5 @@
-// JTA 제주시테니스 Service Worker
-const CACHE_NAME = 'jta-ranking-v5';
-
+// JTA 제주테니스 Service Worker
+const CACHE_NAME = 'jta-ranking-v6';
 const STATIC_ASSETS = ['/icon-192x192.png', '/icon-512x512.png', '/manifest.json'];
 
 self.addEventListener('install', e => {
@@ -19,10 +18,22 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
-  if (new URL(e.request.url).hostname.includes('supabase')) return;
 
   const url = new URL(e.request.url);
 
+  // ✅ Supabase API 요청 — SW 개입 금지
+  if (url.hostname.includes('supabase')) return;
+
+  // ✅ Next.js 내부 요청 (_next/) — SW 개입 금지
+  if (url.pathname.startsWith('/_next/')) return;
+
+  // ✅ 네비게이션 요청 (HTML 페이지) — SW 개입 금지
+  if (e.request.mode === 'navigate') return;
+
+  // ✅ API 라우트 — SW 개입 금지
+  if (url.pathname.startsWith('/api/')) return;
+
+  // 이미지 캐시
   if (url.pathname.match(/\.(png|jpg|jpeg|gif|svg|ico|webp)$/)) {
     e.respondWith(
       caches.match(e.request).then(cached => cached || fetch(e.request))
@@ -30,24 +41,28 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  e.respondWith(
-    fetch(e.request)
-      .then(res => {
-        if (url.pathname === '/manifest.json' && res.status === 200) {
-          caches.open(CACHE_NAME).then(c => c.put(e.request, res.clone()));
-        }
-        return res;
+  // manifest.json 캐시 — clone 올바르게 처리
+  if (url.pathname === '/manifest.json') {
+    e.respondWith(
+      caches.match(e.request).then(cached => {
+        if (cached) return cached;
+        return fetch(e.request).then(res => {
+          if (res.status === 200) {
+            const resClone = res.clone();
+            caches.open(CACHE_NAME).then(c => c.put(e.request, resClone));
+          }
+          return res;
+        });
       })
-      .catch(() => {
-        return caches.match(e.request) || caches.match('/');
-      })
-  );
+    );
+    return;
+  }
 });
 
 self.addEventListener('push', e => {
   const d = e.data?.json() || {};
   e.waitUntil(
-    self.registration.showNotification(d.title || '🎾 JTA 제주시테니스', {
+    self.registration.showNotification(d.title || '🎾 JTA 제주테니스', {
       body: d.body || '새로운 알림이 있습니다.',
       icon: '/icon-192x192.png',
       badge: '/icon-72x72.png',
