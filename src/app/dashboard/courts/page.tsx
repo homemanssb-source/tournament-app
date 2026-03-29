@@ -615,6 +615,11 @@ export default function CourtsPage() {
   const dateDivIds = dateFilter === 'ALL'
     ? null
     : Object.entries(divMatchDates).filter(([, d]) => d === dateFilter).map(([id]) => id)
+
+  // ✅ 날짜 필터에 맞는 부서만 표시 (날짜 선택 시 해당 날짜 부서만)
+  const filteredDivisions = dateDivIds
+    ? divisions.filter(d => dateDivIds.includes(d.id))
+    : divisions
   const dateFilteredItems = dateDivIds
     ? allItems.filter(m => dateDivIds.includes(m.division_id) || m.is_team_tie)
     : allItems
@@ -647,7 +652,7 @@ export default function CourtsPage() {
         <div className="bg-white rounded-xl border p-3 mb-4">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-stone-500 font-medium whitespace-nowrap">📅 날짜:</span>
-            <button onClick={() => setDateFilter('ALL')}
+            <button onClick={() => { setDateFilter('ALL'); setAutoDiv(''); setViewFilter('ALL') }}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${dateFilter === 'ALL' ? 'bg-[#2d5016] text-white border-[#2d5016]' : 'bg-white text-stone-600 border-stone-300 hover:border-stone-400'}`}>
               전체
             </button>
@@ -655,7 +660,7 @@ export default function CourtsPage() {
               const label = new Date(date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short' })
               const divsOnDate = Object.entries(divMatchDates).filter(([, d]) => d === date).map(([id]) => divisions.find(div => div.id === id)?.name).filter(Boolean)
               return (
-                <button key={date} onClick={() => setDateFilter(date)}
+                <button key={date} onClick={() => { setDateFilter(date); setAutoDiv(''); setViewFilter('ALL') }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${dateFilter === date ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-stone-600 border-stone-300 hover:border-blue-400'}`}>
                   {label} <span className="opacity-70">({divsOnDate.join('·')})</span>
                 </button>
@@ -686,7 +691,7 @@ export default function CourtsPage() {
             <label className="text-xs text-stone-500 block mb-1">부문</label>
             <select value={autoDiv} onChange={e => setAutoDiv(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[140px]">
               <option value="">부문 선택</option>
-              {divisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              {filteredDivisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               {hasTeamTies && <option value="TEAM">🏆 단체전</option>}
             </select>
           </div>
@@ -751,7 +756,7 @@ export default function CourtsPage() {
                 ))}
               </div>
               <p className="text-xs text-stone-400">{zoneTab==='group' ? '예선 자동배정 시 해당 부서가 사용할 코트를 지정하세요.' : '16강 이상 본선 자동배정 시 해당 부서 코트를 지정하세요.'}</p>
-              {divisions.map(div => {
+              {filteredDivisions.map(div => {
                 const selected = courtZones[div.id]?.[zoneTab] || []
                 return (
                   <div key={div.id} className="flex items-start gap-3">
@@ -783,7 +788,7 @@ export default function CourtsPage() {
         <div className="flex flex-wrap gap-2 items-center">
           <div className="flex gap-1 bg-stone-100 rounded-lg p-0.5">
             <button onClick={() => setViewFilter('ALL')} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter==='ALL'?'bg-white shadow-sm':''}`}>전체</button>
-            {divisions.map(d => <button key={d.id} onClick={() => setViewFilter(d.id)} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter===d.id?'bg-white shadow-sm':''}`}>{d.name}</button>)}
+            {filteredDivisions.map(d => <button key={d.id} onClick={() => setViewFilter(d.id)} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter===d.id?'bg-white shadow-sm':''}`}>{d.name}</button>)}
             {hasTeamTies && <button onClick={() => setViewFilter('TEAM')} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter==='TEAM'?'bg-white shadow-sm':''}`}>단체전</button>}
           </div>
           <div className="ml-auto flex gap-2">
