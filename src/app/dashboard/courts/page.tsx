@@ -95,8 +95,8 @@ export default function CourtsPage() {
 
   // ✅ 자동 경기시작 — localStorage로 ON/OFF 유지 (새로고침해도 안 꺼짐)
   const [startTime, setStartTime]               = useState<string>('')
-  const [autoStartEnabled, setAutoStartEnabled] = useState(false)
-  const autoStartRef        = useRef(false)
+  const [autoStartEnabled, setAutoStartEnabled] = useState(true)  // ✅ 항상 ON
+  const autoStartRef        = useRef(true)  // ✅ 항상 ON
   const startTimeRef        = useRef<string>('')
   const venueStartTimesRef  = useRef<Record<string, string>>({})
   // ✅ 경기장별 시작시간
@@ -113,14 +113,7 @@ export default function CourtsPage() {
   useEffect(() => { startTimeRef.current       = startTime        }, [startTime])
   useEffect(() => { venueStartTimesRef.current = venueStartTimes  }, [venueStartTimes])
 
-  // ✅ 클라이언트 마운트 후 localStorage에서 자동시작 상태 복원
-  useEffect(() => {
-    const saved = localStorage.getItem('autoStartEnabled')
-    if (saved === 'true') {
-      setAutoStartEnabled(true)
-      autoStartRef.current = true
-    }
-  }, [])
+  // autoStart 항상 ON
 
   function syncCourtOrderRef(matchList: MatchSlim[], tieList: TieWithClubs[]) {
     const counter: Record<string, number> = {}
