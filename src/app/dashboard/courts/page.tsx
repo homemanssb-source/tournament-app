@@ -96,6 +96,14 @@ export default function CourtsPage() {
   const [notifying, setNotifying]   = useState<string | null>(null)
   const [notifyMsg, setNotifyMsg]   = useState<Record<string, string>>({})
 
+  // ✅ 자동 경기시작
+  const [startTime, setStartTime]               = useState<string>('')
+  const [autoStartEnabled, setAutoStartEnabled] = useState(false)
+  const autoStartRef = useRef(false)
+  // ✅ 부서별 날짜 (2일 대회)
+  const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({})
+  const [dateFilter, setDateFilter]       = useState<string>('ALL')
+
   function syncCourtOrderRef(matchList: MatchSlim[], tieList: TieWithClubs[]) {
     const counter: Record<string, number> = {}
     for (const m of matchList) {
@@ -136,6 +144,74 @@ export default function CourtsPage() {
     } catch {}
   }
 
+  // ✅ 대회 시작시간 + 부서별 날짜 로드
+  async function loadEventSchedule() {
+    if (!eventId) return
+    try {
+      const { data: ev } = await supabase.from('events').select('start_time').eq('id', eventId).single()
+      if (ev?.start_time) setStartTime(ev.start_time.slice(0, 5)) // HH:MM
+    } catch {}
+    try {
+      const { data: divs } = await supabase.from('divisions').select('id, match_date').eq('event_id', eventId)
+      if (divs) {
+        const map: Record<string, string> = {}
+        divs.forEach(d => { if (d.match_date) map[d.id] = d.match_date })
+        setDivMatchDates(map)
+      }
+    } catch {}
+  }
+
+  // ✅ 자동 경기시작 체크
+  async function autoStartCheck() {
+    if (!autoStartRef.current || !startTime) return
+    const now = new Date()
+    const [h, m] = startTime.split(':').map(Number)
+    const target = new Date(now); target.setHours(h, m, 0, 0)
+    if (now < target) return  // 아직 시작시간 전
+
+    const current = matchesRef.current
+    // 코트별로 그룹핑
+    const byCourt = new Map<string, MatchSlim[]>()
+    for (const m of current) {
+      if (!m.court) continue
+      if (!byCourt.has(m.court)) byCourt.set(m.court, [])
+      byCourt.get(m.court)!.push(m)
+    }
+    for (const [, items] of byCourt) {
+      const sorted = items.sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
+      const hasLive = sorted.some(m => m.status === 'IN_PROGRESS')
+      if (hasLive) {
+        // 진행중 경기가 FINISHED 됐는지 확인 → 다음 PENDING 자동 시작
+        const finishedIdx = sorted.findIndex(m => m.status === 'FINISHED')
+        const liveIdx     = sorted.findIndex(m => m.status === 'IN_PROGRESS')
+        if (liveIdx < 0 && finishedIdx >= 0) {
+          // 방금 완료 → 다음 PENDING 시작
+          const nextPending = sorted.find(m => m.status === 'PENDING')
+          if (nextPending && !nextPending.is_team_tie) {
+            await supabase.from('matches').update({ status: 'IN_PROGRESS', started_at: new Date().toISOString() }).eq('id', nextPending.id)
+          }
+        }
+        continue
+      }
+      // 진행중 없음 → 첫 PENDING 시작
+      const first = sorted.find(m => m.status === 'PENDING')
+      if (first && !first.is_team_tie) {
+        await supabase.from('matches').update({ status: 'IN_PROGRESS', started_at: new Date().toISOString() }).eq('id', first.id)
+      }
+    }
+    await loadMatches()
+  }
+
+  // ✅ 자동시작 인터벌 (30초마다 체크)
+  useEffect(() => {
+    autoStartRef.current = autoStartEnabled
+  }, [autoStartEnabled])
+  useEffect(() => {
+    if (!eventId) return
+    const iv = setInterval(() => autoStartCheck(), 30000)
+    return () => clearInterval(iv)
+  }, [eventId, startTime])
+
   const loadAll = useCallback(async (showLoading = false) => {
     if (!eventId) return
     if (showLoading) setLoading(true)
@@ -171,7 +247,7 @@ export default function CourtsPage() {
     syncCourtOrderRef(matchesRef.current, list)
   }
 
-  useEffect(() => { if (!eventId) return; loadAll(true); loadVenues(); loadCourtZones() }, [eventId, loadAll])
+  useEffect(() => { if (!eventId) return; loadAll(true); loadVenues(); loadCourtZones(); loadEventSchedule() }, [eventId, loadAll])
   useEffect(() => { if (!eventId) return; const iv = setInterval(() => loadAll(false), 15000); return () => clearInterval(iv) }, [eventId, loadAll])
 
   async function saveCourtZones() {
@@ -418,8 +494,7 @@ export default function CourtsPage() {
 
   const tieMatches  = tiesToMatchSlim(ties)
   const allItems    = [...matches, ...tieMatches]
-  const filteredAll = viewFilter==='ALL' ? allItems : viewFilter==='TEAM' ? allItems.filter(m=>m.is_team_tie) : allItems.filter(m=>m.division_id===viewFilter)
-  const unassigned  = filteredAll.filter(m => !m.court && m.status !== 'FINISHED')
+  // filteredAll/unassigned는 return 이후 dateDivIds 선언 후 계산
   const byCourt     = new Map<string, MatchSlim[]>()
   for (const name of courtNames) byCourt.set(name, [])
   for (const m of allItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
@@ -434,10 +509,64 @@ export default function CourtsPage() {
   if (!eventId) return <p className="text-stone-400">설정에서 대회를 선택해주세요.</p>
   if (loading)  return <p className="text-stone-400">불러오는 중..</p>
 
+  // ✅ 날짜별 고유 날짜 목록
+  const uniqueDates = [...new Set(Object.values(divMatchDates))].sort()
+  // ✅ 날짜 필터 적용 — divMatchDates 없으면 전체 표시
+  const dateDivIds = dateFilter === 'ALL'
+    ? null
+    : Object.entries(divMatchDates).filter(([, d]) => d === dateFilter).map(([id]) => id)
+  // ✅ filteredAll + unassigned (dateDivIds 선언 후 계산)
+  const dateFilteredItems = dateDivIds
+    ? allItems.filter(m => dateDivIds.includes(m.division_id) || m.is_team_tie)
+    : allItems
+  const filteredAll = viewFilter==='ALL' ? dateFilteredItems : viewFilter==='TEAM' ? dateFilteredItems.filter(m=>m.is_team_tie) : dateFilteredItems.filter(m=>m.division_id===viewFilter)
+  const unassigned  = filteredAll.filter(m => !m.court && m.status !== 'FINISHED')
+
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">🎾 코트 배정</h1>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h1 className="text-2xl font-bold">🎾 코트 배정</h1>
+        {/* ✅ 자동시작 토글 */}
+        <div className="flex items-center gap-3">
+          {startTime && (
+            <span className="text-xs text-stone-500">⏰ {startTime} 자동시작</span>
+          )}
+          <button
+            onClick={() => setAutoStartEnabled(v => !v)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
+              autoStartEnabled
+                ? 'bg-red-500 text-white border-red-500'
+                : 'bg-white text-stone-500 border-stone-300 hover:border-red-400'
+            }`}>
+            {autoStartEnabled ? '⏸ 자동시작 ON' : '▶ 자동시작 OFF'}
+          </button>
+        </div>
+      </div>
+
       {msg && <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('✅') ? 'bg-tennis-50 text-tennis-700' : 'bg-red-50 text-red-600'}`}>{msg}</div>}
+
+      {/* ✅ 날짜별 탭 (2일 대회) */}
+      {uniqueDates.length > 0 && (
+        <div className="bg-white rounded-xl border p-3 mb-4">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-stone-500 font-medium whitespace-nowrap">📅 날짜:</span>
+            <button onClick={() => setDateFilter('ALL')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${dateFilter === 'ALL' ? 'bg-[#2d5016] text-white border-[#2d5016]' : 'bg-white text-stone-600 border-stone-300 hover:border-stone-400'}`}>
+              전체
+            </button>
+            {uniqueDates.map(date => {
+              const label = new Date(date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short' })
+              const divsOnDate = Object.entries(divMatchDates).filter(([, d]) => d === date).map(([id]) => divisions.find(div => div.id === id)?.name).filter(Boolean)
+              return (
+                <button key={date} onClick={() => setDateFilter(date)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${dateFilter === date ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-stone-600 border-stone-300 hover:border-blue-400'}`}>
+                  {label} <span className="opacity-70">({divsOnDate.join('·')})</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* 경기장 탭 */}
       {venues.length > 0 && (

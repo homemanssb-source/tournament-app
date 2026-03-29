@@ -1,4 +1,5 @@
 'use client'
+import React from 'react'
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useEventId, useDivisions, DivisionTabs } from '@/components/useDashboard'
@@ -16,22 +17,38 @@ export default function TeamsPage() {
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
 
-  // 추가 폼
+  // ✅ 부서별 날짜
+  const [divDates, setDivDates] = useState<Record<string, string>>({})
+
   const [p1Name, setP1Name] = useState('')
   const [p2Name, setP2Name] = useState('')
   const [addLoading, setAddLoading] = useState(false)
 
-  // 편집
   const [editId, setEditId] = useState<string | null>(null)
   const [editP1, setEditP1] = useState('')
   const [editP2, setEditP2] = useState('')
 
-  // CSV
   const fileRef = useRef<HTMLInputElement>(null)
 
   const selectedDiv = divisions.find(d => d.id === selected)
 
+  useEffect(() => {
+    if (eventId) loadDivDates(eventId)
+  }, [eventId])
+
   useEffect(() => { if (eventId && selected) loadTeams() }, [eventId, selected])
+
+  // ✅ 부서별 날짜 로드
+  async function loadDivDates(eid: string) {
+    try {
+      const { data } = await supabase.from('divisions').select('id, match_date').eq('event_id', eid)
+      if (data) {
+        const map: Record<string, string> = {}
+        data.forEach((d: any) => { if (d.match_date) map[d.id] = d.match_date })
+        setDivDates(map)
+      }
+    } catch {}
+  }
 
   async function loadTeams() {
     setLoading(true)
@@ -57,17 +74,10 @@ export default function TeamsPage() {
     const teamName = `${p1Name.trim()}/${p2Name.trim()}`
     const pin = generatePin()
     const teamNum = `T-${String(teams.length + 1).padStart(4, '0')}`
-
     const { error } = await supabase.from('teams').insert({
-      event_id: eventId,
-      division_id: selected,
-      division_name: divName,
-      team_name: teamName,
-      team_key: makeTeamKey(divName, p1Name.trim(), p2Name.trim()),
-      team_num: teamNum,
-      player1_name: p1Name.trim(),
-      player2_name: p2Name.trim(),
-      pin_plain: pin,
+      event_id: eventId, division_id: selected, division_name: divName,
+      team_name: teamName, team_key: makeTeamKey(divName, p1Name.trim(), p2Name.trim()),
+      team_num: teamNum, player1_name: p1Name.trim(), player2_name: p2Name.trim(), pin_plain: pin,
     })
     setAddLoading(false)
     if (error) { setMsg('❌ ' + error.message); return }
@@ -81,23 +91,18 @@ export default function TeamsPage() {
     const divName = selectedDiv?.name || ''
     const teamName = `${editP1.trim()}/${editP2.trim()}`
     const { error } = await supabase.from('teams').update({
-      team_name: teamName,
-      player1_name: editP1.trim(),
-      player2_name: editP2.trim(),
+      team_name: teamName, player1_name: editP1.trim(), player2_name: editP2.trim(),
       team_key: makeTeamKey(divName, editP1.trim(), editP2.trim()),
     }).eq('id', id)
     if (error) { setMsg('❌ ' + error.message); return }
-    setEditId(null)
-    setMsg('✅ 수정됨')
-    loadTeams()
+    setEditId(null); setMsg('✅ 수정됨'); loadTeams()
   }
 
   async function deleteTeam(id: string, name: string) {
     if (!confirm(`"${name}" 팀을 삭제하시겠습니까?`)) return
     const { error } = await supabase.from('teams').delete().eq('id', id)
     if (error) { setMsg('❌ ' + error.message); return }
-    setMsg('✅ 삭제됨')
-    loadTeams()
+    setMsg('✅ 삭제됨'); loadTeams()
   }
 
   async function handleCSV(e: React.ChangeEvent<HTMLInputElement>) {
@@ -108,18 +113,15 @@ export default function TeamsPage() {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
     if (lines.length < 2) { setMsg('❌ CSV에 데이터가 없습니다.'); return }
 
-    // 헤더 감지
     const header = lines[0].toLowerCase()
     const hasHeader = header.includes('부서') || header.includes('선수') || header.includes('name') || header.includes('division')
     const dataLines = hasHeader ? lines.slice(1) : lines
 
-    // 컬럼 순서 감지 (부서,선수1,선수2 또는 선수1,선수2)
     const cols = lines[0].split(',').map(c => c.trim().toLowerCase())
     const divCol = cols.findIndex(c => c.includes('부서') || c.includes('division'))
-    const p1Col = cols.findIndex(c => c.includes('선수1') || c.includes('player1') || c.includes('이름'))
-    const p2Col = cols.findIndex(c => c.includes('선수2') || c.includes('player2'))
+    const p1Col  = cols.findIndex(c => c.includes('선수1') || c.includes('player1') || c.includes('이름'))
+    const p2Col  = cols.findIndex(c => c.includes('선수2') || c.includes('player2'))
 
-    let added = 0
     let skipped = 0
     const rows: any[] = []
 
@@ -127,51 +129,35 @@ export default function TeamsPage() {
       const parts = line.split(',').map(s => s.trim())
       if (parts.length < 2) continue
 
-      let divId = selected
-      let divName = selectedDiv?.name || ''
-      let player1 = ''
-      let player2 = ''
+      let divId = selected, divName = selectedDiv?.name || ''
+      let player1 = '', player2 = ''
 
       if (divCol >= 0 && p1Col >= 0 && p2Col >= 0) {
-        // 부서,선수1,선수2 형식
         const csvDiv = parts[divCol]
         const matchDiv = divisions.find(d => d.name === csvDiv)
         if (matchDiv) { divId = matchDiv.id; divName = matchDiv.name }
-        else { divName = csvDiv } // 매칭 안되면 CSV 값 그대로
-        player1 = parts[p1Col]
-        player2 = parts[p2Col]
+        else { divName = csvDiv }
+        player1 = parts[p1Col]; player2 = parts[p2Col]
       } else if (parts.length >= 3 && !hasHeader) {
-        // 헤더 없이 3컬럼이면 부서,선수1,선수2로 추정
         const matchDiv = divisions.find(d => d.name === parts[0])
         if (matchDiv) { divId = matchDiv.id; divName = matchDiv.name }
-        player1 = parts[1]
-        player2 = parts[2]
+        player1 = parts[1]; player2 = parts[2]
       } else if (parts.length >= 2) {
-        // 2컬럼이면 선수1,선수2 (현재 선택된 부서)
-        player1 = parts[0]
-        player2 = parts[1]
+        player1 = parts[0]; player2 = parts[1]
       }
 
       if (!player1 || !player2) { skipped++; continue }
 
       const pin = generatePin()
       const teamNum = `T-${String(teams.length + rows.length + 1).padStart(4, '0')}`
-
       rows.push({
-        event_id: eventId,
-        division_id: divId,
-        division_name: divName,
-        team_name: `${player1}/${player2}`,
-        team_key: makeTeamKey(divName, player1, player2),
-        team_num: teamNum,
-        player1_name: player1,
-        player2_name: player2,
-        pin_plain: pin,
+        event_id: eventId, division_id: divId, division_name: divName,
+        team_name: `${player1}/${player2}`, team_key: makeTeamKey(divName, player1, player2),
+        team_num: teamNum, player1_name: player1, player2_name: player2, pin_plain: pin,
       })
     }
 
     if (rows.length === 0) { setMsg('❌ 유효한 팀 데이터가 없습니다.'); return }
-
     const { error } = await supabase.from('teams').insert(rows)
     if (error) { setMsg('❌ ' + error.message); return }
     setMsg(`✅ ${rows.length}팀 일괄 추가됨${skipped > 0 ? ` (${skipped}건 스킵)` : ''}`)
@@ -190,7 +176,39 @@ export default function TeamsPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-4">👥 팀 관리</h1>
-      <DivisionTabs divisions={divisions} selected={selected} onSelect={setSelected} />
+
+      {/* ✅ 부서 탭 — 날짜 뱃지 포함 */}
+      <div className="flex flex-wrap gap-2 mb-4">
+        {divisions.map(d => {
+          const date = divDates[d.id]
+          const isActive = selected === d.id
+          return (
+            <button key={d.id} onClick={() => setSelected(d.id)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium border transition-all ${
+                isActive ? 'bg-[#2d5016] text-white border-[#2d5016]' : 'bg-white text-stone-600 border-stone-300 hover:border-[#2d5016]/50'
+              }`}>
+              {d.name}
+              {date && (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${isActive ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700'}`}>
+                  {new Date(date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* ✅ 선택된 부서 날짜 표시 */}
+      {selected && divDates[selected] && (
+        <div className="mb-4 flex items-center gap-2 text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5">
+          <span>📅</span>
+          <span className="font-medium">{selectedDiv?.name}</span>
+          <span>경기일:</span>
+          <span className="font-bold">
+            {new Date(divDates[selected]).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}
+          </span>
+        </div>
+      )}
 
       {msg && (
         <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('✅') || msg.startsWith('📋') ? 'bg-tennis-50 text-tennis-700' : 'bg-red-50 text-red-600'}`}>

@@ -1,9 +1,11 @@
-﻿// ============================================================
+// ============================================================
 // 대시보드 메인 페이지
 // src/app/dashboard/page.tsx
-// P7: 진행률 바 추가
+// ✅ 경기결과 목록 (조별 + 부서 필터)
+// ✅ 동률 시 수동 순위 조정
 // ============================================================
 'use client'
+import React from 'react'
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
@@ -24,36 +26,56 @@ interface EventStats {
   totalGroups: number
 }
 
+interface MatchRow {
+  id: string
+  match_num: string
+  division_name: string
+  division_id: string
+  group_label: string | null
+  stage: string
+  round: string
+  team_a_name: string
+  team_b_name: string
+  team_a_id: string
+  team_b_id: string
+  winner_team_id: string | null
+  score: string | null
+  court: string | null
+  status: string
+  updated_at: string
+}
+
 export default function DashboardPage() {
   const eventId = useEventId()
   const [stats, setStats] = useState<EventStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [recentActivity, setRecentActivity] = useState<any[]>([])
 
+  // 경기결과 목록
+  const [allMatches, setAllMatches] = useState<MatchRow[]>([])
+  const [matchFilter, setMatchFilter] = useState<string>('ALL')
+  const [showResults, setShowResults] = useState(false)
+
+  // 동률 수동 조정
+  const [tiedGroups, setTiedGroups] = useState<any[]>([])
+  const [showTieAdjust, setShowTieAdjust] = useState(false)
+  const [adjusting, setAdjusting] = useState(false)
+  const [adjustMsg, setAdjustMsg] = useState('')
+
   const loadStats = useCallback(async () => {
-    if (!eventId) {
-      setLoading(false)
-      return
-    }
+    if (!eventId) { setLoading(false); return }
     setLoading(true)
     try {
       const [
-        evRes,
-        divRes,
-        matchCountRes,
-        matchFinRes,
-        matchInpRes,
-        tieCountRes,
-        tieFinRes,
-        tieInpRes,
-        teamCountRes,
-        clubCountRes,
-        groupCountRes,
-        recentMatchRes,
-        recentTieRes,
+        evRes, divRes,
+        matchCountRes, matchFinRes, matchInpRes,
+        tieCountRes, tieFinRes, tieInpRes,
+        teamCountRes, clubCountRes, groupCountRes,
+        recentMatchRes, recentTieRes,
+        allMatchRes,
       ] = await Promise.all([
         supabase.from('events').select('*').eq('id', eventId).single(),
-        supabase.from('divisions').select('id,name').eq('event_id', eventId).order('sort_order'),
+        supabase.from('divisions').select('id,name,match_date').eq('event_id', eventId).order('sort_order'),
         supabase.from('matches').select('id', { count: 'exact' }).eq('event_id', eventId).neq('score', 'BYE'),
         supabase.from('matches').select('id', { count: 'exact' }).eq('event_id', eventId).eq('status', 'FINISHED').neq('score', 'BYE'),
         supabase.from('matches').select('id', { count: 'exact' }).eq('event_id', eventId).eq('status', 'IN_PROGRESS'),
@@ -65,6 +87,11 @@ export default function DashboardPage() {
         supabase.from('groups').select('id,is_finalized', { count: 'exact' }).eq('event_id', eventId),
         supabase.from('v_matches_with_teams').select('team_a_name,team_b_name,score,division_name,updated_at').eq('event_id', eventId).eq('status', 'FINISHED').order('updated_at', { ascending: false }).limit(5),
         supabase.from('ties').select('*, updated_at, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name)').eq('event_id', eventId).eq('status', 'completed').order('updated_at', { ascending: false }).limit(5),
+        // 전체 완료 경기 (결과 목록용)
+        supabase.from('v_matches_with_teams')
+          .select('id,match_num,division_name,division_id,group_label,stage,round,team_a_name,team_b_name,team_a_id,team_b_id,winner_team_id,score,court,status,updated_at')
+          .eq('event_id', eventId).eq('status', 'FINISHED').neq('score', 'BYE')
+          .order('updated_at', { ascending: false }).limit(200),
       ])
 
       const groups = groupCountRes.data || []
@@ -85,7 +112,6 @@ export default function DashboardPage() {
         totalGroups: groupCountRes.count || 0,
       })
 
-      // 최근 활동 병합 (최신 5개)
       const recentMatches = (recentMatchRes.data || []).map((m: any) => ({
         type: 'match',
         desc: `${m.team_a_name} vs ${m.team_b_name}`,
@@ -102,10 +128,78 @@ export default function DashboardPage() {
         .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
         .slice(0, 8)
       setRecentActivity(combined)
+      setAllMatches((allMatchRes.data || []) as MatchRow[])
+
+      // 동률 감지 — 조별 예선 완료된 그룹 중 동률 팀 있는 것
+      await detectTied(eventId, divRes.data || [])
     } finally {
       setLoading(false)
     }
   }, [eventId])
+
+  // ── 동률 감지 ─────────────────────────────────────────────
+  async function detectTied(eid: string, divs: any[]) {
+    const { data: grpData } = await supabase
+      .from('groups').select('id,group_label,division_id,division_name').eq('event_id', eid)
+
+    if (!grpData?.length) return
+
+    const tiedList: any[] = []
+    for (const g of grpData) {
+      const { data: mData } = await supabase
+        .from('v_matches_with_teams').select('*')
+        .eq('event_id', eid).eq('group_id', g.id)
+        .eq('status', 'FINISHED').neq('score', 'BYE')
+
+      if (!mData?.length) continue
+
+      // 팀별 승수 집계
+      const teamWins: Record<string, { name: string; id: string; wins: number; diff: number; manualRank?: number }> = {}
+      for (const m of mData) {
+        if (!teamWins[m.team_a_id]) teamWins[m.team_a_id] = { name: m.team_a_name, id: m.team_a_id, wins: 0, diff: 0 }
+        if (!teamWins[m.team_b_id]) teamWins[m.team_b_id] = { name: m.team_b_name, id: m.team_b_id, wins: 0, diff: 0 }
+        const [sa, sb] = (m.score || '0:0').split(':').map(Number)
+        if (m.winner_team_id === m.team_a_id) { teamWins[m.team_a_id].wins++; teamWins[m.team_a_id].diff += (sa - sb) }
+        else if (m.winner_team_id === m.team_b_id) { teamWins[m.team_b_id].wins++; teamWins[m.team_b_id].diff += (sb - sa) }
+      }
+
+      const teams = Object.values(teamWins)
+      // 승수가 같은 팀이 있으면 동률
+      const winCounts = teams.map(t => t.wins)
+      const hasTie = winCounts.some((w, i) => winCounts.findIndex(x => x === w) !== i ||
+        (winCounts.filter(x => x === w).length > 1))
+
+      if (hasTie) {
+        // 기존 manual_rank 조회
+        const { data: rankData } = await supabase
+          .from('teams').select('id,team_name,manual_rank')
+          .in('id', teams.map(t => t.id))
+        const rankMap = Object.fromEntries((rankData || []).map(r => [r.id, r.manual_rank]))
+        teams.forEach(t => { t.manualRank = rankMap[t.id] ?? null })
+
+        tiedList.push({ ...g, teams: teams.sort((a, b) => b.wins - a.wins || b.diff - a.diff) })
+      }
+    }
+    setTiedGroups(tiedList)
+  }
+
+  // ── 수동 순위 저장 ─────────────────────────────────────────
+  async function saveManualRank(teamId: string, rank: number | null) {
+    setAdjusting(true); setAdjustMsg('')
+    const { error } = await supabase.from('teams').update({ manual_rank: rank }).eq('id', teamId)
+    setAdjusting(false)
+    if (error) {
+      // manual_rank 컬럼이 없을 수 있음 → 안내
+      if (error.message.includes('column')) {
+        setAdjustMsg('⚠️ teams 테이블에 manual_rank 컬럼이 없습니다. SQL 추가 필요:\nALTER TABLE teams ADD COLUMN IF NOT EXISTS manual_rank int;')
+      } else {
+        setAdjustMsg('❌ ' + error.message)
+      }
+    } else {
+      setAdjustMsg('✅ 저장됐습니다.')
+      await detectTied(eventId, stats?.divisions || [])
+    }
+  }
 
   useEffect(() => { loadStats() }, [loadStats])
 
@@ -120,32 +214,42 @@ export default function DashboardPage() {
   }
 
   if (loading) return <div className="p-6 text-center text-gray-400">불러오는 중...</div>
-  if (!stats) return <div className="p-6 text-center text-gray-400">데이터 없음</div>
+  if (!stats)  return <div className="p-6 text-center text-gray-400">데이터 없음</div>
 
-  // 전체 진행률 (개인전 + 단체전 합산)
-  const totalAll = stats.totalMatches + stats.totalTies
+  const totalAll   = stats.totalMatches + stats.totalTies
   const finishedAll = stats.finishedMatches + stats.finishedTies
   const progressPct = totalAll > 0 ? Math.round(finishedAll / totalAll * 100) : 0
-
-  const matchProgressPct = stats.totalMatches > 0
-    ? Math.round(stats.finishedMatches / stats.totalMatches * 100) : 0
-  const tieProgressPct = stats.totalTies > 0
-    ? Math.round(stats.finishedTies / stats.totalTies * 100) : 0
+  const matchProgressPct = stats.totalMatches > 0 ? Math.round(stats.finishedMatches / stats.totalMatches * 100) : 0
+  const tieProgressPct   = stats.totalTies > 0    ? Math.round(stats.finishedTies   / stats.totalTies   * 100) : 0
 
   function getProgressColor(pct: number) {
     if (pct >= 100) return 'bg-green-500'
-    if (pct >= 70) return 'bg-blue-500'
-    if (pct >= 30) return 'bg-yellow-500'
+    if (pct >= 70)  return 'bg-blue-500'
+    if (pct >= 30)  return 'bg-yellow-500'
     return 'bg-orange-500'
   }
-
   function formatTime(iso: string) {
     return new Date(iso).toLocaleString('ko-KR', { hour: '2-digit', minute: '2-digit' })
   }
 
+  // 경기결과 필터
+  const divisions = stats.divisions
+  const uniqueDates = [...new Set(divisions.map((d: any) => d.match_date).filter(Boolean))].sort() as string[]
+  const [dateMatchFilter, setDateMatchFilter] = useState<string>('ALL_DATE')
+
+  const filteredMatches = (() => {
+    let list = matchFilter === 'ALL' ? allMatches : allMatches.filter(m => m.division_id === matchFilter)
+    if (dateMatchFilter !== 'ALL_DATE') {
+      const divsOnDate = divisions.filter((d: any) => d.match_date === dateMatchFilter).map((d: any) => d.id)
+      list = list.filter(m => divsOnDate.includes(m.division_id))
+    }
+    return list
+  })()
+
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
-      {/* 이벤트 헤더 */}
+
+      {/* ── 이벤트 헤더 ── */}
       <div className="bg-gradient-to-r from-[#2d5016] to-[#4a7c59] rounded-2xl p-6 text-white">
         <div className="flex items-start justify-between">
           <div>
@@ -162,58 +266,43 @@ export default function DashboardPage() {
             <div className="text-white/70 text-sm mt-1">전체 진행률</div>
           </div>
         </div>
-
-        {/* 전체 진행률 바 */}
         <div className="mt-5">
           <div className="flex justify-between text-xs text-white/60 mb-1.5">
             <span>전체 진행률</span>
             <span>{finishedAll} / {totalAll}경기 완료</span>
           </div>
           <div className="bg-white/20 rounded-full h-3 overflow-hidden">
-            <div
-              className={`h-3 rounded-full transition-all duration-700 ${getProgressColor(progressPct)}`}
-              style={{ width: `${progressPct}%` }}
-            />
+            <div className={`h-3 rounded-full transition-all duration-700 ${getProgressColor(progressPct)}`}
+              style={{ width: `${progressPct}%` }} />
           </div>
         </div>
-
-        {/* 진행 중 강조 */}
         {(stats.inProgressMatches + stats.inProgressTies) > 0 && (
           <div className="mt-3 flex items-center gap-2">
             <span className="inline-block w-2 h-2 rounded-full bg-red-400 animate-pulse" />
-            <span className="text-white/80 text-sm">
-              현재 {stats.inProgressMatches + stats.inProgressTies}경기 진행 중
-            </span>
+            <span className="text-white/80 text-sm">현재 {stats.inProgressMatches + stats.inProgressTies}경기 진행 중</span>
           </div>
         )}
       </div>
 
-      {/* 통계 카드 */}
+      {/* ── 통계 카드 ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-white rounded-xl border p-4">
-          <div className="text-3xl font-black text-blue-600">{stats.totalTeams || stats.totalClubs}</div>
-          <div className="text-xs text-gray-500 mt-1">참가팀</div>
-        </div>
-        <div className="bg-white rounded-xl border p-4">
-          <div className="text-3xl font-black text-green-600">{finishedAll}</div>
-          <div className="text-xs text-gray-500 mt-1">완료 경기</div>
-        </div>
-        <div className="bg-white rounded-xl border p-4">
-          <div className="text-3xl font-black text-red-600">{stats.inProgressMatches + stats.inProgressTies}</div>
-          <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
-            {(stats.inProgressMatches + stats.inProgressTies) > 0 && (
-              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse inline-block" />
-            )}
-            진행 중
+        {[
+          { val: stats.totalTeams || stats.totalClubs, label: '참가팀', color: 'text-blue-600' },
+          { val: finishedAll,                          label: '완료 경기', color: 'text-green-600' },
+          { val: stats.inProgressMatches + stats.inProgressTies, label: '진행 중', color: 'text-red-600', pulse: true },
+          { val: totalAll - finishedAll,               label: '남은 경기', color: 'text-orange-600' },
+        ].map((c, i) => (
+          <div key={i} className="bg-white rounded-xl border p-4">
+            <div className={`text-3xl font-black ${c.color}`}>{c.val}</div>
+            <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+              {c.pulse && c.val > 0 && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse inline-block" />}
+              {c.label}
+            </div>
           </div>
-        </div>
-        <div className="bg-white rounded-xl border p-4">
-          <div className="text-3xl font-black text-orange-600">{totalAll - finishedAll}</div>
-          <div className="text-xs text-gray-500 mt-1">남은 경기</div>
-        </div>
+        ))}
       </div>
 
-      {/* 개인전 / 단체전 진행률 */}
+      {/* ── 개인전 / 단체전 진행률 ── */}
       {(stats.totalMatches > 0 || stats.totalTies > 0) && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {stats.totalMatches > 0 && (
@@ -223,10 +312,8 @@ export default function DashboardPage() {
                 <span className="text-sm font-bold">{matchProgressPct}%</span>
               </div>
               <div className="bg-gray-100 rounded-full h-2.5 overflow-hidden">
-                <div
-                  className={`h-2.5 rounded-full transition-all duration-700 ${getProgressColor(matchProgressPct)}`}
-                  style={{ width: `${matchProgressPct}%` }}
-                />
+                <div className={`h-2.5 rounded-full transition-all duration-700 ${getProgressColor(matchProgressPct)}`}
+                  style={{ width: `${matchProgressPct}%` }} />
               </div>
               <div className="text-xs text-gray-400 mt-1.5">
                 {stats.finishedMatches} / {stats.totalMatches}경기
@@ -241,10 +328,8 @@ export default function DashboardPage() {
                 <span className="text-sm font-bold">{tieProgressPct}%</span>
               </div>
               <div className="bg-gray-100 rounded-full h-2.5 overflow-hidden">
-                <div
-                  className={`h-2.5 rounded-full transition-all duration-700 ${getProgressColor(tieProgressPct)}`}
-                  style={{ width: `${tieProgressPct}%` }}
-                />
+                <div className={`h-2.5 rounded-full transition-all duration-700 ${getProgressColor(tieProgressPct)}`}
+                  style={{ width: `${tieProgressPct}%` }} />
               </div>
               <div className="text-xs text-gray-400 mt-1.5">
                 {stats.finishedTies} / {stats.totalTies}타이
@@ -255,15 +340,152 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 빠른 메뉴 */}
+      {/* ── ✅ 동률 수동 조정 ── */}
+      {tiedGroups.length > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl overflow-hidden">
+          <button
+            onClick={() => setShowTieAdjust(!showTieAdjust)}
+            className="w-full flex items-center justify-between px-4 py-3 text-left">
+            <div className="flex items-center gap-2">
+              <span className="text-amber-600 font-bold text-sm">⚠️ 동률 발생 — 수동 순위 조정 필요</span>
+              <span className="bg-amber-500 text-white text-xs px-2 py-0.5 rounded-full">{tiedGroups.length}그룹</span>
+            </div>
+            <span className="text-amber-500 text-sm">{showTieAdjust ? '▲ 접기' : '▼ 열기'}</span>
+          </button>
+
+          {showTieAdjust && (
+            <div className="px-4 pb-4 space-y-4 border-t border-amber-200">
+              <p className="text-xs text-amber-600 pt-3">
+                동률인 팀의 순위를 직접 지정해주세요. (1 = 1위, 2 = 2위 등)<br />
+                단, teams 테이블에 <code className="bg-amber-100 px-1 rounded">manual_rank</code> 컬럼이 필요합니다.
+              </p>
+              {adjustMsg && (
+                <div className={`text-xs px-3 py-2 rounded-lg whitespace-pre-wrap ${adjustMsg.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                  {adjustMsg}
+                </div>
+              )}
+              {tiedGroups.map(g => (
+                <div key={g.id} className="bg-white rounded-xl border border-amber-200 overflow-hidden">
+                  <div className="bg-amber-100 px-3 py-2 text-xs font-bold text-amber-800">
+                    {g.division_name} · {g.group_label}
+                  </div>
+                  <div className="divide-y divide-stone-100">
+                    {g.teams.map((t: any) => (
+                      <div key={t.id} className="flex items-center gap-3 px-3 py-2.5">
+                        <span className="flex-1 text-sm font-medium text-stone-800">{t.name}</span>
+                        <span className="text-xs text-stone-400">{t.wins}승 / 득실 {t.diff > 0 ? '+' : ''}{t.diff}</span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-stone-400">순위:</span>
+                          <select
+                            defaultValue={t.manualRank ?? ''}
+                            disabled={adjusting}
+                            onChange={e => saveManualRank(t.id, e.target.value ? parseInt(e.target.value) : null)}
+                            className="border border-amber-300 rounded-lg px-2 py-1 text-sm font-bold text-stone-700 bg-white focus:outline-none focus:border-amber-500 disabled:opacity-50">
+                            <option value="">-</option>
+                            {g.teams.map((_: any, i: number) => (
+                              <option key={i+1} value={i+1}>{i+1}위</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <p className="text-xs text-amber-500">
+                * SQL 한 줄 추가: <code className="bg-amber-100 px-1 rounded">ALTER TABLE teams ADD COLUMN IF NOT EXISTS manual_rank int;</code>
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── ✅ 경기결과 목록 ── */}
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <button
+          onClick={() => setShowResults(!showResults)}
+          className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-stone-50">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-sm">📋 경기결과 목록</span>
+            <span className="bg-[#2d5016] text-white text-xs px-2 py-0.5 rounded-full">{allMatches.length}경기</span>
+          </div>
+          <span className="text-stone-400 text-sm">{showResults ? '▲ 접기' : '▼ 열기'}</span>
+        </button>
+
+        {showResults && (
+          <div className="border-t">
+            {/* 부서 필터 */}
+            <div className="flex gap-2 px-4 py-3 overflow-x-auto border-b bg-stone-50">
+              {uniqueDates.length > 0 && (
+                <>
+                  <button onClick={() => setDateMatchFilter('ALL_DATE')}
+                    className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all ${dateMatchFilter === 'ALL_DATE' ? 'bg-stone-700 text-white' : 'bg-white border text-stone-600'}`}>
+                    전체 날짜
+                  </button>
+                  {uniqueDates.map(date => (
+                    <button key={date} onClick={() => setDateMatchFilter(date)}
+                      className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all ${dateMatchFilter === date ? 'bg-blue-600 text-white' : 'bg-white border text-stone-600'}`}>
+                      {new Date(date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short' })}
+                    </button>
+                  ))}
+                  <div className="w-px bg-stone-200 mx-1" />
+                </>
+              )}
+              <button onClick={() => setMatchFilter('ALL')}
+                className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all ${matchFilter === 'ALL' ? 'bg-[#2d5016] text-white' : 'bg-white border text-stone-600'}`}>
+                전체 ({allMatches.length})
+              </button>
+              {divisions.map((d: any) => {
+                const cnt = allMatches.filter(m => m.division_id === d.id).length
+                return (
+                  <button key={d.id} onClick={() => setMatchFilter(d.id)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all ${matchFilter === d.id ? 'bg-[#2d5016] text-white' : 'bg-white border text-stone-600'}`}>
+                    {d.name}{d.match_date ? ` (${new Date(d.match_date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })})` : ''} ({cnt})
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* 경기 목록 */}
+            {filteredMatches.length === 0 ? (
+              <div className="text-center py-8 text-stone-400 text-sm">완료된 경기가 없습니다.</div>
+            ) : (
+              <div className="divide-y max-h-[480px] overflow-y-auto">
+                {filteredMatches.map(m => (
+                  <div key={m.id} className="flex items-center px-4 py-2.5 hover:bg-stone-50">
+                    <div className="flex-shrink-0 w-16 text-xs text-stone-400 leading-tight">
+                      <div>{m.group_label || m.round}</div>
+                      {m.court && <div className="text-[#2d5016]">{m.court}</div>}
+                    </div>
+                    <div className="flex-1 flex items-center gap-2 min-w-0">
+                      <span className={`flex-1 text-sm truncate text-right ${m.winner_team_id === m.team_a_id ? 'font-bold text-[#2d5016]' : 'text-stone-600'}`}>
+                        {m.team_a_name}
+                      </span>
+                      <span className="flex-shrink-0 text-base font-black text-stone-800 px-2">{m.score}</span>
+                      <span className={`flex-1 text-sm truncate ${m.winner_team_id === m.team_b_id ? 'font-bold text-[#2d5016]' : 'text-stone-600'}`}>
+                        {m.team_b_name}
+                      </span>
+                    </div>
+                    <div className="flex-shrink-0 w-12 text-right text-xs text-stone-400">
+                      {formatTime(m.updated_at)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── 빠른 메뉴 ── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {[
-          { href: '/dashboard/courts', emoji: '🎾', label: '코트 배정', desc: '코트 현황 관리' },
-          { href: '/dashboard/teams/ties', emoji: '🏆', label: '단체전 관리', desc: '타이 점수 입력' },
-          { href: '/dashboard/teams/standings', emoji: '📊', label: '순위표', desc: '실시간 순위 확인' },
-          { href: '/dashboard/bracket', emoji: '🗂️', label: '토너먼트표', desc: '대진 관리' },
-          { href: '/dashboard/report', emoji: '📄', label: '리포트', desc: 'PDF·CSV 내보내기' },
-          { href: '/dashboard/logs', emoji: '👥', label: '접속 로그', desc: '공개 페이지 접속 통계' },
+          { href: '/dashboard/courts',          emoji: '🎾', label: '코트 배정',   desc: '코트 현황 관리' },
+          { href: '/dashboard/teams/ties',      emoji: '🏆', label: '단체전 관리', desc: '타이 점수 입력' },
+          { href: '/dashboard/teams/standings', emoji: '📊', label: '순위표',      desc: '실시간 순위 확인' },
+          { href: '/dashboard/bracket',         emoji: '🗂️', label: '토너먼트표', desc: '대진 관리' },
+          { href: '/dashboard/report',          emoji: '📄', label: '리포트',      desc: 'PDF·CSV 내보내기' },
+          { href: '/dashboard/logs',            emoji: '👥', label: '접속 로그',   desc: '공개 페이지 접속 통계' },
         ].map(item => (
           <Link key={item.href} href={item.href}
             className="bg-white rounded-xl border p-4 hover:shadow-md hover:border-blue-300 transition-all">
@@ -274,7 +496,7 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* 최근 활동 */}
+      {/* ── 최근 활동 ── */}
       {recentActivity.length > 0 && (
         <div className="bg-white rounded-xl border overflow-hidden">
           <div className="px-4 py-3 border-b font-semibold text-sm">최근 완료 경기</div>
@@ -294,9 +516,7 @@ export default function DashboardPage() {
       )}
 
       <div className="text-center">
-        <button onClick={loadStats} className="text-xs text-gray-400 hover:text-gray-600">
-          🔄 새로고침
-        </button>
+        <button onClick={loadStats} className="text-xs text-gray-400 hover:text-gray-600">🔄 새로고침</button>
       </div>
     </div>
   )

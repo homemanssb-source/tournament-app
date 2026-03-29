@@ -1,18 +1,15 @@
 'use client'
+import React from 'react'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
 interface Venue {
-  id: string
-  event_id: string
-  name: string
-  short_name: string
-  court_count: number
-  courts: string[]
-  pin_plain: string
-  manager_name: string
-  phone: string | null
-  division_ids: string[] | null
+  id: string; event_id: string; name: string; short_name: string
+  court_count: number; courts: string[]; pin_plain: string
+  manager_name: string; phone: string | null; division_ids: string[] | null
+}
+interface Division {
+  id: string; name: string; match_date: string | null
 }
 
 function makeCourtNames(shortName: string, count: number): string[] {
@@ -26,6 +23,11 @@ export default function SettingsPage() {
   const [eventStatus, setEventStatus] = useState<string>('')
   const [statusLoading, setStatusLoading] = useState(false)
   const [statusMsg, setStatusMsg] = useState('')
+
+  // ✅ 대회 시작시간
+  const [startTime, setStartTime] = useState<string>('')
+  const [startTimeSaving, setStartTimeSaving] = useState(false)
+  const [startTimeMsg, setStartTimeMsg] = useState('')
 
   const [newPin, setNewPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
@@ -46,10 +48,13 @@ export default function SettingsPage() {
   const [editCourtCount, setEditCourtCount] = useState(8)
   const [editShortName, setEditShortName] = useState('')
 
-  // 담당 부서
-  const [divisions, setDivisions] = useState<{ id: string; name: string }[]>([])
+  const [divisions, setDivisions] = useState<Division[]>([])
   const [newDivisionIds, setNewDivisionIds] = useState<string[]>([])
   const [editDivisionIds, setEditDivisionIds] = useState<string[]>([])
+
+  // ✅ 부서별 날짜
+  const [divDateMsg, setDivDateMsg] = useState('')
+  const [divDateSaving, setDivDateSaving] = useState<string | null>(null)
 
   useEffect(() => {
     const stored = sessionStorage.getItem('dashboard_event_id')
@@ -57,13 +62,18 @@ export default function SettingsPage() {
   }, [])
 
   async function loadDivisions(eid: string) {
-    const { data } = await supabase.from('divisions').select('id, name').eq('event_id', eid).order('sort_order')
+    const { data } = await supabase.from('divisions').select('id, name, match_date').eq('event_id', eid).order('sort_order')
     setDivisions(data || [])
   }
 
   async function loadEvent(eid: string) {
-    const { data } = await supabase.from('events').select('name, master_pin_hash, status').eq('id', eid).single()
-    if (data) { setEventName(data.name); setHasMasterPin(!!data.master_pin_hash); setEventStatus(data.status || 'preparing') }
+    const { data } = await supabase.from('events').select('name, master_pin_hash, status, start_time').eq('id', eid).single()
+    if (data) {
+      setEventName(data.name)
+      setHasMasterPin(!!data.master_pin_hash)
+      setEventStatus(data.status || 'preparing')
+      setStartTime(data.start_time || '')
+    }
   }
 
   async function toggleEventStatus() {
@@ -74,6 +84,40 @@ export default function SettingsPage() {
     if (error) { setStatusMsg('❌ ' + error.message); return }
     setEventStatus(newStatus)
     setStatusMsg(newStatus === 'active' ? '✅ 대회가 공개되었습니다.' : '✅ 대회가 비공개로 변경되었습니다.')
+  }
+
+  // ✅ 대회 시작시간 저장
+  async function saveStartTime() {
+    setStartTimeSaving(true); setStartTimeMsg('')
+    const { error } = await supabase.from('events').update({ start_time: startTime || null }).eq('id', eventId)
+    setStartTimeSaving(false)
+    if (error) {
+      if (error.message.includes('column')) {
+        setStartTimeMsg('⚠️ start_time 컬럼 없음. SQL 실행 필요:\nALTER TABLE events ADD COLUMN IF NOT EXISTS start_time time;')
+      } else {
+        setStartTimeMsg('❌ ' + error.message)
+      }
+      return
+    }
+    setStartTimeMsg('✅ 시작시간이 저장되었습니다.')
+  }
+
+  // ✅ 부서별 날짜 저장
+  async function saveDivDate(divId: string, date: string) {
+    setDivDateSaving(divId); setDivDateMsg('')
+    const { error } = await supabase.from('divisions').update({ match_date: date || null }).eq('id', divId)
+    setDivDateSaving(null)
+    if (error) {
+      if (error.message.includes('column')) {
+        setDivDateMsg('⚠️ match_date 컬럼 없음. SQL 실행 필요:\nALTER TABLE divisions ADD COLUMN IF NOT EXISTS match_date date;')
+      } else {
+        setDivDateMsg('❌ ' + error.message)
+      }
+      return
+    }
+    setDivDateMsg('✅ 저장됨')
+    setDivisions(prev => prev.map(d => d.id === divId ? { ...d, match_date: date || null } : d))
+    setTimeout(() => setDivDateMsg(''), 2000)
   }
 
   async function loadVenues(eid: string) {
@@ -100,16 +144,10 @@ export default function SettingsPage() {
     if (!newVenueShortName.trim()) { setVenueMsg('! 약칭을 입력하세요. (예: 제주)'); return }
     if (!newVenuePin.trim() || newVenuePin.length < 4) { setVenueMsg('! PIN 4자리 이상 입력하세요.'); return }
     if (newCourtCount < 1) { setVenueMsg('! 코트 수는 1개 이상이어야 합니다.'); return }
-
     const courts = makeCourtNames(newVenueShortName, newCourtCount)
     const { error } = await supabase.from('venues').insert({
-      event_id: eventId,
-      name: newVenueName.trim(),
-      short_name: newVenueShortName.trim(),
-      courts,
-      court_count: newCourtCount,
-      pin_plain: newVenuePin.trim(),
-      pin_hash: newVenuePin.trim(),
+      event_id: eventId, name: newVenueName.trim(), short_name: newVenueShortName.trim(),
+      courts, court_count: newCourtCount, pin_plain: newVenuePin.trim(), pin_hash: newVenuePin.trim(),
       manager_name: newVenueManager.trim() || newVenueName.trim() + ' 관리자',
       division_ids: newDivisionIds.length > 0 ? newDivisionIds : null,
     })
@@ -169,6 +207,68 @@ export default function SettingsPage() {
         {statusMsg && <p className={`text-sm ${statusMsg.startsWith('✅') ? 'text-green-600' : 'text-red-500'}`}>{statusMsg}</p>}
       </div>
 
+      {/* ✅ 대회 시작시간 + 부서별 날짜 */}
+      <div className="bg-white rounded-xl border p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <h2 className="font-bold text-lg">📅 대회 일정 설정</h2>
+          <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">2일 대회 지원</span>
+        </div>
+        <p className="text-xs text-stone-400">
+          시작시간을 설정하면 코트 배정 페이지에서 해당 시간에 첫 경기가 자동으로 시작됩니다.<br />
+          부서별 날짜를 다르게 지정하면 회원 뷰, 코트 배정 등에서 날짜 구분이 표시됩니다.
+        </p>
+
+        {/* 대회 시작시간 */}
+        <div className="bg-stone-50 rounded-xl p-4 space-y-3">
+          <p className="text-sm font-medium text-stone-700">⏰ 경기 시작 시간 (매일 공통)</p>
+          <div className="flex items-center gap-3">
+            <input type="time" value={startTime} onChange={e => setStartTime(e.target.value)}
+              className="border border-stone-300 rounded-lg px-3 py-2 text-sm bg-white" />
+            <button onClick={saveStartTime} disabled={startTimeSaving}
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+              {startTimeSaving ? '저장 중...' : '저장'}
+            </button>
+            {startTime && <span className="text-xs text-blue-600">→ 매일 {startTime} 자동 경기 시작</span>}
+          </div>
+          {startTimeMsg && (
+            <p className={`text-xs whitespace-pre-wrap ${startTimeMsg.startsWith('✅') ? 'text-green-600' : 'text-amber-600'}`}>{startTimeMsg}</p>
+          )}
+        </div>
+
+        {/* 부서별 날짜 */}
+        {divisions.length > 0 && (
+          <div className="space-y-3">
+            <p className="text-sm font-medium text-stone-700">📆 부서별 경기 날짜 (2일 대회)</p>
+            <p className="text-xs text-stone-400">날짜를 지정하면 해당 부서의 경기가 그 날 열립니다. 비워두면 날짜 구분 없이 표시됩니다.</p>
+            {divDateMsg && (
+              <p className={`text-xs ${divDateMsg.startsWith('✅') ? 'text-green-600' : 'text-amber-600'}`}>{divDateMsg}</p>
+            )}
+            <div className="space-y-2">
+              {divisions.map(d => (
+                <div key={d.id} className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl">
+                  <span className="text-sm font-medium text-stone-700 w-28 flex-shrink-0">{d.name}</span>
+                  <input type="date" defaultValue={d.match_date || ''}
+                    onBlur={e => saveDivDate(d.id, e.target.value)}
+                    className="border border-stone-300 rounded-lg px-3 py-1.5 text-sm bg-white" />
+                  {divDateSaving === d.id && <span className="text-xs text-stone-400">저장 중...</span>}
+                  {d.match_date && divDateSaving !== d.id && (
+                    <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
+                      {new Date(d.match_date).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric' })}
+                    </span>
+                  )}
+                  {!d.match_date && <span className="text-xs text-stone-300">날짜 미지정</span>}
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-stone-400 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              ⚠️ SQL 필요 (최초 1회):<br />
+              <code className="text-xs">ALTER TABLE events ADD COLUMN IF NOT EXISTS start_time time;</code><br />
+              <code className="text-xs">ALTER TABLE divisions ADD COLUMN IF NOT EXISTS match_date date;</code>
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* 마스터 PIN */}
       <div className="bg-white rounded-xl border p-5 space-y-4">
         <div className="flex items-center gap-2">
@@ -211,7 +311,6 @@ export default function SettingsPage() {
           &nbsp;예) 약칭 <strong>제주</strong> + 코트 <strong>8</strong>개 → 제주-1 ~ 제주-8
         </p>
 
-        {/* 추가 폼 */}
         <div className="space-y-3 bg-stone-50 rounded-lg p-4">
           <p className="text-sm font-medium text-stone-700">새 경기장 추가</p>
           <div className="flex gap-2">
@@ -246,8 +345,6 @@ export default function SettingsPage() {
                 className="text-xs bg-white text-stone-600 px-3 py-2 rounded-lg hover:bg-stone-100 border mb-0.5">랜덤</button>
             </div>
           </div>
-
-          {/* 코트 수 + 미리보기 */}
           <div className="flex items-center gap-3">
             <label className="text-xs text-stone-600 whitespace-nowrap">코트 수:</label>
             <input type="number" min={1} max={30} value={newCourtCount}
@@ -255,35 +352,23 @@ export default function SettingsPage() {
               className="w-20 border border-stone-300 rounded-lg px-3 py-2 text-sm text-center bg-white" />
             {newVenueShortName.trim()
               ? <span className="text-xs text-blue-600">→ {newVenueShortName}-1 ~ {newVenueShortName}-{newCourtCount}</span>
-              : <span className="text-xs text-stone-400">약칭 입력 시 미리보기</span>
-            }
+              : <span className="text-xs text-stone-400">약칭 입력 시 미리보기</span>}
           </div>
-
-          {/* 담당 부서 선택 */}
           {divisions.length > 0 && (
             <div>
               <label className="text-xs text-stone-600 block mb-1">담당 부서 <span className="text-stone-400">(미선택 시 전 부서 표시)</span></label>
               <div className="flex flex-wrap gap-1.5">
                 {divisions.map(d => (
                   <button key={d.id} type="button"
-                    onClick={() => setNewDivisionIds(prev =>
-                      prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id]
-                    )}
-                    className={`text-xs px-3 py-1 rounded-full border transition-all ${
-                      newDivisionIds.includes(d.id)
-                        ? 'bg-green-600 text-white border-green-600'
-                        : 'bg-white text-stone-600 border-stone-300 hover:border-green-400'
-                    }`}>
-                    {d.name}
+                    onClick={() => setNewDivisionIds(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])}
+                    className={`text-xs px-3 py-1 rounded-full border transition-all ${newDivisionIds.includes(d.id) ? 'bg-green-600 text-white border-green-600' : 'bg-white text-stone-600 border-stone-300 hover:border-green-400'}`}>
+                    {d.name}{d.match_date ? ` (${new Date(d.match_date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })})` : ''}
                   </button>
                 ))}
               </div>
-              {newDivisionIds.length > 0 && (
-                <p className="text-xs text-green-600 mt-1">✅ {newDivisionIds.map(id => divisions.find(d=>d.id===id)?.name).join(', ')} 담당</p>
-              )}
+              {newDivisionIds.length > 0 && <p className="text-xs text-green-600 mt-1">✅ {newDivisionIds.map(id => divisions.find(d => d.id === id)?.name).join(', ')} 담당</p>}
             </div>
           )}
-
           <button onClick={addVenue}
             disabled={!newVenueName.trim() || !newVenueShortName.trim() || !newVenuePin.trim() || newCourtCount < 1}
             className="w-full bg-green-600 text-white px-4 py-2.5 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50">
@@ -293,7 +378,6 @@ export default function SettingsPage() {
 
         {venueMsg && <p className={`text-sm ${venueMsg.startsWith('OK') ? 'text-green-600' : 'text-red-500'}`}>{venueMsg}</p>}
 
-        {/* 경기장 목록 */}
         {venueLoading ? (
           <p className="text-stone-400 text-sm text-center py-4">불러오는 중...</p>
         ) : venues.length === 0 ? (
@@ -319,11 +403,14 @@ export default function SettingsPage() {
                           <span key={c} className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">{c}</span>
                         ))}
                         {v.division_ids && v.division_ids.length > 0
-                          ? v.division_ids.map(did => (
-                              <span key={did} className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
-                                {divisions.find(d => d.id === did)?.name || did}
-                              </span>
-                            ))
+                          ? v.division_ids.map(did => {
+                              const div = divisions.find(d => d.id === did)
+                              return (
+                                <span key={did} className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                                  {div?.name || did}{div?.match_date ? ` (${new Date(div.match_date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })})` : ''}
+                                </span>
+                              )
+                            })
                           : <span className="text-xs bg-stone-100 text-stone-500 px-2 py-0.5 rounded">전 부서</span>
                         }
                       </div>
@@ -354,35 +441,23 @@ export default function SettingsPage() {
                             onChange={e => setEditCourtCount(Math.max(1, Math.min(30, Number(e.target.value))))}
                             className="w-20 border border-stone-300 rounded-lg px-2 py-1.5 text-sm text-center bg-white" />
                         </div>
-                        {editShortName.trim() && (
-                          <span className="text-xs text-blue-600 pb-1">→ {editShortName}-1 ~ {editShortName}-{editCourtCount}</span>
-                        )}
+                        {editShortName.trim() && <span className="text-xs text-blue-600 pb-1">→ {editShortName}-1 ~ {editShortName}-{editCourtCount}</span>}
                       </div>
-                      {/* 담당 부서 선택 */}
                       {divisions.length > 0 && (
                         <div>
                           <label className="text-xs text-stone-500 block mb-1">담당 부서</label>
                           <div className="flex flex-wrap gap-1.5">
                             {divisions.map(d => (
                               <button key={d.id} type="button"
-                                onClick={() => setEditDivisionIds(prev =>
-                                  prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id]
-                                )}
-                                className={`text-xs px-3 py-1 rounded-full border transition-all ${
-                                  editDivisionIds.includes(d.id)
-                                    ? 'bg-blue-600 text-white border-blue-600'
-                                    : 'bg-white text-stone-600 border-stone-300 hover:border-blue-400'
-                                }`}>
-                                {d.name}
+                                onClick={() => setEditDivisionIds(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])}
+                                className={`text-xs px-3 py-1 rounded-full border transition-all ${editDivisionIds.includes(d.id) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-stone-600 border-stone-300 hover:border-blue-400'}`}>
+                                {d.name}{d.match_date ? ` (${new Date(d.match_date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })})` : ''}
                               </button>
                             ))}
                           </div>
-                          {editDivisionIds.length === 0 && (
-                            <p className="text-xs text-stone-400 mt-1">미선택 시 전 부서 미배정 표시</p>
-                          )}
+                          {editDivisionIds.length === 0 && <p className="text-xs text-stone-400 mt-1">미선택 시 전 부서 미배정 표시</p>}
                         </div>
                       )}
-
                       <button onClick={() => saveEditVenue(v.id)}
                         className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-medium hover:bg-blue-700">
                         저장
@@ -398,8 +473,7 @@ export default function SettingsPage() {
         {venues.length > 0 && (
           <button onClick={() => {
             const text = venues.map(v => {
-              const count = v.court_count || 0
-              const sn = v.short_name || v.name
+              const count = v.court_count || 0; const sn = v.short_name || v.name
               return `${v.name} (PIN: ${v.pin_plain}) - ${sn}-1 ~ ${sn}-${count}`
             }).join('\n')
             navigator.clipboard.writeText(text)
