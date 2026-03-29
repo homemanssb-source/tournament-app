@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 interface CourtMatch {
   id: string; match_num: string; court: string; court_order: number
   stage: string; round: string; status: string; score: string | null
-  division_name: string
+  division_name: string; division_id: string
   team_a_name: string; team_b_name: string
   team_a_id: string; team_b_id: string
   winner_team_id: string | null; is_team_tie?: boolean
