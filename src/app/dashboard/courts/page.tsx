@@ -93,9 +93,12 @@ export default function CourtsPage() {
   const [notifying, setNotifying]   = useState<string | null>(null)
   const [notifyMsg, setNotifyMsg]   = useState<Record<string, string>>({})
 
-  // ✅ 자동 경기시작
+  // ✅ 자동 경기시작 — localStorage로 ON/OFF 유지 (새로고침해도 안 꺼짐)
   const [startTime, setStartTime]               = useState<string>('')
-  const [autoStartEnabled, setAutoStartEnabled] = useState(false)
+  const [autoStartEnabled, setAutoStartEnabled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return localStorage.getItem('autoStartEnabled') === 'true'
+  })
   const autoStartRef        = useRef(false)
   const startTimeRef        = useRef<string>('')
   const venueStartTimesRef  = useRef<Record<string, string>>({})
@@ -599,7 +602,7 @@ export default function CourtsPage() {
             <span className="text-xs text-stone-500">⏰ {startTime} 자동시작</span>
           )}
           <button
-            onClick={() => setAutoStartEnabled(v => !v)}
+            onClick={() => setAutoStartEnabled(v => { const next = !v; localStorage.setItem('autoStartEnabled', String(next)); return next })}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
               autoStartEnabled
                 ? 'bg-red-500 text-white border-red-500'
