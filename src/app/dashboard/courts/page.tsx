@@ -269,6 +269,26 @@ export default function CourtsPage() {
       ])
       const matchList = (matchRes.data || []).filter((m: any) => m.score !== 'BYE') as MatchSlim[]
       const tieList   = (tieRes.data  || []) as TieWithClubs[]
+
+      // ✅ PIN 등 외부 경로로 점수 입력된 경우 감지 → autoStartCheck 즉시 호출
+      // 폴링 시(showLoading=false)에만 체크. 자동시작 ON일 때만.
+      if (!showLoading && autoStartRef.current) {
+        const prevById = new Map(matchesRef.current.map(m => [m.id, m.status]))
+        const hasNewFinished = matchList.some(
+          m => m.status === 'FINISHED' && prevById.get(m.id) === 'IN_PROGRESS'
+        )
+        if (hasNewFinished) {
+          // ref를 먼저 최신화한 뒤 체크
+          matchesRef.current = matchList
+          tiesRef.current    = tieList
+          syncCourtOrderRef(matchList, tieList)
+          setMatches(matchList)
+          setTies(tieList)
+          await autoStartCheck()
+          return
+        }
+      }
+
       setMatches(matchList); matchesRef.current = matchList
       setTies(tieList);      tiesRef.current    = tieList
       syncCourtOrderRef(matchList, tieList)
@@ -791,7 +811,10 @@ export default function CourtsPage() {
                       else if (currentIdx>=0&&i===currentIdx+1) badge='🟡'
                       else if (currentIdx>=0&&i===currentIdx+2) badge='🟢'
                     }
-                    const canStart = !m.is_team_tie && m.status==='PENDING' && (currentIdx<0||i===currentIdx)
+                    // ✅ 수정: IN_PROGRESS 경기가 있어도 운영자는 PENDING 경기 수동 시작 가능
+                    // 단, 한 번에 하나씩만 — 현재 PENDING 중 첫 번째만 활성화
+                    const firstPendingIdx = sorted.findIndex(mm => mm.status === 'PENDING')
+                    const canStart = !m.is_team_tie && m.status === 'PENDING' && i === firstPendingIdx
                     return <MatchChip key={m.id} m={m} order={m.court_order||i+1} badge={badge} divColor={divColors[m.division_id]} onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)} onClickStart={canStart?()=>startMatch(m.id):undefined} onClickUnassign={() => unassignItem(m.id)} onMoveUp={!m.is_team_tie&&i>0?()=>moveMatchOrder(m.id,'up'):undefined} onMoveDown={!m.is_team_tie&&i<courtItems.length-1?()=>moveMatchOrder(m.id,'down'):undefined} onTouchStart={()=>handleTouchStart(m.id)} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} />
                   })}
                   {courtItems.length===0&&<div className="text-xs text-stone-300 text-center py-6 border-2 border-dashed rounded-lg">드래그 또는 자동배정</div>}
