@@ -17,16 +17,21 @@ interface Venue {
   court_count: number; courts: string[]; pin_plain: string
 }
 type CourtZones = Record<string, { group: string[]; finals: string[] }>
-type StageKey = 'GROUP' | 'R32' | 'R16' | 'QF' | 'SF' | 'F' | 'ALL_FINALS'
+type StageKey = 'GROUP' | 'R32' | 'R16' | 'QF' | 'SF' | 'F' | 'ALL_FINALS' | '본선32강' | '본선16강' | '본선64강' | '16강' | '8강' | '4강' | '결승'
 
 const STAGE_TABS: { key: StageKey; label: string }[] = [
-  { key: 'GROUP', label: '예선' }, { key: 'R32', label: '32강' }, { key: 'R16', label: '16강' },
-  { key: 'QF', label: '8강' }, { key: 'SF', label: '4강' }, { key: 'F', label: '결승' },
+  { key: 'GROUP',     label: '예선' },
+  { key: '본선32강',  label: '32강' },
+  { key: '본선16강',  label: '본선16강' },
+  { key: '16강',      label: '16강' },
+  { key: '8강',       label: '8강' },
+  { key: '4강',       label: '4강' },
+  { key: '결승',      label: '결승' },
   { key: 'ALL_FINALS', label: '전체본선' },
 ]
-const ROUND_TO_STAGE: Record<string, string> = { R32:'FINALS', R16:'FINALS', QF:'FINALS', SF:'FINALS', F:'FINALS' }
-const ZONE_FINALS = new Set(['R16','QF','SF','F'])
-const STAGE_LABEL: Record<string, string> = { GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', ALL_FINALS:'전체본선' }
+const ROUND_TO_STAGE: Record<string, string> = { R32:'FINALS', R16:'FINALS', QF:'FINALS', SF:'FINALS', F:'FINALS', '본선32강':'FINALS', '본선16강':'FINALS', '본선64강':'FINALS', '16강':'FINALS', '8강':'FINALS', '4강':'FINALS', '결승':'FINALS' }
+const ZONE_FINALS = new Set(['R16','QF','SF','F','16강','8강','4강','결승','본선32강','본선16강','본선64강'])
+const STAGE_LABEL: Record<string, string> = { GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', ALL_FINALS:'전체본선', '본선32강':'32강', '본선16강':'16강', '본선64강':'64강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
 
 function makeCourtNames(shortName: string, count: number): string[] {
   const prefix = shortName?.trim() || '코트'
@@ -434,7 +439,7 @@ export default function CourtsPage() {
 
   async function assignAllFinals() {
     const divName = divisions.find(d => d.id === autoDiv)?.name || ''; let total = 0
-    for (const round of ['R32','R16','QF','SF','F']) {
+    for (const round of ['본선32강','본선64강','16강','8강','4강','결승']) {
       const pool    = getCourtPool(autoDiv, round)
       const targets = matches.filter(m => m.division_id === autoDiv && m.stage === (ROUND_TO_STAGE[round]||'FINALS') && m.round === round && !m.court && m.status !== 'FINISHED')
       if (targets.length === 0) continue
@@ -729,7 +734,7 @@ export default function CourtsPage() {
               {autoStage==='GROUP' && '같은 그룹 → 같은 코트 | 부하균등 | 연속방지'}
               {autoStage==='ALL_FINALS' && '결승까지 전체 미리배정 (기배정 스킵)'}
               {ZONE_FINALS.has(autoStage) && `${STAGE_LABEL[autoStage]} 배정 — 본선 구역 적용`}
-              {autoStage==='R32' && '32강 배정 — 전체 코트 균등'}
+              {autoStage==='본선32강' && '32강 배정 — 전체 코트 균등'}
             </p>
           )}
         </div>
