@@ -95,10 +95,7 @@ export default function CourtsPage() {
 
   // ✅ 자동 경기시작 — localStorage로 ON/OFF 유지 (새로고침해도 안 꺼짐)
   const [startTime, setStartTime]               = useState<string>('')
-  const [autoStartEnabled, setAutoStartEnabled] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return localStorage.getItem('autoStartEnabled') === 'true'
-  })
+  const [autoStartEnabled, setAutoStartEnabled] = useState(false)
   const autoStartRef        = useRef(false)
   const startTimeRef        = useRef<string>('')
   const venueStartTimesRef  = useRef<Record<string, string>>({})
@@ -115,6 +112,15 @@ export default function CourtsPage() {
   useEffect(() => { autoStartRef.current       = autoStartEnabled }, [autoStartEnabled])
   useEffect(() => { startTimeRef.current       = startTime        }, [startTime])
   useEffect(() => { venueStartTimesRef.current = venueStartTimes  }, [venueStartTimes])
+
+  // ✅ 클라이언트 마운트 후 localStorage에서 자동시작 상태 복원
+  useEffect(() => {
+    const saved = localStorage.getItem('autoStartEnabled')
+    if (saved === 'true') {
+      setAutoStartEnabled(true)
+      autoStartRef.current = true
+    }
+  }, [])
 
   function syncCourtOrderRef(matchList: MatchSlim[], tieList: TieWithClubs[]) {
     const counter: Record<string, number> = {}
@@ -155,8 +161,10 @@ export default function CourtsPage() {
   async function loadCourtZones() {
     if (!eventId) return
     try {
+      // court_zones 컬럼이 없는 경우 400 에러 → 조용히 무시
       const { data, error } = await supabase.from('events').select('court_zones').eq('id', eventId).single()
       if (!error && data?.court_zones) setCourtZones(data.court_zones as CourtZones)
+      // error 있어도 무시 (컬럼 미존재 시 court_zones 기능만 비활성화)
     } catch {}
   }
 
