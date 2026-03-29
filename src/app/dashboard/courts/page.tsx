@@ -585,7 +585,8 @@ export default function CourtsPage() {
   const allItems    = [...matches, ...tieMatches]
   const byCourt     = new Map<string, MatchSlim[]>()
   for (const name of filteredCourtNames) byCourt.set(name, [])
-  for (const m of allItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
+  // ✅ allItems → dateFilteredItems: 날짜 필터 적용된 경기만 코트 배치도에 표시
+  for (const m of dateFilteredItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
 
   const divColors: Record<string,string> = { TEAM:'#2563eb' }
   const colors = ['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#10b981','#ef4444']
