@@ -76,23 +76,6 @@ export default function CourtsPage() {
     return makeCourtNames(venue.short_name || venue.name, venue.court_count || venue.courts?.length || 0)
   }, [selectedVenue, venues])
 
-  // ✅ 날짜 필터 적용된 코트 목록 (경기장 탭 + 날짜 탭 동시 적용)
-  const filteredCourtNames = React.useMemo(() => {
-    if (dateFilter === 'ALL') return courtNames
-    // 해당 날짜 division의 경기에 실제 배정된 코트만
-    const divIds = Object.entries(divMatchDates)
-      .filter(([, d]) => d === dateFilter).map(([id]) => id)
-    if (divIds.length === 0) return courtNames
-    const usedCourts = new Set(
-      matches
-        .filter(m => divIds.includes(m.division_id) && m.court)
-        .map(m => m.court!)
-    )
-    // 배정된 코트가 없으면 전체 표시 (배정 전 상태)
-    if (usedCourts.size === 0) return courtNames
-    return courtNames.filter(c => usedCourts.has(c))
-  }, [courtNames, dateFilter, divMatchDates, matches])
-
   const [autoDiv, setAutoDiv]       = useState('')
   const [autoStage, setAutoStage]   = useState<StageKey>('GROUP')
   const [autoCourts, setAutoCourts] = useState<string[]>([])
@@ -128,6 +111,21 @@ export default function CourtsPage() {
   // ✅ 부서별 날짜
   const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({})
   const [dateFilter, setDateFilter]       = useState<string>('ALL')
+
+  // ✅ 날짜 필터 적용된 코트 목록 (dateFilter 선언 이후에 위치해야 함)
+  const filteredCourtNames = React.useMemo(() => {
+    if (dateFilter === 'ALL') return courtNames
+    const divIds = Object.entries(divMatchDates)
+      .filter(([, d]) => d === dateFilter).map(([id]) => id)
+    if (divIds.length === 0) return courtNames
+    const usedCourts = new Set(
+      matches
+        .filter(m => divIds.includes(m.division_id) && m.court)
+        .map(m => m.court!)
+    )
+    if (usedCourts.size === 0) return courtNames
+    return courtNames.filter(c => usedCourts.has(c))
+  }, [courtNames, dateFilter, divMatchDates, matches])
 
   // ref sync (모든 state 선언 후)
   useEffect(() => { venuesRef.current  = venues  }, [venues])
