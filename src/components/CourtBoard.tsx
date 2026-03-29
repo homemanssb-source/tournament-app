@@ -43,7 +43,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
       stage: 'TEAM', round: t.round || 'group',
       status: sMap[t.status] || 'PENDING',
       score: (t.status === 'completed' || t.status === 'in_progress') ? t.club_a_rubbers_won + '-' + t.club_b_rubbers_won : null,
-      division_name: '단체전',
+      division_name: '단체전', division_id: t.division_id || '',
       team_a_name: t.club_a?.name || 'TBD', team_b_name: t.club_b?.name || 'TBD',
       team_a_id: t.club_a_id || '', team_b_id: t.club_b_id || '',
       winner_team_id: t.winning_club_id || null, is_team_tie: true,
