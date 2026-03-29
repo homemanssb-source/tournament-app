@@ -104,14 +104,38 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     setResult({ name: target, court: '', idx: -1 })
   }
 
-  // 검색한 팀의 대기 상태
+  // ✅ 검색한 팀의 대기 상태 — 현재경기/다음대기/n번째 정확히 계산
   const searchInfo = searchResult?.court ? (() => {
-    const cms = (byCourt.get(searchResult.court) || []).sort((a,b) => (a.court_order||0)-(b.court_order||0))
+    const cms     = (byCourt.get(searchResult.court) || []).sort((a,b) => (a.court_order||0)-(b.court_order||0))
     const liveIdx = cms.findIndex(m => m.status === 'IN_PROGRESS')
     const pendIdx = cms.findIndex(m => m.status === 'PENDING')
     const curIdx  = liveIdx >= 0 ? liveIdx : pendIdx
-    const wait    = searchResult.idx > curIdx ? searchResult.idx - curIdx - 1 : 0
-    return { wait, total: cms.length, done: cms.filter(m => m.status === 'FINISHED').length }
+    const idx     = searchResult.idx
+
+    // 내 경기가 현재 진행중
+    const isLive = idx === liveIdx && liveIdx >= 0
+    // curIdx 기준으로 몇 번째인지
+    const wait   = idx > curIdx ? idx - curIdx - 1 : 0
+
+    // ✅ 위치 텍스트: 현재경기 / 다음대기 / n번째 대기
+    let posLabel = ''
+    if (isLive) {
+      posLabel = '현재 경기 중'
+    } else if (idx === curIdx) {
+      posLabel = '곧 시작'
+    } else if (idx === curIdx + 1) {
+      posLabel = '다음 대기'
+    } else {
+      posLabel = `${idx - curIdx}번째 대기`
+    }
+
+    return {
+      isLive,
+      wait,
+      posLabel,
+      total: cms.length,
+      done: cms.filter(m => m.status === 'FINISHED').length,
+    }
   })() : null
 
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
@@ -168,11 +192,24 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
                   <span className="font-bold">{searchResult.name}</span>
                   <span className="mx-2 text-blue-400">→</span>
                   <span className="font-black text-[#2d5016] text-base">📍 {searchResult.court}</span>
-                  <span className="ml-2 text-blue-600 font-normal text-xs">({searchResult.idx + 1}번째 대기)</span>
+                  {/* ✅ 수정: 현재경기/다음대기/n번째 대기 정확히 표시 */}
+                  {searchInfo && (
+                    <span className="ml-2 text-blue-600 font-normal text-xs">({searchInfo.posLabel})</span>
+                  )}
                 </div>
                 {searchInfo && (
-                  <span className={`px-3 py-1 rounded-full text-xs font-bold ${searchInfo.wait === 0 ? 'bg-red-100 text-red-700' : searchInfo.wait === 1 ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
-                    {searchInfo.wait === 0 ? '⚡ 곧 내 차례!' : `⏳ ${searchInfo.wait}경기 후 내 차례`}
+                  <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                    searchInfo.isLive
+                      ? 'bg-red-100 text-red-700'
+                      : searchInfo.wait === 0
+                        ? 'bg-amber-100 text-amber-700'
+                        : 'bg-green-100 text-green-700'
+                  }`}>
+                    {searchInfo.isLive
+                      ? '🔴 지금 경기 중!'
+                      : searchInfo.wait === 0
+                        ? '⚡ 곧 내 차례!'
+                        : `⏳ ${searchInfo.wait}경기 후 내 차례`}
                   </span>
                 )}
               </div>
