@@ -58,9 +58,6 @@ export default function CourtsPage() {
   const venuesRef  = useRef<Venue[]>([])
   const matchesRef = useRef<MatchSlim[]>([])
   const tiesRef    = useRef<TieWithClubs[]>([])
-  useEffect(() => { venuesRef.current  = venues  }, [venues])
-  useEffect(() => { matchesRef.current = matches }, [matches])
-  useEffect(() => { tiesRef.current    = ties    }, [ties])
 
   const courtNames = React.useMemo(() => {
     if (selectedVenue === 'ALL') {
@@ -99,10 +96,22 @@ export default function CourtsPage() {
   // ✅ 자동 경기시작
   const [startTime, setStartTime]               = useState<string>('')
   const [autoStartEnabled, setAutoStartEnabled] = useState(false)
-  const autoStartRef = useRef(false)
-  // ✅ 부서별 날짜 (2일 대회)
+  const autoStartRef        = useRef(false)
+  const startTimeRef        = useRef<string>('')
+  const venueStartTimesRef  = useRef<Record<string, string>>({})
+  // ✅ 경기장별 시작시간
+  const [venueStartTimes, setVenueStartTimes]   = useState<Record<string, string>>({})
+  // ✅ 부서별 날짜
   const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({})
   const [dateFilter, setDateFilter]       = useState<string>('ALL')
+
+  // ref sync (모든 state 선언 후)
+  useEffect(() => { venuesRef.current  = venues  }, [venues])
+  useEffect(() => { matchesRef.current = matches }, [matches])
+  useEffect(() => { tiesRef.current    = ties    }, [ties])
+  useEffect(() => { autoStartRef.current       = autoStartEnabled }, [autoStartEnabled])
+  useEffect(() => { startTimeRef.current       = startTime        }, [startTime])
+  useEffect(() => { venueStartTimesRef.current = venueStartTimes  }, [venueStartTimes])
 
   function syncCourtOrderRef(matchList: MatchSlim[], tieList: TieWithClubs[]) {
     const counter: Record<string, number> = {}
@@ -133,8 +142,14 @@ export default function CourtsPage() {
 
   async function loadVenues() {
     if (!eventId) return
-    const { data } = await supabase.from('venues').select('id, name, short_name, court_count, courts, pin_plain').eq('event_id', eventId).order('created_at')
-    setVenues(data || [])
+    // ✅ start_time 포함해서 로드 (경기장별 시작시간)
+    const { data } = await supabase.from('venues').select('id, name, short_name, court_count, courts, pin_plain, start_time').eq('event_id', eventId).order('created_at')
+    const list = (data || []) as (Venue & { start_time?: string })[]
+    setVenues(list as Venue[])
+    // 경기장별 시작시간 맵
+    const vtMap: Record<string, string> = {}
+    list.forEach(v => { if (v.start_time) vtMap[v.id] = v.start_time.slice(0,5) })
+    setVenueStartTimes(vtMap)
   }
   async function loadCourtZones() {
     if (!eventId) return
@@ -149,7 +164,7 @@ export default function CourtsPage() {
     if (!eventId) return
     try {
       const { data: ev } = await supabase.from('events').select('start_time').eq('id', eventId).single()
-      if (ev?.start_time) setStartTime(ev.start_time.slice(0, 5)) // HH:MM
+      if (ev?.start_time) setStartTime(ev.start_time.slice(0, 5))
     } catch {}
     try {
       const { data: divs } = await supabase.from('divisions').select('id, match_date').eq('event_id', eventId)
@@ -161,56 +176,90 @@ export default function CourtsPage() {
     } catch {}
   }
 
-  // ✅ 자동 경기시작 체크
-  async function autoStartCheck() {
-    if (!autoStartRef.current || !startTime) return
-    const now = new Date()
-    const [h, m] = startTime.split(':').map(Number)
-    const target = new Date(now); target.setHours(h, m, 0, 0)
-    if (now < target) return  // 아직 시작시간 전
+  // ✅ 코트가 속한 경기장의 시작시간 반환
+  function getCourtStartTime(court: string): string {
+    // court 이름 예: "제주-1" → 경기장 short_name "제주" 매칭
+    const venue = venuesRef.current.find(v => {
+      const sn = (v as any).short_name || v.name
+      return court.startsWith(sn + '-') || court === sn
+    })
+    if (venue) {
+      const vt = venueStartTimesRef.current[(venue as any).id]
+      if (vt) return vt
+    }
+    return startTimeRef.current
+  }
 
+  // ✅ 자동 경기시작 체크 — 완전 재작성
+  async function autoStartCheck() {
+    if (!autoStartRef.current) return
+    const now = new Date()
     const current = matchesRef.current
-    // 코트별로 그룹핑
+
+    // 코트별 그룹핑
     const byCourt = new Map<string, MatchSlim[]>()
     for (const m of current) {
       if (!m.court) continue
       if (!byCourt.has(m.court)) byCourt.set(m.court, [])
       byCourt.get(m.court)!.push(m)
     }
-    for (const [, items] of byCourt) {
+
+    let changed = false
+    for (const [court, items] of byCourt) {
       const sorted = items.sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
-      const hasLive = sorted.some(m => m.status === 'IN_PROGRESS')
+      const hasLive    = sorted.some(m => m.status === 'IN_PROGRESS')
+      const hasPending = sorted.some(m => m.status === 'PENDING')
+
+      if (!hasPending) continue  // 이 코트에 대기 경기 없음
+
+      // 이 코트의 시작시간 체크
+      const courtStartTime = getCourtStartTime(court)
+
       if (hasLive) {
-        // 진행중 경기가 FINISHED 됐는지 확인 → 다음 PENDING 자동 시작
-        const finishedIdx = sorted.findIndex(m => m.status === 'FINISHED')
-        const liveIdx     = sorted.findIndex(m => m.status === 'IN_PROGRESS')
-        if (liveIdx < 0 && finishedIdx >= 0) {
-          // 방금 완료 → 다음 PENDING 시작
-          const nextPending = sorted.find(m => m.status === 'PENDING')
-          if (nextPending && !nextPending.is_team_tie) {
-            await supabase.from('matches').update({ status: 'IN_PROGRESS', started_at: new Date().toISOString() }).eq('id', nextPending.id)
-          }
-        }
+        // ✅ 진행중 경기 있음 → 스킵 (다음 체크 때 FINISHED 감지)
         continue
       }
-      // 진행중 없음 → 첫 PENDING 시작
-      const first = sorted.find(m => m.status === 'PENDING')
-      if (first && !first.is_team_tie) {
-        await supabase.from('matches').update({ status: 'IN_PROGRESS', started_at: new Date().toISOString() }).eq('id', first.id)
+
+      // 진행중 없음
+      const lastFinished = sorted.filter(m => m.status === 'FINISHED').pop()
+      const firstPending = sorted.find(m => m.status === 'PENDING')
+
+      if (!firstPending || firstPending.is_team_tie) continue
+
+      if (lastFinished) {
+        // ✅ 앞 경기 완료됨 → 즉시 다음 경기 시작 (시간 무관)
+        await supabase.from('matches').update({
+          status: 'IN_PROGRESS',
+          started_at: new Date().toISOString()
+        }).eq('id', firstPending.id)
+        // ✅ 경기 시작 알림 발송
+        sendCourtNotify(court, 'finished', firstPending.id)
+        changed = true
+      } else if (courtStartTime) {
+        // ✅ 아직 시작 경기 없음 → 시작시간 됐으면 첫 경기 시작
+        const [h, mn] = courtStartTime.split(':').map(Number)
+        const target = new Date(now)
+        target.setHours(h, mn, 0, 0)
+        if (now >= target) {
+          await supabase.from('matches').update({
+            status: 'IN_PROGRESS',
+            started_at: new Date().toISOString()
+          }).eq('id', firstPending.id)
+          // ✅ 경기 시작 알림 발송
+          sendCourtNotify(court, 'manual', firstPending.id)
+          changed = true
+        }
       }
     }
-    await loadMatches()
+    if (changed) await loadMatches()
   }
 
   // ✅ 자동시작 인터벌 (30초마다 체크)
   useEffect(() => {
-    autoStartRef.current = autoStartEnabled
-  }, [autoStartEnabled])
-  useEffect(() => {
     if (!eventId) return
     const iv = setInterval(() => autoStartCheck(), 30000)
     return () => clearInterval(iv)
-  }, [eventId, startTime])
+  }, [eventId])
 
   const loadAll = useCallback(async (showLoading = false) => {
     if (!eventId) return

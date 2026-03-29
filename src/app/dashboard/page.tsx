@@ -61,6 +61,8 @@ export default function DashboardPage() {
   const [showTieAdjust, setShowTieAdjust] = useState(false)
   const [adjusting, setAdjusting] = useState(false)
   const [adjustMsg, setAdjustMsg] = useState('')
+  // ✅ 날짜 필터 (최상단 선언 필수 — Hooks 규칙)
+  const [dateMatchFilter, setDateMatchFilter] = useState<string>('ALL_DATE')
 
   const loadStats = useCallback(async () => {
     if (!eventId) { setLoading(false); return }
@@ -235,7 +237,6 @@ export default function DashboardPage() {
   // 경기결과 필터
   const divisions = stats.divisions
   const uniqueDates = [...new Set(divisions.map((d: any) => d.match_date).filter(Boolean))].sort() as string[]
-  const [dateMatchFilter, setDateMatchFilter] = useState<string>('ALL_DATE')
 
   const filteredMatches = (() => {
     let list = matchFilter === 'ALL' ? allMatches : allMatches.filter(m => m.division_id === matchFilter)

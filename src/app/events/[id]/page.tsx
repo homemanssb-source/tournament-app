@@ -395,7 +395,15 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
         for (const m of (sData || [])) {
           if (!teamMap[m.team_a_id]) teamMap[m.team_a_id] = { name: m.team_a_name, win:0, lose:0, scored:0, against:0 }
           if (!teamMap[m.team_b_id]) teamMap[m.team_b_id] = { name: m.team_b_name, win:0, lose:0, scored:0, against:0 }
-          const [sa, sb] = (m.score || '0:0').split(':').map(Number)
+          const parts = (m.score || '0:0').split(':').map(Number)
+          let sa = parts[0] ?? 0
+          let sb = parts[1] ?? 0
+          // ✅ winner_team_id와 score 방향이 불일치하면 보정
+          // 규칙: 승리팀은 항상 6점, 패배팀은 0~5점
+          // team_a가 winner인데 sa < sb이면 뒤집힌 것
+          if (m.winner_team_id === m.team_a_id && sa < sb) { [sa, sb] = [sb, sa] }
+          if (m.winner_team_id === m.team_b_id && sb < sa) { [sa, sb] = [sb, sa] }
+
           if (m.winner_team_id === m.team_a_id) {
             teamMap[m.team_a_id].win++; teamMap[m.team_b_id].lose++
           } else if (m.winner_team_id === m.team_b_id) {

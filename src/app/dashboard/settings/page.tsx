@@ -7,6 +7,7 @@ interface Venue {
   id: string; event_id: string; name: string; short_name: string
   court_count: number; courts: string[]; pin_plain: string
   manager_name: string; phone: string | null; division_ids: string[] | null
+  start_time: string | null
 }
 interface Division {
   id: string; name: string; match_date: string | null
@@ -52,8 +53,12 @@ export default function SettingsPage() {
   const [newDivisionIds, setNewDivisionIds] = useState<string[]>([])
   const [editDivisionIds, setEditDivisionIds] = useState<string[]>([])
 
+  // ✅ 경기장별 시작시간
+  const [venueStartTimes, setVenueStartTimes]     = useState<Record<string, string>>({})
+  const [venueStartTimeSaving, setVenueStartTimeSaving] = useState<string | null>(null)
+  const [venueTimeMsg, setVenueTimeMsg]           = useState('')
   // ✅ 부서별 날짜
-  const [divDateMsg, setDivDateMsg] = useState('')
+  const [divDateMsg, setDivDateMsg]     = useState('')
   const [divDateSaving, setDivDateSaving] = useState<string | null>(null)
 
   useEffect(() => {
@@ -102,6 +107,21 @@ export default function SettingsPage() {
     setStartTimeMsg('✅ 시작시간이 저장되었습니다.')
   }
 
+  // ✅ 경기장별 시작시간 저장
+  async function saveVenueStartTime(venueId: string, time: string) {
+    setVenueStartTimeSaving(venueId); setVenueTimeMsg('')
+    const { error } = await supabase.from('venues').update({ start_time: time || null }).eq('id', venueId)
+    setVenueStartTimeSaving(null)
+    if (error) {
+      setVenueTimeMsg(error.message.includes('column')
+        ? '⚠️ SQL 필요: ALTER TABLE venues ADD COLUMN IF NOT EXISTS start_time time;'
+        : '❌ ' + error.message)
+      return
+    }
+    setVenueStartTimes(prev => ({ ...prev, [venueId]: time }))
+    setVenueTimeMsg('✅ 저장됨'); setTimeout(() => setVenueTimeMsg(''), 2000)
+  }
+
   // ✅ 부서별 날짜 저장
   async function saveDivDate(divId: string, date: string) {
     setDivDateSaving(divId); setDivDateMsg('')
@@ -124,6 +144,10 @@ export default function SettingsPage() {
     setVenueLoading(true)
     const { data } = await supabase.from('venues').select('*').eq('event_id', eid).order('created_at')
     setVenues(data || [])
+    // ✅ 경기장별 시작시간 맵
+    const vtMap: Record<string, string> = {}
+    ;(data || []).forEach((v: Venue) => { if (v.start_time) vtMap[v.id] = v.start_time.slice(0, 5) })
+    setVenueStartTimes(vtMap)
     setVenueLoading(false)
   }
 
@@ -377,6 +401,7 @@ export default function SettingsPage() {
         </div>
 
         {venueMsg && <p className={`text-sm ${venueMsg.startsWith('OK') ? 'text-green-600' : 'text-red-500'}`}>{venueMsg}</p>}
+        {venueTimeMsg && <p className={`text-xs whitespace-pre-wrap ${venueTimeMsg.startsWith('✅') ? 'text-green-600' : 'text-amber-600'}`}>{venueTimeMsg}</p>}
 
         {venueLoading ? (
           <p className="text-stone-400 text-sm text-center py-4">불러오는 중...</p>
@@ -397,6 +422,15 @@ export default function SettingsPage() {
                         <span className="text-xs bg-stone-100 text-stone-600 px-2 py-0.5 rounded">약칭: {shortName}</span>
                         <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{v.pin_plain}</span>
                         {v.manager_name && <span className="text-xs text-stone-400">{v.manager_name}</span>}
+                        {/* ✅ 경기장별 시작시간 */}
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs text-stone-400">⏰</span>
+                          <input type="time"
+                            defaultValue={venueStartTimes[v.id] || ''}
+                            onBlur={e => saveVenueStartTime(v.id, e.target.value)}
+                            className="border border-stone-200 rounded px-2 py-0.5 text-xs bg-white w-24" />
+                          {venueStartTimeSaving === v.id && <span className="text-xs text-stone-400">저장중...</span>}
+                        </div>
                       </div>
                       <div className="flex flex-wrap gap-1">
                         {makeCourtNames(shortName, courtCount).map(c => (
