@@ -722,20 +722,24 @@ export default function CourtsPage() {
                 </div>
                 {notifyMsg[court] && <div className="px-3 py-1 text-xs bg-amber-50 text-amber-800 border-b">{notifyMsg[court]}</div>}
                 <div className="p-1.5 space-y-1 max-h-[60vh] overflow-y-auto">
-                  {courtItems.map((m,i) => {
+                  {/* ✅ PENDING/IN_PROGRESS 경기만 표시 — FINISHED는 하단 접기로 */}
+                  {courtItems.filter(m=>m.status!=='FINISHED').map((m,i) => {
+                    const allIdx = courtItems.indexOf(m)
                     let badge = ''
                     if (m.status==='IN_PROGRESS') badge='🔴'
-                    else if (m.status!=='FINISHED') {
-                      if (currentIdx>=0&&i===currentIdx) badge='🔴'
-                      else if (currentIdx>=0&&i===currentIdx+1) badge='🟡'
-                      else if (currentIdx>=0&&i===currentIdx+2) badge='🟢'
+                    else {
+                      if (currentIdx>=0&&allIdx===currentIdx) badge='🔴'
+                      else if (currentIdx>=0&&allIdx===currentIdx+1) badge='🟡'
+                      else if (currentIdx>=0&&allIdx===currentIdx+2) badge='🟢'
                     }
-                    // ✅ 수정: IN_PROGRESS 경기가 있어도 운영자는 PENDING 경기 수동 시작 가능
-                    // 단, 한 번에 하나씩만 — 현재 PENDING 중 첫 번째만 활성화
                     const firstPendingIdx = courtItems.findIndex(mm => mm.status === 'PENDING')
-                    const canStart = !m.is_team_tie && m.status === 'PENDING' && i === firstPendingIdx
-                    return <MatchChip key={m.id} m={m} order={m.court_order||i+1} badge={badge} divColor={divColors[m.division_id]} onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)} onClickStart={canStart?()=>startMatch(m.id):undefined} onClickUnassign={() => unassignItem(m.id)} onMoveUp={!m.is_team_tie&&i>0?()=>moveMatchOrder(m.id,'up'):undefined} onMoveDown={!m.is_team_tie&&i<courtItems.length-1?()=>moveMatchOrder(m.id,'down'):undefined} onTouchStart={()=>handleTouchStart(m.id)} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} />
+                    const canStart = !m.is_team_tie && m.status === 'PENDING' && allIdx === firstPendingIdx
+                    return <MatchChip key={m.id} m={m} order={m.court_order||allIdx+1} badge={badge} divColor={divColors[m.division_id]} onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)} onClickStart={canStart?()=>startMatch(m.id):undefined} onClickUnassign={() => unassignItem(m.id)} onMoveUp={!m.is_team_tie&&allIdx>0?()=>moveMatchOrder(m.id,'up'):undefined} onMoveDown={!m.is_team_tie&&allIdx<courtItems.length-1?()=>moveMatchOrder(m.id,'down'):undefined} onTouchStart={()=>handleTouchStart(m.id)} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} />
                   })}
+                  {/* ✅ 완료 경기는 접기로 표시 */}
+                  {finished > 0 && (
+                    <FinishedCourtItems items={courtItems.filter(m=>m.status==='FINISHED')} onClickScore={openScoreEdit} onClickUnassign={unassignItem} divColors={divColors} />
+                  )}
                   {courtItems.length===0&&<div className="text-xs text-stone-300 text-center py-6 border-2 border-dashed rounded-lg">드래그 또는 자동배정</div>}
                 </div>
               </div>
@@ -781,6 +785,45 @@ export default function CourtsPage() {
     </div>
   )
 }
+
+// ── 완료된 코트 경기 접기 컴포넌트
+function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }: {
+  items: MatchSlim[]
+  onClickScore: (m: MatchSlim) => void
+  onClickUnassign: (id: string) => void
+  divColors: Record<string, string>
+}) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <div className="border-t border-stone-100 mt-1 pt-1">
+      <button onClick={() => setOpen(!open)}
+        className="text-xs text-stone-400 hover:text-stone-600 w-full text-left px-1 py-0.5 flex items-center gap-1">
+        <span>{open ? '▼' : '▶'}</span>
+        <span>완료 {items.length}경기</span>
+      </button>
+      {open && (
+        <div className="space-y-1 mt-1">
+          {items.map((m, i) => (
+            <div key={m.id} className="rounded-lg border border-stone-100 bg-stone-50 p-2 opacity-60">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-[10px] text-stone-400 font-mono">#{m.court_order}</span>
+                  <span className="text-xs text-stone-500 truncate">{m.team_a_name} vs {m.team_b_name}</span>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  {m.score && <span className="text-xs font-bold text-stone-500">{m.score}</span>}
+                  <button onClick={() => onClickScore(m)} className="text-[10px] text-stone-300 hover:text-blue-500">✏</button>
+                  <button onClick={() => onClickUnassign(m.id)} className="text-[10px] text-stone-300 hover:text-red-500">✕</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 
 function MatchChip({ m, order, badge, divColor, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
   m: MatchSlim; order?: number; badge?: string; divColor?: string

@@ -19,8 +19,8 @@ interface CourtQueueMatch {
   team_a_name: string; team_b_name: string; division_name: string
 }
 
-const ROUND_ORDER: Record<string, number> = { group:0, GROUP:0, R32:1, R16:2, QF:3, SF:4, F:5 }
-const ROUND_LABEL: Record<string, string> = { group:'예선', GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승' }
+const ROUND_ORDER: Record<string, number> = { group:0, GROUP:0, R32:1, R16:2, QF:3, SF:4, F:5, '본선32강':1, '본선16강':1, '16강':2, '8강':3, '4강':4, '결승':5 }
+const ROUND_LABEL: Record<string, string> = { group:'예선', GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', '본선32강':'32강', '본선16강':'16강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
 
 export default function PinMatchesPage() {
   const router = useRouter()
@@ -38,8 +38,6 @@ export default function PinMatchesPage() {
   const [notifAllowed, setNotifAllowed]     = useState(false)
   const [notifRequested, setNotifRequested] = useState(false)
   const prevWaitRef = useRef<Map<string, number>>(new Map())
-  // ✅ 부서별 날짜
-  const [divDates, setDivDates] = useState<Record<string, string>>({})
 
   const { autoResubscribe, subscribeWithPin } = usePushSubscription()
 
@@ -70,52 +68,19 @@ export default function PinMatchesPage() {
     const myMatches: PinMatch[] = data.matches || []
     setMatches(myMatches)
 
-    let divDateMap: Record<string, string> = {}
-    // ✅ 부서별 날짜 로드
-    if (s.event_id) {
-      try {
-        const { data: divs } = await supabase.from('divisions').select('id, match_date').eq('event_id', s.event_id)
-        if (divs) {
-          const map: Record<string, string> = {}
-          divs.forEach((d: any) => { if (d.match_date) map[d.id] = d.match_date })
-          setDivDates(map)
-          divDateMap = map  // 로컬 변수에도 저장 (아래 queue 로드 시 사용)
-        }
-      } catch {}
-    }
-
+    // ✅ 코트에 배정된 경기 = 이미 당일 경기
+    // 운영자가 날짜별로 코트 배정하므로 날짜/부서 필터 불필요
     const courts = [...new Set(myMatches.map(m => m.court).filter(Boolean))] as string[]
     const queueMap = new Map<string, CourtQueueMatch[]>()
 
     if (courts.length > 0) {
-      // ✅ 다른 날짜 경기 섞임 방지
-      // 2일 대회이고 match_date가 설정된 경우만 날짜 필터 적용
-      // 1일 대회 또는 match_date 미설정이면 division_id 필터 없이 전체 코트 경기 포함
-      const allDivDates = Object.values(divDateMap)
-      const uniqueDates = [...new Set(allDivDates)]
-      const isMultiDay = uniqueDates.length > 1  // 실제 날짜가 2개 이상인 경우만 필터
-
-      let filterDivIds: string[] = []
-      if (isMultiDay) {
-        // 내 부서 날짜와 같은 날짜의 division_id 전체
-        const myDivIds = [...new Set(myMatches.map((m: PinMatch) => m.division_id).filter(Boolean))]
-        const myDates = [...new Set(myDivIds.map(id => divDateMap[id]).filter(Boolean))]
-        filterDivIds = Object.entries(divDateMap)
-          .filter(([, d]) => myDates.includes(d as string)).map(([id]) => id)
-      }
-
-      const matchQuery = supabase
+      const { data: allMatches } = await supabase
         .from('v_matches_with_teams')
         .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id')
         .eq('event_id', s.event_id)
         .in('court', courts)
         .neq('score', 'BYE')
         .order('court').order('court_order')
-
-      // 2일 대회면 해당 날짜 division만, 1일 대회면 전체
-      const { data: allMatches } = isMultiDay && filterDivIds.length > 0
-        ? await matchQuery.in('division_id', filterDivIds)
-        : await matchQuery
 
       for (const court of courts) {
         const q = (allMatches || [])
@@ -278,19 +243,7 @@ export default function PinMatchesPage() {
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-1 h-5 bg-[#2d5016] rounded-full" />
                   <h2 className="text-sm font-bold text-stone-700">{ROUND_LABEL[round] || round}</h2>
-                  {/* ✅ 날짜 뱃지 — 해당 라운드 첫 경기의 부서 날짜 표시 */}
-                  {(() => {
-                    const firstMatch = byRound[round]?.[0]
-                    if (!firstMatch) return null
-                    const divId = firstMatch.division_id || (session?.division_id)
-                    const date = divDates[divId]
-                    if (!date) return null
-                    return (
-                      <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
-                        📅 {new Date(date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short' })}
-                      </span>
-                    )
-                  })()}
+
                 </div>
                 <div className="space-y-3">
                   {byRound[round].map(m => {
