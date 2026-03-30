@@ -74,17 +74,19 @@ export async function POST(req: NextRequest) {
         // 개인전 matches
         const { data: courtMatches } = await supabaseAdmin
           .from('v_matches_with_teams')
-          .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status')
+          .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status, score')
           .eq('event_id', event_id)
           .eq('court', court)
-          .neq('score', 'BYE')
           .order('court_order')
 
-        if (courtMatches && courtMatches.length > 0) {
-          const activeIdx = courtMatches.findIndex(m => m.status === 'IN_PROGRESS')
+        // ✅ BYE 제외 클라이언트 필터 (NULL score 포함)
+        const filteredMatches = (courtMatches || []).filter((m: any) => m.score !== 'BYE')
+
+        if (filteredMatches && filteredMatches.length > 0) {
+          const activeIdx = filteredMatches.findIndex(m => m.status === 'IN_PROGRESS')
           const searchFrom = activeIdx >= 0 ? activeIdx + 1 : 0
-          const target = courtMatches.slice(searchFrom).find(m => m.status === 'PENDING')
-            ?? courtMatches.find(m => m.status === 'PENDING')
+          const target = filteredMatches.slice(searchFrom).find(m => m.status === 'PENDING')
+            ?? filteredMatches.find(m => m.status === 'PENDING')
 
           if (target) {
             teamAId = target.team_a_id
