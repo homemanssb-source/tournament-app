@@ -14,6 +14,10 @@ function getAppBServiceClient() {
   return createClient(url, key);
 }
 
+function generatePin(): string {
+  return String(100000 + Math.floor(Math.random() * 900000));
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { event_id, app_a_event_id } = await request.json();
@@ -24,7 +28,7 @@ export async function POST(request: NextRequest) {
     const appA = getAppAClient();
     const appB = getAppBServiceClient();
 
-    // 1. 앱B divisions 로드 (name 기준 매핑용)
+    // 1. 앱B divisions 로드
     const { data: appBDivisions, error: divErr } = await appB
       .from('divisions')
       .select('id, name')
@@ -50,7 +54,7 @@ export async function POST(request: NextRequest) {
       if (matched) divisionMap[aDiv.division_id] = matched.id;
     }
 
-    // 4. 앱A event_entries 가져오기
+    // 4. 앱A event_entries + teams 가져오기
     const { data: entries, error: entErr } = await appA
       .from('event_entries')
       .select('*, team:teams(*)')
@@ -62,6 +66,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: true, message: '동기화할 데이터 없음', synced: 0, total: 0 });
     }
 
+    // 5. 필요한 member_id 목록 수집 → 한 번에 조회
+    const memberIds = new Set<string>();
+    for (const entry of entries) {
+      if (entry.team?.member1_id) memberIds.add(entry.team.member1_id);
+      if (entry.team?.member2_id) memberIds.add(entry.team.member2_id);
+    }
+    const { data: membersData } = await appA
+      .from('members')
+      .select('member_id, name, pin_code, grade, club')
+      .in('member_id', [...memberIds]);
+    const memberMap: Record<string, any> = {};
+    for (const m of (membersData || [])) {
+      memberMap[m.member_id] = m;
+    }
+
     let syncedCount = 0;
     let skippedCount = 0;
     const errors: string[] = [];
@@ -70,7 +89,7 @@ export async function POST(request: NextRequest) {
     for (const entry of entries) {
       try {
         // 중복 확인
-        const recordId = entry.entry_id || entry.id || entry.team?.id;
+        const recordId = entry.entry_id || entry.id || entry.team?.team_id;
         const { data: existingLog } = await appB
           .from('sync_log')
           .select('id')
@@ -87,31 +106,40 @@ export async function POST(request: NextRequest) {
         const appBDivisionId = entry.division_id ? divisionMap[entry.division_id] : null;
         if (!appBDivisionId) {
           const divName = appADivisions.find(d => d.division_id === entry.division_id)?.division_name || entry.division_id || 'unknown';
-          const p1 = team.player1_name || team.member1_name || '';
-          const p2 = team.player2_name || team.member2_name || '';
-          unmatched.push(`부서 매핑 실패: "${divName}" (${p1}/${p2})`);
+          unmatched.push(`부서 매핑 실패: "${divName}" (${team.team_name || ''})`);
           continue;
         }
 
-        // 앱B division_name
         const divisionName = appBDivisions.find(d => d.id === appBDivisionId)?.name || '';
 
-        // 선수 이름
-        const p1 = team.player1_name || team.member1_name || '';
-        const p2 = team.player2_name || team.member2_name || '';
-        const teamName = p2 ? `${p1}/${p2}` : p1;
+        // 선수 정보: members 테이블에서 가져오기
+        const member1 = team.member1_id ? memberMap[team.member1_id] : null;
+        const member2 = team.member2_id ? memberMap[team.member2_id] : null;
+
+        const p1Name = member1?.name || '';
+        const p2Name = member2?.name || '';
+        // team_name: 앱A에 이미 "신승배/고형길" 형식으로 있음, 없으면 직접 조합
+        const teamName = team.team_name || (p2Name ? `${p1Name}/${p2Name}` : p1Name);
+        // PIN: member1의 pin_code 사용, 없으면 랜덤 생성
+        const pinPlain = member1?.pin_code ? String(member1.pin_code) : generatePin();
+        // 등급
+        const p1Grade = member1?.grade || null;
+        const p2Grade = member2?.grade || null;
 
         // 앱B teams insert
         const { data: newTeam, error: teamErr } = await appB
           .from('teams')
           .insert({
-            event_id: event_id,
-            division_id: appBDivisionId,
+            event_id:      event_id,
+            division_id:   appBDivisionId,
             division_name: divisionName,
-            team_name: teamName,
-            player1_name: p1,
-            player2_name: p2,
-            group_id: null,
+            team_name:     teamName,
+            player1_name:  p1Name,
+            player2_name:  p2Name,
+            pin_plain:     pinPlain,
+            p1_grade:      p1Grade,
+            p2_grade:      p2Grade,
+            group_id:      null,
           })
           .select('id')
           .single();
@@ -123,12 +151,12 @@ export async function POST(request: NextRequest) {
 
         // sync_log 기록
         await appB.from('sync_log').insert({
-          event_id: event_id,
-          sync_type: 'individual',
+          event_id:        event_id,
+          sync_type:       'individual',
           app_a_record_id: recordId,
           app_b_record_id: newTeam.id,
-          app_b_table: 'teams',
-          status: 'synced',
+          app_b_table:     'teams',
+          status:          'synced',
         });
 
         syncedCount++;
@@ -138,12 +166,12 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({
-      success: true,
-      synced: syncedCount,
-      skipped: skippedCount,
-      total: entries.length,
+      success:   true,
+      synced:    syncedCount,
+      skipped:   skippedCount,
+      total:     entries.length,
       unmatched: unmatched.length > 0 ? unmatched : undefined,
-      errors: errors.length > 0 ? errors : undefined,
+      errors:    errors.length > 0 ? errors : undefined,
     });
 
   } catch (err: any) {
