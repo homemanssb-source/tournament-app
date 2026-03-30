@@ -98,17 +98,12 @@ export default function CourtsPage() {
   const [notifying, setNotifying]   = useState<string | null>(null)
   const [notifyMsg, setNotifyMsg]   = useState<Record<string, string>>({})
 
-  // ✅ 자동 경기시작 — localStorage로 ON/OFF 유지 (새로고침해도 안 꺼짐)
-  const [startTime, setStartTime]               = useState<string>('')
-  const [autoStartEnabled, setAutoStartEnabled] = useState(true)  // ✅ 항상 ON
-  const autoStartRef        = useRef(true)  // ✅ 항상 ON
-  const startTimeRef        = useRef<string>('')
-  const venueStartTimesRef  = useRef<Record<string, string>>({})
-  // ✅ 경기장별 시작시간
-  const [venueStartTimes, setVenueStartTimes]   = useState<Record<string, string>>({})
-  // ✅ 부서별 날짜
-  const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({})
-  const [dateFilter, setDateFilter]       = useState<string>('ALL')
+  const [startTime, setStartTime]             = useState<string>('')
+  const startTimeRef                          = useRef<string>('')
+  const venueStartTimesRef                    = useRef<Record<string, string>>({})
+  const [venueStartTimes, setVenueStartTimes] = useState<Record<string, string>>({})
+  const [divMatchDates, setDivMatchDates]     = useState<Record<string, string>>({})
+  const [dateFilter, setDateFilter]           = useState<string>('ALL')
 
   // 코트 목록은 날짜 무관하게 전체 사용
   const filteredCourtNames = courtNames
@@ -126,11 +121,9 @@ export default function CourtsPage() {
   useEffect(() => { venuesRef.current  = venues  }, [venues])
   useEffect(() => { matchesRef.current = matches }, [matches])
   useEffect(() => { tiesRef.current    = ties    }, [ties])
-  useEffect(() => { autoStartRef.current       = autoStartEnabled }, [autoStartEnabled])
-  useEffect(() => { startTimeRef.current       = startTime        }, [startTime])
-  useEffect(() => { venueStartTimesRef.current = venueStartTimes  }, [venueStartTimes])
+  useEffect(() => { startTimeRef.current       = startTime       }, [startTime])
+  useEffect(() => { venueStartTimesRef.current = venueStartTimes }, [venueStartTimes])
 
-  // autoStart 항상 ON
 
   function syncCourtOrderRef(matchList: MatchSlim[], tieList: TieWithClubs[]) {
     const counter: Record<string, number> = {}
@@ -206,82 +199,9 @@ export default function CourtsPage() {
     return startTimeRef.current
   }
 
-  // ✅ 자동 경기시작 체크
-  // 수정 2B: 시작시간 미설정 시에도 자동시작 ON이면 즉시 시작하도록 fallback 추가
-  async function autoStartCheck() {
-    if (!autoStartRef.current) { console.log('[AutoStart] OFF — skip'); return }
-    const now = new Date()
-    const current = matchesRef.current
-    console.log('[AutoStart] 체크 시작. 경기수:', current.length, '시각:', now.toLocaleTimeString())
-
-    const byCourt = new Map<string, MatchSlim[]>()
-    for (const m of current) {
-      if (!m.court) continue
-      if (!byCourt.has(m.court)) byCourt.set(m.court, [])
-      byCourt.get(m.court)!.push(m)
-    }
-
-    let changed = false
-    for (const [court, items] of byCourt) {
-      const sorted = items.sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
-      const hasLive    = sorted.some(m => m.status === 'IN_PROGRESS')
-      const hasPending = sorted.some(m => m.status === 'PENDING')
-
-      if (!hasPending) { console.log('[AutoStart]', court, '→ PENDING 없음, 스킵'); continue }
-
-      const courtStartTime = getCourtStartTime(court)
-      console.log('[AutoStart]', court, '→ hasLive:', hasLive, 'hasPending:', hasPending, 'startTime:', courtStartTime)
-
-      if (hasLive) { console.log('[AutoStart]', court, '→ IN_PROGRESS 있음, 스킵'); continue }
-
-      const lastFinished = sorted.filter(m => m.status === 'FINISHED').pop()
-      const firstPending = sorted.find(m => m.status === 'PENDING')
-
-      console.log('[AutoStart]', court, '→ lastFinished:', lastFinished?.id, 'firstPending:', firstPending?.id, 'is_team_tie:', firstPending?.is_team_tie)
-
-      if (!firstPending || firstPending.is_team_tie) { console.log('[AutoStart]', court, '→ firstPending 없거나 단체전, 스킵'); continue }
-
-      if (lastFinished) {
-        console.log('[AutoStart]', court, '→ 앞경기 완료, 즉시 시작:', firstPending.id)
-        const { error } = await supabase.from('matches').update({
-          status: 'IN_PROGRESS',
-          started_at: new Date().toISOString()
-        }).eq('id', firstPending.id)
-        if (error) console.error('[AutoStart] 업데이트 실패:', error.message)
-        else { sendCourtNotify(court, 'finished', firstPending.id); changed = true }
-      } else if (courtStartTime) {
-        const [h, mn] = courtStartTime.split(':').map(Number)
-        const target = new Date(now)
-        target.setHours(h, mn, 0, 0)
-        console.log('[AutoStart]', court, '→ 시작시간 체크: now', now.toLocaleTimeString(), 'target', target.toLocaleTimeString(), 'pass:', now >= target)
-        if (now >= target) {
-          const { error } = await supabase.from('matches').update({
-            status: 'IN_PROGRESS',
-            started_at: new Date().toISOString()
-          }).eq('id', firstPending.id)
-          if (error) console.error('[AutoStart] 업데이트 실패:', error.message)
-          else { sendCourtNotify(court, 'manual', firstPending.id); changed = true }
-        }
-      } else {
-        console.log('[AutoStart]', court, '→ 시작시간 없음, fallback 즉시 시작:', firstPending.id)
-        const { error } = await supabase.from('matches').update({
-          status: 'IN_PROGRESS',
-          started_at: new Date().toISOString()
-        }).eq('id', firstPending.id)
-        if (error) console.error('[AutoStart] 업데이트 실패:', error.message)
-        else { sendCourtNotify(court, 'manual', firstPending.id); changed = true }
-      }
-    }
-    console.log('[AutoStart] 완료. changed:', changed)
-    if (changed) await loadMatches()
-  }
-
-  // 자동시작 인터벌 (30초마다 체크)
-  useEffect(() => {
-    if (!eventId) return
-    const iv = setInterval(() => autoStartCheck(), 30000)
-    return () => clearInterval(iv)
-  }, [eventId])
+  // ✅ 자동시작: DB 트리거(fn_auto_start_next_match)에서 처리
+  // matches.status → FINISHED 시 DB가 자동으로 다음 PENDING 경기를 IN_PROGRESS로 변경
+  // 클라이언트는 폴링으로 화면만 갱신
 
   const loadAll = useCallback(async (showLoading = false) => {
     if (!eventId) return
@@ -295,25 +215,6 @@ export default function CourtsPage() {
       ])
       const matchList = (matchRes.data || []).filter((m: any) => m.score !== 'BYE') as MatchSlim[]
       const tieList   = (tieRes.data  || []) as TieWithClubs[]
-
-      // ✅ PIN 등 외부 경로로 점수 입력된 경우 감지 → autoStartCheck 즉시 호출
-      // 폴링 시(showLoading=false)에만 체크. 자동시작 ON일 때만.
-      if (!showLoading && autoStartRef.current) {
-        const prevById = new Map(matchesRef.current.map(m => [m.id, m.status]))
-        const hasNewFinished = matchList.some(
-          m => m.status === 'FINISHED' && prevById.get(m.id) === 'IN_PROGRESS'
-        )
-        if (hasNewFinished) {
-          // ref를 먼저 최신화한 뒤 체크
-          matchesRef.current = matchList
-          tiesRef.current    = tieList
-          syncCourtOrderRef(matchList, tieList)
-          setMatches(matchList)
-          setTies(tieList)
-          await autoStartCheck()
-          return
-        }
-      }
 
       setMatches(matchList); matchesRef.current = matchList
       setTies(tieList);      tiesRef.current    = tieList
@@ -516,7 +417,6 @@ export default function CourtsPage() {
     setMsg('')
   }
 
-  // ✅ [수정 2A] submitResult 완료 후 autoStartCheck 즉시 호출
   async function submitResult() {
     if (!editMatch || !editScore || !editWinner) { setMsg('점수와 승자를 모두 입력해주세요.'); return }
     setSubmitting(true); setMsg('')
@@ -534,10 +434,7 @@ export default function CourtsPage() {
         if (editMatch.court) sendCourtNotify(editMatch.court, 'finished')
       }
       setEditMatch(null)
-      await loadMatches()             // matchesRef 먼저 최신화
-      if (autoStartRef.current) {    // 자동시작 ON이면 즉시 체크
-        await autoStartCheck()
-      }
+      await loadMatches()
     } finally { setSubmitting(false) }
   }
 
@@ -633,15 +530,6 @@ export default function CourtsPage() {
           {startTime && (
             <span className="text-xs text-stone-500">⏰ {startTime} 자동시작</span>
           )}
-          <button
-            onClick={() => setAutoStartEnabled(v => { const next = !v; localStorage.setItem('autoStartEnabled', String(next)); return next })}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${
-              autoStartEnabled
-                ? 'bg-red-500 text-white border-red-500'
-                : 'bg-white text-stone-500 border-stone-300 hover:border-red-400'
-            }`}>
-            {autoStartEnabled ? '⏸ 자동시작 ON' : '▶ 자동시작 OFF'}
-          </button>
         </div>
       </div>
 

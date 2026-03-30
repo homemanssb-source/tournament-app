@@ -21,19 +21,25 @@ export default function PinPage() {
   const [loginPin, setLoginPin] = useState('')
 
   useEffect(() => {
-    // ✅ 운영자 대시보드에서 선택한 대회 우선 사용
     const dashboardEventId = sessionStorage.getItem('dashboard_event_id')
     if (dashboardEventId) {
       setSelectedEvent(dashboardEventId)
       return
     }
-    // 없으면 가장 최근 active 대회 자동 선택
     supabase.from('events').select('id').eq('status', 'active')
       .order('date', { ascending: false }).limit(1)
       .then(({ data }) => {
         if (data?.[0]?.id) setSelectedEvent(data[0].id)
       })
   }, [])
+
+  // ✅ 알림 등록 성공 시 자동 이동
+  useEffect(() => {
+    if (pushStatus === 'success') {
+      const t = setTimeout(() => router.push('/pin/matches'), 1500)
+      return () => clearTimeout(t)
+    }
+  }, [pushStatus, router])
 
   async function handleIndividualSubmit() {
     if (!selectedEvent) { setError('대회 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.'); return }
@@ -54,7 +60,11 @@ export default function PinPage() {
 
   async function handleAllowNotification() {
     await subscribeWithPin(loginPin)
-    router.push('/pin/matches')
+    // pushStatus가 success로 바뀌면 useEffect에서 자동 이동
+    // 실패한 경우에도 이동
+    if (pushStatus !== 'loading') {
+      router.push('/pin/matches')
+    }
   }
 
   function handleSkipNotification() {
@@ -94,7 +104,6 @@ export default function PinPage() {
 
   function resetMode() { setMode('select'); setPin(''); setError(''); setTeamTies([]) }
 
-  // 로그인 성공 후 알림 구독 화면
   if (loginSuccess) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4">
@@ -108,7 +117,8 @@ export default function PinPage() {
             <div className="text-center py-4">
               <div className="text-3xl mb-2">✅</div>
               <p className="text-green-600 font-medium">{pushMessage}</p>
-              <p className="text-stone-400 text-sm mt-2">경기 목록으로 이동합니다...</p>
+              {/* ✅ 자동 이동 중 표시 */}
+              <p className="text-stone-400 text-sm mt-2">경기 목록으로 이동 중...</p>
             </div>
           ) : (
             <>

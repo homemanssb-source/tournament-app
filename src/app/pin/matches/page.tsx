@@ -88,23 +88,34 @@ export default function PinMatchesPage() {
     const queueMap = new Map<string, CourtQueueMatch[]>()
 
     if (courts.length > 0) {
-      // ✅ 내 경기와 같은 날짜의 모든 division_id 포함 (다른 날짜 경기 섞임 방지)
-      // 코트는 여러 부서가 공용이므로 같은 날짜 다른 부서 경기도 포함해야 정확한 순서 계산 가능
-      const myDivIds = [...new Set(myMatches.map((m: PinMatch) => m.division_id).filter(Boolean))]
-      // 내 부서들의 날짜를 확인해서 같은 날짜 division_id 전체를 수집
-      const myDates = [...new Set(myDivIds.map(id => divDateMap[id]).filter(Boolean))]
-      const sameDayDivIds = Object.entries(divDateMap)
-        .filter(([, d]) => myDates.includes(d)).map(([id]) => id)
-      const filterDivIds = sameDayDivIds.length > 0 ? sameDayDivIds : myDivIds
+      // ✅ 다른 날짜 경기 섞임 방지
+      // 2일 대회이고 match_date가 설정된 경우만 날짜 필터 적용
+      // 1일 대회 또는 match_date 미설정이면 division_id 필터 없이 전체 코트 경기 포함
+      const allDivDates = Object.values(divDateMap)
+      const uniqueDates = [...new Set(allDivDates)]
+      const isMultiDay = uniqueDates.length > 1  // 실제 날짜가 2개 이상인 경우만 필터
 
-      const { data: allMatches } = await supabase
+      let filterDivIds: string[] = []
+      if (isMultiDay) {
+        // 내 부서 날짜와 같은 날짜의 division_id 전체
+        const myDivIds = [...new Set(myMatches.map((m: PinMatch) => m.division_id).filter(Boolean))]
+        const myDates = [...new Set(myDivIds.map(id => divDateMap[id]).filter(Boolean))]
+        filterDivIds = Object.entries(divDateMap)
+          .filter(([, d]) => myDates.includes(d as string)).map(([id]) => id)
+      }
+
+      const matchQuery = supabase
         .from('v_matches_with_teams')
         .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id')
         .eq('event_id', s.event_id)
         .in('court', courts)
-        .in('division_id', filterDivIds)
         .neq('score', 'BYE')
         .order('court').order('court_order')
+
+      // 2일 대회면 해당 날짜 division만, 1일 대회면 전체
+      const { data: allMatches } = isMultiDay && filterDivIds.length > 0
+        ? await matchQuery.in('division_id', filterDivIds)
+        : await matchQuery
 
       for (const court of courts) {
         const q = (allMatches || [])
@@ -147,7 +158,10 @@ export default function PinMatchesPage() {
       setNotifAllowed(perm === 'granted')
       if (perm === 'granted') {
         new Notification('제주 테니스 토너먼트', { body: '경기 알림이 활성화되었습니다.', icon: '/icon.png' })
-        const pin = sessionStorage.getItem('venue_pin')
+        // ✅ pin_session에서 pin 번호 사용, 없으면 venue_pin, 없으면 token
+        const pin = session?.pin
+          || sessionStorage.getItem('venue_pin')
+          || session?.token
         if (pin) await subscribeWithPin(pin)
         else autoResubscribe()
       } else if (perm === 'denied') {
