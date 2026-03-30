@@ -31,7 +31,6 @@ export default function PinMatchesPage() {
   const [loading, setLoading]     = useState(true)
   const [msg, setMsg]             = useState('')
 
-  // 점수 입력
   const [winners, setWinners]       = useState<Record<string, 'A'|'B'|null>>({})
   const [loserScores, setLoserScores] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState<string | null>(null)
@@ -73,37 +72,38 @@ export default function PinMatchesPage() {
     const queueMap = new Map<string, CourtQueueMatch[]>()
 
     if (courts.length > 0) {
-      // ✅ 당일 경기만 필터 (뷰에 match_date 추가됨)
-      // 1. rpc 응답에 match_date 있으면 바로 사용
-      // 2. 없으면 divisions 테이블에서 1회 조회 (fallback)
-      let myDates = [...new Set(
-        myMatches.map(m => (m as any).match_date).filter(Boolean)
-      )] as string[]
+      // ✅ 당일 경기만 필터
+      // divisions 테이블에서 내 경기 날짜 조회 후 같은 날짜 경기만 포함
+      const myDivIds = [...new Set(myMatches.map(m => m.division_id).filter(Boolean))]
+      let myDates: string[] = []
 
-      if (myDates.length === 0) {
-        // fallback: 내 경기 division_id로 match_date 조회
-        const myDivIds = [...new Set(myMatches.map(m => m.division_id).filter(Boolean))]
-        if (myDivIds.length > 0) {
-          const { data: divRows } = await supabase
-            .from('divisions').select('match_date').in('id', myDivIds)
-          myDates = [...new Set(
-            (divRows || []).map((d: any) => d.match_date).filter(Boolean)
-          )] as string[]
-        }
+      if (myDivIds.length > 0) {
+        const { data: divRows } = await supabase
+          .from('divisions')
+          .select('match_date')
+          .in('id', myDivIds)
+        myDates = [...new Set(
+          (divRows || []).map((d: any) => d.match_date).filter(Boolean)
+        )] as string[]
       }
-
-      let query = supabase
-        .from('v_matches_with_teams')
-        .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id, match_date')
-        .eq('event_id', s.event_id)
-        .in('court', courts)
-        .or('score.is.null,score.neq.BYE')
-        .order('court').order('court_order')
 
       // match_date 있으면 당일만, 없으면(1일 대회) 전체
       const { data: allMatches } = myDates.length > 0
-        ? await query.in('match_date', myDates)
-        : await query
+        ? await supabase
+            .from('v_matches_with_teams')
+            .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id, match_date')
+            .eq('event_id', s.event_id)
+            .in('court', courts)
+            .in('match_date', myDates)
+            .or('score.is.null,score.neq.BYE')
+            .order('court').order('court_order')
+        : await supabase
+            .from('v_matches_with_teams')
+            .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id, match_date')
+            .eq('event_id', s.event_id)
+            .in('court', courts)
+            .or('score.is.null,score.neq.BYE')
+            .order('court').order('court_order')
 
       for (const court of courts) {
         const q = (allMatches || [])
@@ -146,10 +146,7 @@ export default function PinMatchesPage() {
       setNotifAllowed(perm === 'granted')
       if (perm === 'granted') {
         new Notification('제주 테니스 토너먼트', { body: '경기 알림이 활성화되었습니다.', icon: '/icon.png' })
-        // ✅ pin_session에서 pin 번호 사용, 없으면 venue_pin, 없으면 token
-        const pin = session?.pin
-          || sessionStorage.getItem('venue_pin')
-          || session?.token
+        const pin = session?.pin || sessionStorage.getItem('venue_pin') || session?.token
         if (pin) await subscribeWithPin(pin)
         else autoResubscribe()
       } else if (perm === 'denied') {
@@ -158,25 +155,19 @@ export default function PinMatchesPage() {
     } catch { setNotifAllowed(false) }
   }
 
-  // ✅ 승리팀 선택
   function selectWinner(matchId: string, side: 'A' | 'B') {
     setWinners(prev => ({ ...prev, [matchId]: side }))
     setLoserScores(prev => ({ ...prev, [matchId]: '' }))
     setMsg('')
   }
 
-  // ✅ 점수 제출 — 승리팀 6, 패배팀 입력값 → "6:X" 또는 "X:6"
   async function submitScore(matchId: string, match: PinMatch) {
     const winner = winners[matchId]
     const loser  = loserScores[matchId]?.trim()
-
     if (!winner) { setMsg('먼저 승리팀을 선택해주세요.'); return }
     if (!loser)  { setMsg('상대팀 점수를 입력해주세요. (예: 4)'); return }
     if (!/^\d+$/.test(loser)) { setMsg('숫자만 입력해주세요.'); return }
-
-    // 승리팀 6, 패배팀 loser — 예: 승리=A이면 "6:4"
     const score = winner === 'A' ? `6:${loser}` : `${loser}:6`
-
     setSubmitting(matchId); setMsg('')
     const { error } = await supabase.rpc('rpc_pin_submit_score', {
       p_token: session.token, p_match_id: matchId, p_score: score,
@@ -219,7 +210,6 @@ export default function PinMatchesPage() {
     )
   }
 
-  // ── 라운드별 그룹핑
   const byRound = matches.reduce<Record<string, PinMatch[]>>((acc, m) => {
     const key = m.round || 'group'
     if (!acc[key]) acc[key] = []
@@ -230,12 +220,11 @@ export default function PinMatchesPage() {
 
   return (
     <div className="min-h-screen bg-stone-50">
-      {/* 헤더 */}
       <header className="bg-[#2d5016] text-white sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
           <div>
             <div className="font-bold text-base">{session?.team_name}</div>
-            <div className="text-xs text-white/60">{session?.division_name} · 내 경기</div>
+            <div className="text-xs text-white/60">{session?.division} · 내 경기</div>
           </div>
           <div className="flex items-center gap-3">
             <NotifButton />
@@ -266,26 +255,24 @@ export default function PinMatchesPage() {
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-1 h-5 bg-[#2d5016] rounded-full" />
                   <h2 className="text-sm font-bold text-stone-700">{ROUND_LABEL[round] || round}</h2>
-
                 </div>
                 <div className="space-y-3">
                   {byRound[round].map(m => {
-                    const isLive  = m.status === 'IN_PROGRESS'
-                    const isDone  = m.status === 'FINISHED'
+                    const isLive   = m.status === 'IN_PROGRESS'
+                    const isDone   = m.status === 'FINISHED'
                     const canInput = isLive && !m.locked_by_participant
-                    const queue   = m.court ? courtQueues.get(m.court) || [] : []
-                    const winner  = winners[m.id]
-                    const loser   = loserScores[m.id] || ''
+                    const queue    = m.court ? courtQueues.get(m.court) || [] : []
+                    const showQueue = m.court && queue.length > 0 && !isDone
+                    const winner   = winners[m.id]
+                    const loser    = loserScores[m.id] || ''
 
                     return (
                       <div key={m.id} className={`bg-white rounded-2xl border overflow-hidden shadow-sm ${isLive ? 'border-red-200' : 'border-stone-200'}`}>
-                        {/* 코트 대기열 */}
-                        {m.court && queue.length > 0 && (
-                          <CourtQueue queue={queue} myMatchId={m.id} court={m.court} />
+                        {showQueue && (
+                          <CourtQueue queue={queue} myMatchId={m.id} court={m.court!} />
                         )}
 
                         <div className="p-4">
-                          {/* 메타 */}
                           <div className="flex items-center justify-between mb-3">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="text-xs text-stone-400">{m.match_num}</span>
@@ -301,7 +288,6 @@ export default function PinMatchesPage() {
                             )}
                           </div>
 
-                          {/* 팀 vs 팀 */}
                           <div className="flex items-center justify-center gap-3 mb-4">
                             <div className={`text-center flex-1 ${m.my_side === 'A' ? 'font-bold' : ''}`}>
                               <div className={`text-sm ${m.my_side === 'A' ? 'text-[#2d5016]' : 'text-stone-700'}`}>{m.team_a_name}</div>
@@ -322,7 +308,6 @@ export default function PinMatchesPage() {
                             </div>
                           </div>
 
-                          {/* ── 점수 입력 영역 ── */}
                           {isDone && m.locked_by_participant && (
                             <div className="flex items-center justify-center gap-2 py-2.5 bg-stone-50 rounded-xl">
                               <span className="text-stone-400 text-sm">✅ 점수 제출 완료</span>
@@ -339,64 +324,44 @@ export default function PinMatchesPage() {
                                 ① 승리팀 선택 → ② 상대팀 점수 입력 → ③ 제출<br />
                                 <span className="text-amber-600 font-medium">점수 제출 후 수정 불가</span>
                               </p>
-
-                              {/* ① 승리팀 선택 버튼 */}
                               <div className="grid grid-cols-2 gap-2">
-                                <button
-                                  onClick={() => selectWinner(m.id, 'A')}
+                                <button onClick={() => selectWinner(m.id, 'A')}
                                   className={`py-3 px-3 rounded-xl border-2 text-sm font-bold transition-all ${
-                                    winner === 'A'
-                                      ? 'border-[#2d5016] bg-[#2d5016] text-white'
-                                      : 'border-stone-200 bg-stone-50 text-stone-700 hover:border-[#2d5016]/40'
+                                    winner === 'A' ? 'border-[#2d5016] bg-[#2d5016] text-white' : 'border-stone-200 bg-stone-50 text-stone-700 hover:border-[#2d5016]/40'
                                   }`}>
                                   🏆 {m.team_a_name}
                                 </button>
-                                <button
-                                  onClick={() => selectWinner(m.id, 'B')}
+                                <button onClick={() => selectWinner(m.id, 'B')}
                                   className={`py-3 px-3 rounded-xl border-2 text-sm font-bold transition-all ${
-                                    winner === 'B'
-                                      ? 'border-[#2d5016] bg-[#2d5016] text-white'
-                                      : 'border-stone-200 bg-stone-50 text-stone-700 hover:border-[#2d5016]/40'
+                                    winner === 'B' ? 'border-[#2d5016] bg-[#2d5016] text-white' : 'border-stone-200 bg-stone-50 text-stone-700 hover:border-[#2d5016]/40'
                                   }`}>
                                   🏆 {m.team_b_name}
                                 </button>
                               </div>
-
-                              {/* ② 점수 입력 — 승리팀 선택 후에만 표시 */}
                               {winner && (
                                 <div className="bg-stone-50 rounded-xl p-3">
-                                  {/* 점수 미리보기 */}
                                   <div className="flex items-center justify-center gap-3 mb-3">
                                     <span className={`text-sm font-bold ${winner === 'A' ? 'text-[#2d5016]' : 'text-stone-400'}`}>
                                       {winner === 'A' ? m.team_a_name : m.team_b_name}
                                     </span>
-                                    <span className="text-xl font-black text-stone-700">
-                                      6 : {loser || '?'}
-                                    </span>
+                                    <span className="text-xl font-black text-stone-700">6 : {loser || '?'}</span>
                                     <span className={`text-sm font-bold ${winner === 'B' ? 'text-[#2d5016]' : 'text-stone-400'}`}>
                                       {winner === 'B' ? m.team_a_name : m.team_b_name}
                                     </span>
                                   </div>
-                                  <p className="text-xs text-stone-400 text-center mb-2">
-                                    패배팀 점수 입력 (승리팀은 항상 6)
-                                  </p>
+                                  <p className="text-xs text-stone-400 text-center mb-2">패배팀 점수 입력 (승리팀은 항상 6)</p>
                                   <div className="flex gap-2">
-                                    <input
-                                      type="number" inputMode="numeric" min="0" max="5"
-                                      placeholder="0~5"
+                                    <input type="number" inputMode="numeric" min="0" max="5" placeholder="0~5"
                                       value={loser}
                                       onChange={e => setLoserScores(prev => ({ ...prev, [m.id]: e.target.value }))}
                                       onKeyDown={e => e.key === 'Enter' && submitScore(m.id, m)}
-                                      className="flex-1 border-2 border-amber-300 rounded-xl px-4 py-3 text-center text-2xl font-bold focus:outline-none focus:border-amber-500"
-                                    />
-                                    <button
-                                      onClick={() => submitScore(m.id, m)}
+                                      className="flex-1 border-2 border-amber-300 rounded-xl px-4 py-3 text-center text-2xl font-bold focus:outline-none focus:border-amber-500" />
+                                    <button onClick={() => submitScore(m.id, m)}
                                       disabled={submitting === m.id || !loser.trim()}
                                       className="bg-amber-500 text-white font-bold px-6 py-3 rounded-xl hover:bg-amber-600 disabled:opacity-50 transition-all whitespace-nowrap text-sm">
                                       {submitting === m.id ? '...' : '제출'}
                                     </button>
                                   </div>
-                                  {/* 최종 점수 확인 */}
                                   {loser && (
                                     <div className="mt-2 text-center text-xs text-stone-500">
                                       최종 점수: <span className="font-bold text-stone-700">
@@ -411,7 +376,9 @@ export default function PinMatchesPage() {
                           )}
 
                           {!isDone && !isLive && (
-                            <div className="text-center py-2 text-xs text-stone-400">⏳ 경기 대기중 — 진행중이 되면 점수 입력 가능</div>
+                            <div className="text-center py-2 text-xs text-stone-400">
+                              ⏳ 경기 대기중 — 진행중이 되면 점수 입력 가능
+                            </div>
                           )}
                         </div>
                       </div>
@@ -427,7 +394,6 @@ export default function PinMatchesPage() {
   )
 }
 
-// ── 코트 대기열 슬라이딩 윈도우
 function CourtQueue({ queue, myMatchId, court }: {
   queue: CourtQueueMatch[]; myMatchId: string; court: string
 }) {
@@ -439,22 +405,18 @@ function CourtQueue({ queue, myMatchId, court }: {
   const myIdx   = queue.findIndex(m => m.id === myMatchId)
   const remaining = curIdx >= 0 && myIdx >= 0 ? Math.max(0, myIdx - curIdx) : 0
 
-  // ✅ IN_PROGRESS 있고 remaining=0 → 내가 IN_PROGRESS = 현재 경기 중
-  //    IN_PROGRESS 없고 remaining=0 → 내가 firstPending = 지금 내 차례
-  //    IN_PROGRESS 있고 remaining=1 → 다음 대기
   const iAmLive = liveIdx >= 0 && myIdx === liveIdx
   const cfg =
-    iAmLive       ? { bg:'bg-red-50',    text:'text-red-700',   emoji:'🔴', label:'지금 경기 중!' } :
+    iAmLive         ? { bg:'bg-red-50',    text:'text-red-700',   emoji:'🔴', label:'지금 경기 중!' } :
     remaining === 0 && liveIdx < 0
-                  ? { bg:'bg-red-50',    text:'text-red-700',   emoji:'🔴', label:'지금 내 차례!' } :
+                    ? { bg:'bg-red-50',    text:'text-red-700',   emoji:'🔴', label:'지금 내 차례!' } :
     remaining === 0 && liveIdx >= 0
-                  ? { bg:'bg-amber-50',  text:'text-amber-700', emoji:'🟡', label:'다음 경기 — 준비해주세요!' } :
-    remaining === 1 ? { bg:'bg-amber-50', text:'text-amber-700', emoji:'🟡', label:'다음 경기 — 준비해주세요!' } :
-    remaining === 2 ? { bg:'bg-green-50', text:'text-green-700', emoji:'🟢', label:`앞에 ${remaining}경기 남음` } :
-                      { bg:'bg-stone-50', text:'text-stone-500', emoji:'⏳', label:`앞에 ${remaining}경기 남음` }
+                    ? { bg:'bg-amber-50',  text:'text-amber-700', emoji:'🟡', label:'다음 경기 — 준비해주세요!' } :
+    remaining === 1 ? { bg:'bg-amber-50',  text:'text-amber-700', emoji:'🟡', label:'다음 경기 — 준비해주세요!' } :
+    remaining === 2 ? { bg:'bg-green-50',  text:'text-green-700', emoji:'🟢', label:`앞에 ${remaining}경기 남음` } :
+                      { bg:'bg-stone-50',  text:'text-stone-500', emoji:'⏳', label:`앞에 ${remaining}경기 남음` }
 
-  const hiddenBetween = myIdx > curIdx + 1 ? myIdx - curIdx - 1 : 0
-  const currentMatch  = curIdx >= 0 ? queue[curIdx] : null
+  const currentMatch = curIdx >= 0 && !iAmLive ? queue[curIdx] : null
 
   return (
     <div className={`${cfg.bg} border-b border-stone-100`}>
@@ -482,9 +444,6 @@ function CourtQueue({ queue, myMatchId, court }: {
             const isLive = q.status === 'IN_PROGRESS'
             const isMe   = q.id === myMatchId
             const badge  = isDone ? '✅' : isLive ? '🔴' : i === curIdx ? '🔴' : i === curIdx + 1 ? '🟡' : i === curIdx + 2 ? '🟢' : ''
-            // ✅ 전체보기 시 FINISHED도 표시, 비전체보기 시 중간 생략
-            if (!expanded && isDone) return null
-            if (!expanded && i > curIdx && i < myIdx - 1) return null
             return (
               <div key={q.id} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs ${
                 isMe   ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' :
@@ -499,9 +458,6 @@ function CourtQueue({ queue, myMatchId, court }: {
               </div>
             )
           })}
-          {!expanded && hiddenBetween > 0 && (
-            <div className="text-xs text-stone-400 text-center py-1">... {hiddenBetween}경기 대기 중</div>
-          )}
         </div>
       )}
     </div>
