@@ -89,11 +89,29 @@ export default function VenueManagePage() {
 
   const divisionNames = Array.from(new Set(dateFilteredMatches.map(m => m.division_name).filter(Boolean)))
 
-  const myCourts: string[] = session?.courts || []
+  // ✅ 핵심 수정: myCourts와 실제 배정된 court를 union해서 누락 방지
+  const sessionCourts: string[] = session?.courts || []
+  const assignedCourts = Array.from(
+    new Set(dateFilteredMatches.map(m => m.court).filter(Boolean))
+  ) as string[]
+  // sessionCourts 순서 유지 + 거기 없는 배정된 court 추가
+  const myCourts: string[] = [
+    ...sessionCourts,
+    ...assignedCourts.filter(c => !sessionCourts.includes(c)),
+  ]
+
   const byCourt = new Map<string, VenueMatch[]>()
   for (const c of myCourts) byCourt.set(c, [])
   for (const m of dateFilteredMatches) {
-    if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m)
+    if (m.court) {
+      if (byCourt.has(m.court)) {
+        byCourt.get(m.court)!.push(m)
+      } else {
+        // 혹시 myCourts에도 없는 court가 있으면 동적 추가
+        byCourt.set(m.court, [m])
+        if (!myCourts.includes(m.court)) myCourts.push(m.court)
+      }
+    }
   }
 
   const allUnassigned = dateFilteredMatches.filter(m => !m.court && m.status !== 'FINISHED')
@@ -191,7 +209,7 @@ export default function VenueManagePage() {
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div>
             <h1 className="font-bold text-lg">{session.venue_name}</h1>
-            <p className="text-xs text-white/70">{session.courts?.join(', ')} · {lastUpdate.toLocaleTimeString('ko-KR')}</p>
+            <p className="text-xs text-white/70">{myCourts.join(', ')} · {lastUpdate.toLocaleTimeString('ko-KR')}</p>
           </div>
           <button onClick={handleLogout} className="text-xs text-white/70 hover:text-white">로그아웃</button>
         </div>
@@ -240,105 +258,118 @@ export default function VenueManagePage() {
         {loading ? (
           <p className="text-center py-10 text-stone-400">불러오는 중...</p>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-            {/* 미배정 */}
-            <div className="lg:col-span-1" data-unassigned onDragOver={handleDragOver} onDrop={handleDropOnUnassigned}>
-              <div className="bg-white rounded-xl border overflow-hidden">
-                <div className="bg-stone-500 text-white px-4 py-2 font-bold text-sm">미배정 ({unassigned.length})</div>
-                <div className="p-1.5 space-y-1 max-h-[70vh] overflow-y-auto">
-                  {unassigned.map(m => (
-                    <MatchChip key={m.id} m={m} onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)} />
-                  ))}
-                  {unassigned.length === 0 && <div className="text-xs text-stone-300 text-center py-6">없음</div>}
+          <>
+            {/* ✅ 코트표가 비어있을 때 진단 메시지 */}
+            {myCourts.length === 0 && (
+              <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-700">
+                ⚠️ 배정된 코트 정보가 없습니다. 관리자에게 코트 배정을 요청하세요.
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+              {/* 미배정 */}
+              <div className="lg:col-span-1" data-unassigned onDragOver={handleDragOver} onDrop={handleDropOnUnassigned}>
+                <div className="bg-white rounded-xl border overflow-hidden">
+                  <div className="bg-stone-500 text-white px-4 py-2 font-bold text-sm">
+                    미배정 ({unassigned.length})
+                  </div>
+                  <div className="p-1.5 space-y-1 max-h-[70vh] overflow-y-auto">
+                    {unassigned.map(m => (
+                      <MatchChip key={m.id} m={m} onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)} />
+                    ))}
+                    {unassigned.length === 0 && (
+                      <div className="text-xs text-stone-300 text-center py-6">없음</div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* 코트 */}
-            <div className="lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {myCourts.map(court => {
-                const courtMatches = (byCourt.get(court) || []).sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
-                const finished   = courtMatches.filter(m => m.status === 'FINISHED').length
-                const currentIdx = courtMatches.findIndex(m => m.status === 'IN_PROGRESS')
-                const pendingIdx = courtMatches.findIndex(m => m.status === 'PENDING')
-                const activeIdx  = currentIdx >= 0 ? currentIdx : pendingIdx
-                const isLive     = currentIdx >= 0
+              {/* 코트 카드들 */}
+              <div className="lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {myCourts.map(court => {
+                  const courtMatches = (byCourt.get(court) || []).sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
+                  const finished    = courtMatches.filter(m => m.status === 'FINISHED').length
+                  const currentIdx  = courtMatches.findIndex(m => m.status === 'IN_PROGRESS')
+                  const pendingIdx  = courtMatches.findIndex(m => m.status === 'PENDING')
+                  const activeIdx   = currentIdx >= 0 ? currentIdx : pendingIdx
+                  const isLive      = currentIdx >= 0
 
-                return (
-                  <div key={court} onDragOver={handleDragOver} onDrop={() => handleDropOnCourt(court)}
-                    className="bg-white rounded-xl border overflow-hidden">
-                    <div className={`px-4 py-3 flex items-center justify-between ${isLive ? 'bg-red-700' : 'bg-[#2d5016]'} text-white`}>
-                      <div>
-                        <span className="font-bold">{court}</span>
-                        {isLive && <span className="ml-2 text-xs bg-white/20 px-2 py-0.5 rounded-full animate-pulse">LIVE</span>}
+                  return (
+                    <div key={court} onDragOver={handleDragOver} onDrop={() => handleDropOnCourt(court)}
+                      className="bg-white rounded-xl border overflow-hidden">
+                      <div className={`px-4 py-3 flex items-center justify-between ${isLive ? 'bg-red-700' : 'bg-[#2d5016]'} text-white`}>
+                        <div className="flex items-center gap-2 min-w-0">
+                          {/* ✅ 코트명 줄임 방지 */}
+                          <span className="font-bold truncate max-w-[120px]">{court}</span>
+                          {isLive && <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full animate-pulse flex-shrink-0">LIVE</span>}
+                        </div>
+                        <span className="text-white/60 text-sm flex-shrink-0">{finished}/{courtMatches.length}</span>
                       </div>
-                      <span className="text-white/60 text-sm">{finished}/{courtMatches.length}</span>
-                    </div>
-                    <div className="p-2 space-y-1">
-                      {courtMatches.map((m, i) => {
-                        let badge = ''
-                        let badgeColor = ''
-                        if (m.status === 'IN_PROGRESS') { badge = '진행중'; badgeColor = 'bg-red-50 border-red-200' }
-                        else if (m.status === 'FINISHED') { badgeColor = m.is_team_tie ? 'bg-blue-50 border-blue-200' : 'bg-green-50 border-green-200' }
-                        else if (activeIdx >= 0 && i === activeIdx) { badge = '현재'; badgeColor = 'bg-red-50 border-red-200' }
-                        else if (activeIdx >= 0 && i === activeIdx + 1) { badge = '다음'; badgeColor = 'bg-amber-50 border-amber-200' }
-                        else if (activeIdx >= 0 && i === activeIdx + 2) { badge = '대기'; badgeColor = 'bg-green-50 border-green-200' }
+                      <div className="p-2 space-y-1">
+                        {courtMatches.map((m, i) => {
+                          let badge = ''
+                          let badgeColor = ''
+                          if (m.status === 'IN_PROGRESS') { badge = '진행중'; badgeColor = 'bg-red-50 border-red-200' }
+                          else if (m.status === 'FINISHED') { badgeColor = m.is_team_tie ? 'bg-blue-50 border-blue-200' : 'bg-green-50 border-green-200' }
+                          else if (activeIdx >= 0 && i === activeIdx)     { badge = '현재'; badgeColor = 'bg-red-50 border-red-200' }
+                          else if (activeIdx >= 0 && i === activeIdx + 1) { badge = '다음'; badgeColor = 'bg-amber-50 border-amber-200' }
+                          else if (activeIdx >= 0 && i === activeIdx + 2) { badge = '대기'; badgeColor = 'bg-green-50 border-green-200' }
 
-                        const firstPendingIdx = courtMatches.findIndex(mm => mm.status === 'PENDING')
-                        const canStart = !m.is_team_tie && m.status === 'PENDING' && i === firstPendingIdx
+                          const firstPendingIdx = courtMatches.findIndex(mm => mm.status === 'PENDING')
+                          const canStart = !m.is_team_tie && m.status === 'PENDING' && i === firstPendingIdx
 
-                        return (
-                          <div key={m.id} draggable onDragStart={() => setDragMatch(m.id)}
-                            className={`rounded-lg border p-2.5 cursor-grab active:cursor-grabbing transition-all ${badgeColor || (m.is_team_tie ? 'border-blue-200' : 'border-stone-200')}`}>
-                            <div className="flex items-center justify-between mb-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs text-stone-400 font-bold">#{m.court_order}</span>
-                                {m.is_team_tie && <span className="text-[10px] bg-blue-600 text-white px-1 rounded">단체</span>}
-                                {badge && <span className="text-xs font-bold">{badge}</span>}
-                                <span className="text-xs text-stone-400">{m.division_name} {m.round}</span>
+                          return (
+                            <div key={m.id} draggable onDragStart={() => setDragMatch(m.id)}
+                              className={`rounded-lg border p-2.5 cursor-grab active:cursor-grabbing transition-all ${badgeColor || (m.is_team_tie ? 'border-blue-200' : 'border-stone-200')}`}>
+                              <div className="flex items-center justify-between mb-1">
+                                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                  <span className="text-xs text-stone-400 font-bold flex-shrink-0">#{m.court_order}</span>
+                                  {m.is_team_tie && <span className="text-[10px] bg-blue-600 text-white px-1 rounded flex-shrink-0">단체</span>}
+                                  {badge && <span className="text-xs font-bold flex-shrink-0">{badge}</span>}
+                                  <span className="text-xs text-stone-400 truncate">{m.division_name} {m.round}</span>
+                                </div>
+                                <div className="flex items-center gap-1 flex-shrink-0">
+                                  {canStart && (
+                                    <button onClick={() => startMatch(m.id)}
+                                      className="text-xs bg-red-500 text-white px-2 py-0.5 rounded hover:bg-red-600">시작</button>
+                                  )}
+                                  {!m.is_team_tie && (
+                                    <button onClick={() => openScoreEdit(m)}
+                                      className="text-xs text-stone-400 hover:text-blue-500">✏</button>
+                                  )}
+                                  <button onClick={() => unassignFromCourt(m.id, !!m.is_team_tie)}
+                                    className="text-xs text-stone-400 hover:text-red-500">✕</button>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-1">
-                                {canStart && (
-                                  <button onClick={() => startMatch(m.id)}
-                                    className="text-xs bg-red-500 text-white px-2 py-0.5 rounded hover:bg-red-600">시작</button>
-                                )}
-                                {!m.is_team_tie && (
-                                  <button onClick={() => openScoreEdit(m)}
-                                    className="text-xs text-stone-400 hover:text-blue-500">✏</button>
-                                )}
-                                <button onClick={() => unassignFromCourt(m.id, !!m.is_team_tie)}
-                                  className="text-xs text-stone-400 hover:text-red-500">✕</button>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <div className="flex-1 min-w-0">
-                                <div className={`text-sm truncate ${m.winner_team_id === m.team_a_id ? (m.is_team_tie ? 'font-bold text-blue-700' : 'font-bold text-green-700') : 'font-medium'}`}>
+                              {/* ✅ 팀명 2줄 표시 (truncate 제거, 줄바꿈 허용) */}
+                              <div className="space-y-0.5">
+                                <div className={`text-sm font-medium leading-tight ${m.winner_team_id === m.team_a_id ? (m.is_team_tie ? 'font-bold text-blue-700' : 'font-bold text-green-700') : ''}`}>
                                   {m.team_a_name || 'TBD'}
                                 </div>
                                 <div className="text-xs text-stone-300">vs</div>
-                                <div className={`text-sm truncate ${m.winner_team_id === m.team_b_id ? (m.is_team_tie ? 'font-bold text-blue-700' : 'font-bold text-green-700') : 'font-medium'}`}>
+                                <div className={`text-sm font-medium leading-tight ${m.winner_team_id === m.team_b_id ? (m.is_team_tie ? 'font-bold text-blue-700' : 'font-bold text-green-700') : ''}`}>
                                   {m.team_b_name || 'TBD'}
                                 </div>
                               </div>
                               {m.status === 'FINISHED' && m.score && (
-                                <div className={`text-lg font-bold ${m.is_team_tie ? 'text-blue-600' : 'text-green-600'}`}>{m.score}</div>
+                                <div className={`mt-1 text-base font-bold ${m.is_team_tie ? 'text-blue-600' : 'text-green-600'}`}>{m.score}</div>
                               )}
                             </div>
+                          )
+                        })}
+                        {courtMatches.length === 0 && (
+                          <div className="text-center py-8 text-stone-300 border-2 border-dashed rounded-lg">
+                            <div className="text-2xl mb-1">🎾</div>
+                            <div className="text-xs">경기를 배정해주세요</div>
                           </div>
-                        )
-                      })}
-                      {courtMatches.length === 0 && (
-                        <div className="text-center py-8 text-stone-300 border-2 border-dashed rounded-lg">
-                          <div className="text-2xl mb-1">🎾</div>
-                          <div className="text-xs">경기를 배정해주세요</div>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )
-              })}
+                  )
+                })}
+              </div>
             </div>
-          </div>
+          </>
         )}
       </main>
 
@@ -403,13 +434,14 @@ function MatchChip({ m, onDragStart, onClickScore }: {
         m.is_team_tie ? 'bg-blue-50 border-blue-200 hover:border-blue-300' : 'bg-white border-stone-200 hover:border-stone-300'
       }`}>
       <div className="flex items-center gap-1 mb-1">
-        {m.is_team_tie && <span className="bg-blue-600 text-white text-[9px] px-1 rounded">단체</span>}
+        {m.is_team_tie && <span className="bg-blue-600 text-white text-[9px] px-1 rounded flex-shrink-0">단체</span>}
         <span className="text-stone-400 truncate flex-1">{m.division_name} · {m.round}</span>
         {!m.is_team_tie && (
-          <button onClick={e => { e.stopPropagation(); onClickScore() }} className="text-stone-300 hover:text-blue-500">✏</button>
+          <button onClick={e => { e.stopPropagation(); onClickScore() }} className="text-stone-300 hover:text-blue-500 flex-shrink-0">✏</button>
         )}
       </div>
-      <div className="font-medium truncate">{m.team_a_name} <span className="text-stone-300">vs</span> {m.team_b_name}</div>
+      {/* ✅ 팀명 줄바꿈 허용 */}
+      <div className="font-medium leading-tight">{m.team_a_name} <span className="text-stone-300">vs</span> {m.team_b_name}</div>
     </div>
   )
 }
