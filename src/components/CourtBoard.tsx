@@ -22,6 +22,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
   const [showSugg, setShowSugg]     = useState(false)
   const [searchResult, setResult]   = useState<{ name: string; court: string; idx: number } | null>(null)
   const [dateFilter, setDateFilter] = useState<string>('ALL')
+  const [venueFilter, setVenueFilter] = useState<string>('ALL')  // ✅ 장소 필터
   const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({})
   const inputRef = useRef<HTMLInputElement>(null)
   const suggRef  = useRef<HTMLDivElement>(null)
@@ -108,11 +109,16 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     if (!byCourt.has(m.court)) byCourt.set(m.court, [])
     byCourt.get(m.court)!.push(m)
   }
-  const courts = Array.from(byCourt.keys()).sort((a, b) => {
+  const allCourts = Array.from(byCourt.keys()).sort((a, b) => {
     const na = parseInt(a.replace(/\D/g, '')) || 0
     const nb = parseInt(b.replace(/\D/g, '')) || 0
     return na - nb
   })
+  // ✅ 장소명 추출 (예: '제대-1' → '제대', '한라-3' → '한라')
+  const getVenueName = (court: string) => court.includes('-') ? court.split('-').slice(0, -1).join('-') : court
+  const allVenues = [...new Set(allCourts.map(getVenueName))].sort()
+  // ✅ 장소 필터 적용
+  const courts = venueFilter === 'ALL' ? allCourts : allCourts.filter(c => getVenueName(c) === venueFilter)
 
   // 전체 팀명 목록
   const allTeams = Array.from(new Set(
@@ -212,7 +218,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
                   .filter(([, d]) => d === date)
                   .map(([id]) => id)
                 return (
-                  <button key={date} onClick={() => setDateFilter(date)}
+                  <button key={date} onClick={() => { setDateFilter(date); setVenueFilter('ALL') }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${dateFilter === date ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-stone-600 border-stone-300 hover:border-blue-400'}`}>
                     {label} <span className="opacity-70">({divsOnDate.length}부문)</span>
                   </button>
@@ -222,6 +228,25 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
           </div>
         )
       })()}
+
+      {/* ✅ 장소 선택 탭 (장소가 2개 이상일 때만 표시) */}
+      {allVenues.length > 1 && (
+        <div className="bg-white rounded-xl border p-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-stone-500 font-medium whitespace-nowrap">📍 장소:</span>
+            <button onClick={() => setVenueFilter('ALL')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${venueFilter === 'ALL' ? 'bg-[#2d5016] text-white border-[#2d5016]' : 'bg-white text-stone-600 border-stone-300 hover:border-[#2d5016]'}`}>
+              전체
+            </button>
+            {allVenues.map(venue => (
+              <button key={venue} onClick={() => setVenueFilter(venue)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${venueFilter === venue ? 'bg-[#2d5016] text-white border-[#2d5016]' : 'bg-white text-stone-600 border-stone-300 hover:border-[#2d5016]'}`}>
+                {venue}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 이름 검색 */}
       <div className="bg-white rounded-xl border p-4">
