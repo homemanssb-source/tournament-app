@@ -68,18 +68,45 @@ export default function PinMatchesPage() {
     const myMatches: PinMatch[] = data.matches || []
     setMatches(myMatches)
 
-    // ✅ 코트에 배정된 경기 = 이미 당일 경기
-    // 운영자가 날짜별로 코트 배정하므로 날짜/부서 필터 불필요
     const courts = [...new Set(myMatches.map(m => m.court).filter(Boolean))] as string[]
     const queueMap = new Map<string, CourtQueueMatch[]>()
 
     if (courts.length > 0) {
+      // ✅ 내 경기 division_id로 당일 날짜 파악 → 같은 날짜 division_id 목록 수집
+      // v_matches_with_teams에 match_date 없으므로 divisions 테이블에서 조회
+      const myDivisionIds = [...new Set(myMatches.map(m => m.division_id).filter(Boolean))]
+
+      // 내 부서들의 match_date 조회
+      const { data: myDivRows } = await supabase
+        .from('divisions')
+        .select('id, match_date')
+        .in('id', myDivisionIds)
+
+      // 내 경기 날짜 목록
+      const myDates = [...new Set(
+        (myDivRows || []).map((d: any) => d.match_date).filter(Boolean)
+      )] as string[]
+
+      // 같은 날짜의 모든 division_id 수집 (코트는 부서 무관 공용)
+      let sameDayDivIds: string[] = myDivisionIds  // fallback: 내 부서만
+      if (myDates.length > 0) {
+        const { data: sameDayDivs } = await supabase
+          .from('divisions')
+          .select('id')
+          .eq('event_id', s.event_id)
+          .in('match_date', myDates)
+        if (sameDayDivs && sameDayDivs.length > 0) {
+          sameDayDivIds = sameDayDivs.map((d: any) => d.id)
+        }
+      }
+
       const { data: allMatches } = await supabase
         .from('v_matches_with_teams')
         .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id')
         .eq('event_id', s.event_id)
         .in('court', courts)
-        .or('score.is.null,score.neq.BYE')   // ✅ NULL score(PENDING) 포함, BYE만 제외
+        .in('division_id', sameDayDivIds)
+        .or('score.is.null,score.neq.BYE')
         .order('court').order('court_order')
 
       for (const court of courts) {
