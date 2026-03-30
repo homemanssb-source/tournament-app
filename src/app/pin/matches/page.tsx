@@ -70,6 +70,7 @@ export default function PinMatchesPage() {
     const myMatches: PinMatch[] = data.matches || []
     setMatches(myMatches)
 
+    let divDateMap: Record<string, string> = {}
     // ✅ 부서별 날짜 로드
     if (s.event_id) {
       try {
@@ -83,7 +84,6 @@ export default function PinMatchesPage() {
       } catch {}
     }
 
-    let divDateMap: Record<string, string> = {}
     const courts = [...new Set(myMatches.map(m => m.court).filter(Boolean))] as string[]
     const queueMap = new Map<string, CourtQueueMatch[]>()
 
