@@ -78,19 +78,31 @@ export default function PinMatchesPage() {
           const map: Record<string, string> = {}
           divs.forEach((d: any) => { if (d.match_date) map[d.id] = d.match_date })
           setDivDates(map)
+          divDateMap = map  // 로컬 변수에도 저장 (아래 queue 로드 시 사용)
         }
       } catch {}
     }
 
+    let divDateMap: Record<string, string> = {}
     const courts = [...new Set(myMatches.map(m => m.court).filter(Boolean))] as string[]
     const queueMap = new Map<string, CourtQueueMatch[]>()
 
     if (courts.length > 0) {
+      // ✅ 내 경기와 같은 날짜의 모든 division_id 포함 (다른 날짜 경기 섞임 방지)
+      // 코트는 여러 부서가 공용이므로 같은 날짜 다른 부서 경기도 포함해야 정확한 순서 계산 가능
+      const myDivIds = [...new Set(myMatches.map((m: PinMatch) => m.division_id).filter(Boolean))]
+      // 내 부서들의 날짜를 확인해서 같은 날짜 division_id 전체를 수집
+      const myDates = [...new Set(myDivIds.map(id => divDateMap[id]).filter(Boolean))]
+      const sameDayDivIds = Object.entries(divDateMap)
+        .filter(([, d]) => myDates.includes(d)).map(([id]) => id)
+      const filterDivIds = sameDayDivIds.length > 0 ? sameDayDivIds : myDivIds
+
       const { data: allMatches } = await supabase
         .from('v_matches_with_teams')
-        .select('id, court, court_order, status, team_a_name, team_b_name, division_name')
+        .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id')
         .eq('event_id', s.event_id)
         .in('court', courts)
+        .in('division_id', filterDivIds)
         .neq('score', 'BYE')
         .order('court').order('court_order')
 
@@ -437,8 +449,16 @@ function CourtQueue({ queue, myMatchId, court }: {
   const myIdx   = queue.findIndex(m => m.id === myMatchId)
   const remaining = curIdx >= 0 && myIdx >= 0 ? Math.max(0, myIdx - curIdx) : 0
 
+  // ✅ IN_PROGRESS 있고 remaining=0 → 내가 IN_PROGRESS = 현재 경기 중
+  //    IN_PROGRESS 없고 remaining=0 → 내가 firstPending = 지금 내 차례
+  //    IN_PROGRESS 있고 remaining=1 → 다음 대기
+  const iAmLive = liveIdx >= 0 && myIdx === liveIdx
   const cfg =
-    remaining === 0 ? { bg:'bg-red-50',   text:'text-red-700',   emoji:'🔴', label:'지금 내 차례!' } :
+    iAmLive       ? { bg:'bg-red-50',    text:'text-red-700',   emoji:'🔴', label:'지금 경기 중!' } :
+    remaining === 0 && liveIdx < 0
+                  ? { bg:'bg-red-50',    text:'text-red-700',   emoji:'🔴', label:'지금 내 차례!' } :
+    remaining === 0 && liveIdx >= 0
+                  ? { bg:'bg-amber-50',  text:'text-amber-700', emoji:'🟡', label:'다음 경기 — 준비해주세요!' } :
     remaining === 1 ? { bg:'bg-amber-50', text:'text-amber-700', emoji:'🟡', label:'다음 경기 — 준비해주세요!' } :
     remaining === 2 ? { bg:'bg-green-50', text:'text-green-700', emoji:'🟢', label:`앞에 ${remaining}경기 남음` } :
                       { bg:'bg-stone-50', text:'text-stone-500', emoji:'⏳', label:`앞에 ${remaining}경기 남음` }
@@ -471,19 +491,21 @@ function CourtQueue({ queue, myMatchId, court }: {
             const isDone = q.status === 'FINISHED'
             const isLive = q.status === 'IN_PROGRESS'
             const isMe   = q.id === myMatchId
-            const badge  = isLive ? '🔴' : i === curIdx ? '🔴' : i === curIdx + 1 ? '🟡' : i === curIdx + 2 ? '🟢' : ''
-            if (isDone) return null
+            const badge  = isDone ? '✅' : isLive ? '🔴' : i === curIdx ? '🔴' : i === curIdx + 1 ? '🟡' : i === curIdx + 2 ? '🟢' : ''
+            // ✅ 전체보기 시 FINISHED도 표시, 비전체보기 시 중간 생략
+            if (!expanded && isDone) return null
             if (!expanded && i > curIdx && i < myIdx - 1) return null
             return (
               <div key={q.id} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs ${
-                isMe   ? 'bg-blue-50 text-blue-700 font-bold' :
+                isMe   ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' :
                 isLive ? 'bg-red-50 text-red-700' :
+                isDone ? 'text-stone-300' :
                          'text-stone-500'
               }`}>
                 <span className="w-4">{badge}</span>
-                <span className="w-5 text-stone-400 font-mono">#{q.court_order}</span>
-                <span className="flex-1 truncate">{q.team_a_name} vs {q.team_b_name}</span>
-                {isMe && <span className="text-blue-500 flex-shrink-0">← 내 경기</span>}
+                <span className={`w-5 font-mono ${isDone ? 'text-stone-300' : 'text-stone-400'}`}>#{q.court_order}</span>
+                <span className={`flex-1 truncate ${isDone ? 'line-through' : ''}`}>{q.team_a_name} vs {q.team_b_name}</span>
+                {isMe && <span className="text-blue-500 flex-shrink-0 font-bold">← 내 경기</span>}
               </div>
             )
           })}
