@@ -12,6 +12,7 @@ interface PinMatch {
   team_a_name: string; team_b_name: string
   team_a_id: string; team_b_id: string
   my_side: 'A' | 'B'; division_name: string; division_id: string; group_label: string | null
+  match_date?: string | null
 }
 
 interface CourtQueueMatch {
@@ -72,42 +73,37 @@ export default function PinMatchesPage() {
     const queueMap = new Map<string, CourtQueueMatch[]>()
 
     if (courts.length > 0) {
-      // ✅ 내 경기 division_id로 당일 날짜 파악 → 같은 날짜 division_id 목록 수집
-      // v_matches_with_teams에 match_date 없으므로 divisions 테이블에서 조회
-      const myDivisionIds = [...new Set(myMatches.map(m => m.division_id).filter(Boolean))]
-
-      // 내 부서들의 match_date 조회
-      const { data: myDivRows } = await supabase
-        .from('divisions')
-        .select('id, match_date')
-        .in('id', myDivisionIds)
-
-      // 내 경기 날짜 목록
-      const myDates = [...new Set(
-        (myDivRows || []).map((d: any) => d.match_date).filter(Boolean)
+      // ✅ 당일 경기만 필터 (뷰에 match_date 추가됨)
+      // 1. rpc 응답에 match_date 있으면 바로 사용
+      // 2. 없으면 divisions 테이블에서 1회 조회 (fallback)
+      let myDates = [...new Set(
+        myMatches.map(m => (m as any).match_date).filter(Boolean)
       )] as string[]
 
-      // 같은 날짜의 모든 division_id 수집 (코트는 부서 무관 공용)
-      let sameDayDivIds: string[] = myDivisionIds  // fallback: 내 부서만
-      if (myDates.length > 0) {
-        const { data: sameDayDivs } = await supabase
-          .from('divisions')
-          .select('id')
-          .eq('event_id', s.event_id)
-          .in('match_date', myDates)
-        if (sameDayDivs && sameDayDivs.length > 0) {
-          sameDayDivIds = sameDayDivs.map((d: any) => d.id)
+      if (myDates.length === 0) {
+        // fallback: 내 경기 division_id로 match_date 조회
+        const myDivIds = [...new Set(myMatches.map(m => m.division_id).filter(Boolean))]
+        if (myDivIds.length > 0) {
+          const { data: divRows } = await supabase
+            .from('divisions').select('match_date').in('id', myDivIds)
+          myDates = [...new Set(
+            (divRows || []).map((d: any) => d.match_date).filter(Boolean)
+          )] as string[]
         }
       }
 
-      const { data: allMatches } = await supabase
+      let query = supabase
         .from('v_matches_with_teams')
-        .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id')
+        .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id, match_date')
         .eq('event_id', s.event_id)
         .in('court', courts)
-        .in('division_id', sameDayDivIds)
         .or('score.is.null,score.neq.BYE')
         .order('court').order('court_order')
+
+      // match_date 있으면 당일만, 없으면(1일 대회) 전체
+      const { data: allMatches } = myDates.length > 0
+        ? await query.in('match_date', myDates)
+        : await query
 
       for (const court of courts) {
         const q = (allMatches || [])
