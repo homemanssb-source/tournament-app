@@ -100,7 +100,9 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     return matches.filter(m => m.is_team_tie || divIds.includes(m.division_id))
   }, [matches, dateFilter, divMatchDates])
 
-  // byCourt 맵
+  // ✅ byCourt: dateFilteredMatches 기반
+  // 날짜별 court_order가 독립적이므로 섞이면 순서 계산 오류 발생
+  // 해당 날짜 경기만 코트에 표시해야 정확한 순서/차례 계산 가능
   const byCourt = new Map<string, CourtMatch[]>()
   for (const m of dateFilteredMatches) {
     if (!byCourt.has(m.court)) byCourt.set(m.court, [])
@@ -148,25 +150,34 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     const idx     = searchResult.idx
 
     // 내 경기가 현재 진행중
-    const isLive = idx === liveIdx && liveIdx >= 0
-    // curIdx 기준으로 몇 번째인지
-    const wait   = idx > curIdx ? idx - curIdx - 1 : 0
+    const isLive  = idx === liveIdx && liveIdx >= 0
+    // IN_PROGRESS 경기 있는지 여부
+    const hasLive = liveIdx >= 0
+    // curIdx 기준으로 몇 번째 대기인지 (1 = 바로 다음)
+    const waitNum = idx > curIdx ? idx - curIdx : 0
 
-    // ✅ 위치 텍스트: 현재경기 / 다음대기 / n번째 대기
+    // ✅ 위치 텍스트
     let posLabel = ''
+    let urgency  = 0  // 0=여유, 1=다음, 2=지금
     if (isLive) {
-      posLabel = '현재 경기 중'
-    } else if (idx === curIdx) {
-      posLabel = '곧 시작'
-    } else if (idx === curIdx + 1) {
-      posLabel = '다음 대기'
+      posLabel = '현재 경기 중'; urgency = 2
+    } else if (idx === curIdx && !hasLive) {
+      // 진행중 경기 없고 내가 첫 번째 PENDING → 지금 시작해야 함
+      posLabel = '지금 내 차례'; urgency = 2
+    } else if (idx === curIdx && hasLive) {
+      // 진행중 경기 있고 내가 curIdx → 이상한 케이스, 다음으로 처리
+      posLabel = '다음 대기'; urgency = 1
+    } else if (waitNum === 1) {
+      posLabel = '다음 대기'; urgency = 1
     } else {
-      posLabel = `${idx - curIdx}번째 대기`
+      posLabel = `${waitNum}번째 대기`; urgency = 0
     }
 
     return {
       isLive,
-      wait,
+      hasLive,
+      wait: waitNum - 1 < 0 ? 0 : waitNum - 1,
+      urgency,
       posLabel,
       total: cms.length,
       done: cms.filter(m => m.status === 'FINISHED').length,
@@ -259,17 +270,17 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
                 </div>
                 {searchInfo && (
                   <span className={`px-3 py-1 rounded-full text-xs font-bold ${
-                    searchInfo.isLive
-                      ? 'bg-red-100 text-red-700'
-                      : searchInfo.wait === 0
-                        ? 'bg-amber-100 text-amber-700'
-                        : 'bg-green-100 text-green-700'
+                    searchInfo.urgency === 2 ? 'bg-red-100 text-red-700' :
+                    searchInfo.urgency === 1 ? 'bg-amber-100 text-amber-700' :
+                                               'bg-green-100 text-green-700'
                   }`}>
                     {searchInfo.isLive
                       ? '🔴 지금 경기 중!'
-                      : searchInfo.wait === 0
-                        ? '⚡ 곧 내 차례!'
-                        : `⏳ ${searchInfo.wait}경기 후 내 차례`}
+                      : searchInfo.urgency === 2
+                        ? '⚡ 지금 내 차례!'
+                        : searchInfo.urgency === 1
+                          ? '🟡 곧 내 차례'
+                          : `⏳ ${searchInfo.wait}경기 후 내 차례`}
                   </span>
                 )}
               </div>

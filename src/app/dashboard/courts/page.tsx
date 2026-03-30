@@ -616,7 +616,8 @@ export default function CourtsPage() {
     ? allItems.filter(m => dateDivIds.includes(m.division_id) || m.is_team_tie)
     : allItems
 
-  // ✅ byCourt: 날짜 필터 적용된 경기만 코트 배치도에 표시
+  // ✅ byCourt: dateFilteredItems 기반
+  // 날짜별 court_order가 독립적이므로 다른 날짜 경기 섞이면 순서 계산 오류
   const byCourt = new Map<string, MatchSlim[]>()
   for (const name of filteredCourtNames) byCourt.set(name, [])
   for (const m of dateFilteredItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
