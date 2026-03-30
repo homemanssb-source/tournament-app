@@ -392,6 +392,31 @@ export default function PinMatchesPage() {
   )
 }
 
+function FinishedQueue({ items }: { items: CourtQueueMatch[] }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="border-t border-stone-100 pt-1.5 mt-0.5">
+      <button onClick={() => setOpen(!open)}
+        className="text-xs text-stone-400 hover:text-stone-600 flex items-center gap-1 w-full">
+        <span>{open ? '▼' : '▶'}</span>
+        <span>완료 {items.length}경기</span>
+      </button>
+      {open && (
+        <div className="space-y-1 mt-1.5">
+          {items.map(q => (
+            <div key={q.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-stone-300">
+              <span className="w-4">✅</span>
+              <span className="w-5 font-mono">#{q.court_order}</span>
+              <span className="flex-1 truncate line-through">{q.team_a_name} vs {q.team_b_name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 function CourtQueue({ queue, myMatchId, court }: {
   queue: CourtQueueMatch[]; myMatchId: string; court: string
 }) {
@@ -437,25 +462,29 @@ function CourtQueue({ queue, myMatchId, court }: {
 
       {expanded && (
         <div className="px-4 pb-3 space-y-1.5">
-          {queue.map((q, i) => {
-            const isDone = q.status === 'FINISHED'
+          {/* 진행중/대기 경기 */}
+          {queue.filter(q => q.status !== 'FINISHED').map((q, i) => {
             const isLive = q.status === 'IN_PROGRESS'
             const isMe   = q.id === myMatchId
-            const badge  = isDone ? '✅' : isLive ? '🔴' : i === curIdx ? '🔴' : i === curIdx + 1 ? '🟡' : i === curIdx + 2 ? '🟢' : ''
+            const origIdx = queue.indexOf(q)
+            const badge  = isLive ? '🔴' : origIdx === curIdx ? '🔴' : origIdx === curIdx + 1 ? '🟡' : origIdx === curIdx + 2 ? '🟢' : ''
             return (
               <div key={q.id} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs ${
                 isMe   ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' :
                 isLive ? 'bg-red-50 text-red-700' :
-                isDone ? 'text-stone-300' :
                          'text-stone-500'
               }`}>
                 <span className="w-4">{badge}</span>
-                <span className={`w-5 font-mono ${isDone ? 'text-stone-300' : 'text-stone-400'}`}>#{q.court_order}</span>
-                <span className={`flex-1 truncate ${isDone ? 'line-through' : ''}`}>{q.team_a_name} vs {q.team_b_name}</span>
+                <span className="w-5 font-mono text-stone-400">#{q.court_order}</span>
+                <span className="flex-1 truncate">{q.team_a_name} vs {q.team_b_name}</span>
                 {isMe && <span className="text-blue-500 flex-shrink-0 font-bold">← 내 경기</span>}
               </div>
             )
           })}
+          {/* 완료 경기 접기 */}
+          {queue.filter(q => q.status === 'FINISHED').length > 0 && (
+            <FinishedQueue items={queue.filter(q => q.status === 'FINISHED')} />
+          )}
         </div>
       )}
     </div>
