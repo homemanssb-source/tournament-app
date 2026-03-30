@@ -87,26 +87,24 @@ export default function PinMatchesPage() {
         )] as string[]
       }
 
-      // match_date 있으면 당일만, 없으면(1일 대회) 전체
-      const { data: allMatches } = myDates.length > 0
-        ? await supabase
-            .from('v_matches_with_teams')
-            .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id, match_date')
-            .eq('event_id', s.event_id)
-            .in('court', courts)
-            .in('match_date', myDates)
-            .or('score.is.null,score.neq.BYE')
-            .order('court').order('court_order')
-        : await supabase
-            .from('v_matches_with_teams')
-            .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id, match_date')
-            .eq('event_id', s.event_id)
-            .in('court', courts)
-            .or('score.is.null,score.neq.BYE')
-            .order('court').order('court_order')
+      // ✅ 쿼리 단순화: 전체 가져온 후 클라이언트에서 필터
+      // - BYE 제외: score !== 'BYE' (NULL 포함)
+      // - 당일 경기만: match_date 기준
+      const { data: rawMatches } = await supabase
+        .from('v_matches_with_teams')
+        .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
+        .eq('event_id', s.event_id)
+        .in('court', courts)
+        .order('court').order('court_order')
+
+      const allMatches = (rawMatches || []).filter((m: any) => {
+        if (m.score === 'BYE') return false  // BYE 제외
+        if (myDates.length > 0 && m.match_date && !myDates.includes(m.match_date)) return false  // 다른 날 제외
+        return true
+      })
 
       for (const court of courts) {
-        const q = (allMatches || [])
+        const q = allMatches
           .filter((m: any) => m.court === court)
           .sort((a: any, b: any) => (a.court_order || 0) - (b.court_order || 0))
         queueMap.set(court, q as CourtQueueMatch[])
