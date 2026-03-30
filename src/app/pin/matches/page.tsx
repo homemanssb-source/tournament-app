@@ -79,7 +79,7 @@ export default function PinMatchesPage() {
         .select('id, court, court_order, status, team_a_name, team_b_name, division_name, division_id')
         .eq('event_id', s.event_id)
         .in('court', courts)
-        .neq('score', 'BYE')
+        .or('score.is.null,score.neq.BYE')   // ✅ NULL score(PENDING) 포함, BYE만 제외
         .order('court').order('court_order')
 
       for (const court of courts) {
