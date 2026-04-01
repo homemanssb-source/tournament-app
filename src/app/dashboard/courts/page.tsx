@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useEventId, useDivisions } from '@/components/useDashboard'
@@ -17,25 +17,25 @@ interface Venue {
   court_count: number; courts: string[]; pin_plain: string
 }
 type CourtZones = Record<string, { group: string[]; finals: string[] }>
-type StageKey = 'GROUP' | 'R32' | 'R16' | 'QF' | 'SF' | 'F' | 'ALL_FINALS' | '본선128강' | '본선64강' | '본선32강' | '본선16강' | '16강' | '8강' | '4강' | '결승'
+type StageKey = 'GROUP' | 'R32' | 'R16' | 'QF' | 'SF' | 'F' | 'ALL_FINALS' | '蹂몄꽑128媛? | '蹂몄꽑64媛? | '蹂몄꽑32媛? | '蹂몄꽑16媛? | '16媛? | '8媛? | '4媛? | '寃곗듅'
 
 const STAGE_TABS: { key: StageKey; label: string }[] = [
-  { key: 'GROUP',      label: '예선' },
-  { key: '본선128강',  label: '128강' },
-  { key: '본선64강',   label: '64강' },
-  { key: '본선32강',   label: '32강' },
-  { key: '16강',       label: '16강' },
-  { key: '8강',        label: '8강' },
-  { key: '4강',        label: '4강' },
-  { key: '결승',       label: '결승' },
-  { key: 'ALL_FINALS', label: '전체본선' },
+  { key: 'GROUP',      label: '?덉꽑' },
+  { key: '蹂몄꽑128媛?,  label: '128媛? },
+  { key: '蹂몄꽑64媛?,   label: '64媛? },
+  { key: '蹂몄꽑32媛?,   label: '32媛? },
+  { key: '16媛?,       label: '16媛? },
+  { key: '8媛?,        label: '8媛? },
+  { key: '4媛?,        label: '4媛? },
+  { key: '寃곗듅',       label: '寃곗듅' },
+  { key: 'ALL_FINALS', label: '?꾩껜蹂몄꽑' },
 ]
-const ROUND_TO_STAGE: Record<string, string> = { R32:'FINALS', R16:'FINALS', QF:'FINALS', SF:'FINALS', F:'FINALS', '본선128강':'FINALS', '본선64강':'FINALS', '본선32강':'FINALS', '본선16강':'FINALS', '16강':'FINALS', '8강':'FINALS', '4강':'FINALS', '결승':'FINALS' }
-const ZONE_FINALS = new Set(['R16','QF','SF','F','16강','8강','4강','결승','본선128강','본선64강','본선32강','본선16강'])
-const STAGE_LABEL: Record<string, string> = { GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', ALL_FINALS:'전체본선', '본선128강':'128강', '본선64강':'64강', '본선32강':'32강', '본선16강':'16강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
+const ROUND_TO_STAGE: Record<string, string> = { R32:'FINALS', R16:'FINALS', QF:'FINALS', SF:'FINALS', F:'FINALS', '蹂몄꽑128媛?:'FINALS', '蹂몄꽑64媛?:'FINALS', '蹂몄꽑32媛?:'FINALS', '蹂몄꽑16媛?:'FINALS', '16媛?:'FINALS', '8媛?:'FINALS', '4媛?:'FINALS', '寃곗듅':'FINALS' }
+const ZONE_FINALS = new Set(['R16','QF','SF','F','16媛?,'8媛?,'4媛?,'寃곗듅','蹂몄꽑128媛?,'蹂몄꽑64媛?,'蹂몄꽑32媛?,'蹂몄꽑16媛?])
+const STAGE_LABEL: Record<string, string> = { GROUP:'?덉꽑', R32:'32媛?, R16:'16媛?, QF:'8媛?, SF:'4媛?, F:'寃곗듅', ALL_FINALS:'?꾩껜蹂몄꽑', '蹂몄꽑128媛?:'128媛?, '蹂몄꽑64媛?:'64媛?, '蹂몄꽑32媛?:'32媛?, '蹂몄꽑16媛?:'16媛?, '16媛?:'16媛?, '8媛?:'8媛?, '4媛?:'4媛?, '寃곗듅':'寃곗듅' }
 
 function makeCourtNames(shortName: string, count: number): string[] {
-  const prefix = shortName?.trim() || '코트'
+  const prefix = shortName?.trim() || '肄뷀듃'
   return Array.from({ length: count }, (_, i) => `${prefix}-${i + 1}`)
 }
 function sortGroupMatches(list: MatchSlim[]): MatchSlim[] {
@@ -66,7 +66,7 @@ export default function CourtsPage() {
 
   const courtNames = React.useMemo(() => {
     if (selectedVenue === 'ALL') {
-      if (venues.length === 0) return Array.from({ length: 10 }, (_, i) => `코트-${i + 1}`)
+      if (venues.length === 0) return Array.from({ length: 10 }, (_, i) => `肄뷀듃-${i + 1}`)
       return venues.flatMap(v => makeCourtNames(v.short_name || v.name, v.court_count || v.courts?.length || 0))
     }
     const venue = venues.find(v => v.id === selectedVenue)
@@ -129,7 +129,7 @@ export default function CourtsPage() {
     for (const t of tieList) {
       const cn = (t as any).court_number; if (!cn) continue
       const venue = venuesRef.current.find(v => cn >= 1 && cn <= (v.court_count || v.courts?.length || 0))
-      const court = venue ? `${venue.short_name || venue.name}-${cn}` : `코트-${cn}`
+      const court = venue ? `${venue.short_name || venue.name}-${cn}` : `肄뷀듃-${cn}`
       const order = (t as any).court_order
       if (order) counter[court] = Math.max(counter[court] || 0, order)
     }
@@ -141,10 +141,10 @@ export default function CourtsPage() {
     try {
       const res  = await fetch('/api/notify/court', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ event_id:eventId, court, match_id:matchId, trigger }) })
       const json = await res.json()
-      const m = json.sent > 0 ? `✅ ${json.sent}명 알림 전송` : `ℹ️ ${json.message || '구독자 없음'}`
+      const m = json.sent > 0 ? `??${json.sent}紐??뚮┝ ?꾩넚` : `?뱄툘 ${json.message || '援щ룆???놁쓬'}`
       setNotifyMsg(prev => ({ ...prev, [court]: m }))
       setTimeout(() => setNotifyMsg(prev => { const n = { ...prev }; delete n[court]; return n }), 3000)
-    } catch { setNotifyMsg(prev => ({ ...prev, [court]: '❌ 전송 실패' })) }
+    } catch { setNotifyMsg(prev => ({ ...prev, [court]: '???꾩넚 ?ㅽ뙣' })) }
     finally { setNotifying(null) }
   }
 
@@ -223,8 +223,8 @@ export default function CourtsPage() {
     setZoneSaving(true)
     const { error } = await supabase.from('events').update({ court_zones: courtZones }).eq('id', eventId)
     setZoneSaving(false)
-    if (error) { setMsg('❌ 구역 저장 실패: ' + error.message); return }
-    setMsg('✅ 코트 구역 저장됨')
+    if (error) { setMsg('??援ъ뿭 ????ㅽ뙣: ' + error.message); return }
+    setMsg('??肄뷀듃 援ъ뿭 ??λ맖')
   }
   function toggleZoneCourt(divId: string, court: string) {
     setCourtZones(prev => {
@@ -246,11 +246,11 @@ export default function CourtsPage() {
   }
 
   async function autoAssignByDivision() {
-    if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
-    if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
+    if (!autoDiv) { setMsg('遺臾몄쓣 ?좏깮?댁＜?몄슂.'); return }
+    if (autoCourts.length === 0) { setMsg('諛곗젙??肄뷀듃瑜??좏깮?댁＜?몄슂.'); return }
     if (autoDiv === 'TEAM') {
       const divTies = ties.filter(t => !t.is_bye && !(t as any).court_number && t.status !== 'completed')
-      if (divTies.length === 0) { setMsg('배정할 단체전 경기가 없습니다.'); return }
+      if (divTies.length === 0) { setMsg('諛곗젙???⑥껜??寃쎄린媛 ?놁뒿?덈떎.'); return }
       setAssigning(true)
       try {
         for (let i = 0; i < divTies.length; i++) {
@@ -259,7 +259,7 @@ export default function CourtsPage() {
           const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
           await supabase.from('ties').update({ court_number:courtNum, court_order:nextOrder }).eq('id', divTies[i].id)
         }
-        setMsg(`✅ [단체전] ${divTies.length}경기 배정 완료`); loadTies()
+        setMsg(`??[?⑥껜?? ${divTies.length}寃쎄린 諛곗젙 ?꾨즺`); loadTies()
       } finally { setAssigning(false) }
       return
     }
@@ -273,7 +273,7 @@ export default function CourtsPage() {
 
   async function assignGroup() {
     const targets = matches.filter(m => m.division_id === autoDiv && m.stage === 'GROUP' && !m.court && m.status !== 'FINISHED')
-    if (targets.length === 0) { setMsg('배정할 예선 경기가 없습니다.'); return }
+    if (targets.length === 0) { setMsg('諛곗젙???덉꽑 寃쎄린媛 ?놁뒿?덈떎.'); return }
     const pool = getCourtPool(autoDiv, 'group')
     const byGroup = new Map<string, MatchSlim[]>()
     for (const m of targets) { const k = m.group_label || 'none'; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k)!.push(m) }
@@ -288,14 +288,14 @@ export default function CourtsPage() {
     }
     for (const u of updates) await supabase.from('matches').update({ court:u.court, court_order:u.court_order }).eq('id', u.id)
     const divName = divisions.find(d => d.id === autoDiv)?.name || ''
-    const summary = pool.map(c => { const cnt = updates.filter(u => u.court === c).length; return cnt > 0 ? `${c}:${cnt}경기` : '' }).filter(Boolean).join(' | ')
-    setMsg(`✅ [${divName}] 예선 ${updates.length}경기 배정 완료 — ${summary}`); loadMatches()
+    const summary = pool.map(c => { const cnt = updates.filter(u => u.court === c).length; return cnt > 0 ? `${c}:${cnt}寃쎄린` : '' }).filter(Boolean).join(' | ')
+    setMsg(`??[${divName}] ?덉꽑 ${updates.length}寃쎄린 諛곗젙 ?꾨즺 ??${summary}`); loadMatches()
   }
 
   async function assignFinals(round: string) {
     const stageVal = ROUND_TO_STAGE[round] || 'FINALS'
     const targets  = matches.filter(m => m.division_id === autoDiv && m.stage === stageVal && m.round === round && !m.court && m.status !== 'FINISHED')
-    if (targets.length === 0) { setMsg(`배정할 ${STAGE_LABEL[round] || round} 경기가 없습니다.`); return }
+    if (targets.length === 0) { setMsg(`諛곗젙??${STAGE_LABEL[round] || round} 寃쎄린媛 ?놁뒿?덈떎.`); return }
     const pool = getCourtPool(autoDiv, round)
     const updates: { id: string; court: string; court_order: number }[] = []
     for (const m of targets) {
@@ -305,12 +305,12 @@ export default function CourtsPage() {
     }
     for (const u of updates) await supabase.from('matches').update({ court:u.court, court_order:u.court_order }).eq('id', u.id)
     const divName = divisions.find(d => d.id === autoDiv)?.name || ''
-    setMsg(`✅ [${divName}] ${STAGE_LABEL[round] || round} ${updates.length}경기 배정 완료`); loadMatches()
+    setMsg(`??[${divName}] ${STAGE_LABEL[round] || round} ${updates.length}寃쎄린 諛곗젙 ?꾨즺`); loadMatches()
   }
 
   async function assignAllFinals() {
     const divName = divisions.find(d => d.id === autoDiv)?.name || ''; let total = 0
-    for (const round of ['본선128강','본선64강','본선32강','본선16강','16강','8강','4강','결승']) {
+    for (const round of ['蹂몄꽑128媛?,'蹂몄꽑64媛?,'蹂몄꽑32媛?,'蹂몄꽑16媛?,'16媛?,'8媛?,'4媛?,'寃곗듅']) {
       const pool    = getCourtPool(autoDiv, round)
       const targets = matches.filter(m => m.division_id === autoDiv && m.stage === (ROUND_TO_STAGE[round]||'FINALS') && m.round === round && !m.court && m.status !== 'FINISHED')
       if (targets.length === 0) continue
@@ -320,8 +320,8 @@ export default function CourtsPage() {
         await supabase.from('matches').update({ court, court_order:nextOrder }).eq('id', m.id); total++
       }
     }
-    if (total === 0) { setMsg(`[${divName}] 배정할 본선 경기가 없습니다.`); return }
-    setMsg(`✅ [${divName}] 전체 본선 ${total}경기 미리배정 완료`); loadMatches()
+    if (total === 0) { setMsg(`[${divName}] 諛곗젙??蹂몄꽑 寃쎄린媛 ?놁뒿?덈떎.`); return }
+    setMsg(`??[${divName}] ?꾩껜 蹂몄꽑 ${total}寃쎄린 誘몃━諛곗젙 ?꾨즺`); loadMatches()
   }
 
   async function assignItemToCourt(itemId: string, court: string) {
@@ -355,13 +355,13 @@ export default function CourtsPage() {
 
   async function clearDivisionAssignments(divId: string) {
     if (divId === 'TEAM') {
-      if (!confirm('[단체전] 코트 배정을 모두 초기화하시겠습니까?')) return
+      if (!confirm('[?⑥껜?? 肄뷀듃 諛곗젙??紐⑤몢 珥덇린?뷀븯?쒓쿋?듬땲源?')) return
       for (const t of ties.filter(t => t.court_number))
         await supabase.from('ties').update({ court_number:null, court_order:null }).eq('id', t.id)
-      courtOrderRef.current = {}; setMsg('✅ [단체전] 초기화 완료'); loadTies(); return
+      courtOrderRef.current = {}; setMsg('??[?⑥껜?? 珥덇린???꾨즺'); loadTies(); return
     }
     const divName = divisions.find(d => d.id === divId)?.name || ''
-    if (!confirm(`[${divName}] 코트 배정을 모두 초기화하시겠습니까?`)) return
+    if (!confirm(`[${divName}] 肄뷀듃 諛곗젙??紐⑤몢 珥덇린?뷀븯?쒓쿋?듬땲源?`)) return
     const divMatches = matches.filter(m => m.division_id === divId && m.court)
     for (const m of divMatches) await supabase.from('matches').update({ court:null, court_order:null }).eq('id', m.id)
     const affectedCourts = new Set(divMatches.map(m => m.court!))
@@ -370,14 +370,14 @@ export default function CourtsPage() {
     for (const m of remaining) if (m.court && m.court_order) newCounter[m.court] = Math.max(newCounter[m.court]||0, m.court_order)
     const updated = { ...courtOrderRef.current }
     for (const court of affectedCourts) updated[court] = newCounter[court] || 0
-    courtOrderRef.current = updated; setMsg(`✅ [${divName}] 초기화 완료`); loadMatches()
+    courtOrderRef.current = updated; setMsg(`??[${divName}] 珥덇린???꾨즺`); loadMatches()
   }
   async function clearAllAssignments() {
-    if (!confirm('전체 코트 배정을 초기화하시겠습니까?')) return
+    if (!confirm('?꾩껜 肄뷀듃 諛곗젙??珥덇린?뷀븯?쒓쿋?듬땲源?')) return
     await supabase.from('matches').update({ court:null, court_order:null }).eq('event_id', eventId)
     for (const t of ties.filter(t => t.court_number))
       await supabase.from('ties').update({ court_number:null, court_order:null }).eq('id', t.id)
-    courtOrderRef.current = {}; setMsg('✅ 전체 초기화'); loadMatches(); loadTies()
+    courtOrderRef.current = {}; setMsg('???꾩껜 珥덇린??); loadMatches(); loadTies()
   }
 
   function openScoreEdit(m: MatchSlim) {
@@ -388,7 +388,7 @@ export default function CourtsPage() {
   }
 
   async function submitResult() {
-    if (!editMatch || !editScore || !editWinner) { setMsg('점수와 승자를 모두 입력해주세요.'); return }
+    if (!editMatch || !editScore || !editWinner) { setMsg('?먯닔? ?뱀옄瑜?紐⑤몢 ?낅젰?댁＜?몄슂.'); return }
     setSubmitting(true); setMsg('')
     const winnerId = editWinner === 'A' ? editMatch.team_a_id : editMatch.team_b_id
     try {
@@ -396,11 +396,11 @@ export default function CourtsPage() {
       if (rpcError) {
         if (editMatch.status === 'FINISHED') {
           const { error: ue } = await supabase.from('matches').update({ score:editScore, winner_team_id:winnerId, status:'FINISHED', ended_at:new Date().toISOString() }).eq('id', editMatch.id)
-          if (ue) { setMsg('❌ ' + ue.message); return }
-          setMsg('✅ 결과 강제 수정됨 (운영자 모드)')
-        } else { setMsg('❌ ' + rpcError.message); return }
+          if (ue) { setMsg('??' + ue.message); return }
+          setMsg('??寃곌낵 媛뺤젣 ?섏젙??(?댁쁺??紐⑤뱶)')
+        } else { setMsg('??' + rpcError.message); return }
       } else {
-        setMsg('✅ 결과 저장됨')
+        setMsg('??寃곌낵 ??λ맖')
         if (editMatch.court) sendCourtNotify(editMatch.court, 'finished')
       }
       setEditMatch(null)
@@ -440,7 +440,7 @@ export default function CourtsPage() {
       let courtName: string | null = null
       if (cn != null) {
         const venue = venuesRef.current.find(v => cn >= 1 && cn <= (v.court_count || v.courts?.length || 0))
-        courtName = venue ? `${venue.short_name||venue.name}-${cn}` : `코트-${cn}`
+        courtName = venue ? `${venue.short_name||venue.name}-${cn}` : `肄뷀듃-${cn}`
       }
       const statusMap: Record<string,string> = { pending:'PENDING', lineup_phase:'PENDING', lineup_ready:'PENDING', in_progress:'IN_PROGRESS', completed:'FINISHED' }
       return {
@@ -451,7 +451,7 @@ export default function CourtsPage() {
         status:statusMap[t.status]||'PENDING',
         score:(t.status==='completed'||t.status==='in_progress') ? `${t.club_a_rubbers_won}-${t.club_b_rubbers_won}` : null,
         winner_team_id:t.winning_club_id||null,
-        division_name:'단체전', division_id:t.division_id||'TEAM',
+        division_name:'?⑥껜??, division_id:t.division_id||'TEAM',
         locked_by_participant:false, group_label:null, is_team_tie:true,
       }
     })
@@ -467,8 +467,8 @@ export default function CourtsPage() {
   const hasTeamTies       = ties.filter(t => !t.is_bye).length > 0
   const selectedVenueInfo = venues.find(v => v.id === selectedVenue)
 
-  if (!eventId) return <p className="text-stone-400">설정에서 대회를 선택해주세요.</p>
-  if (loading)  return <p className="text-stone-400">불러오는 중..</p>
+  if (!eventId) return <p className="text-stone-400">?ㅼ젙?먯꽌 ??뚮? ?좏깮?댁＜?몄슂.</p>
+  if (loading)  return <p className="text-stone-400">遺덈윭?ㅻ뒗 以?.</p>
 
   const uniqueDates = [...new Set(Object.values(divMatchDates))].sort()
   const dateDivIds = dateFilter === 'ALL'
@@ -492,24 +492,24 @@ export default function CourtsPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <h1 className="text-2xl font-bold">🎾 코트 배정</h1>
-        {startTime && <span className="text-xs text-stone-500">⏰ {startTime} 자동시작</span>}
+        <h1 className="text-2xl font-bold">?렱 肄뷀듃 諛곗젙</h1>
+        {startTime && <span className="text-xs text-stone-500">??{startTime} ?먮룞?쒖옉</span>}
       </div>
 
-      {msg && <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('✅') ? 'bg-tennis-50 text-tennis-700' : 'bg-red-50 text-red-600'}`}>{msg}</div>}
+      {msg && <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('??) ? 'bg-tennis-50 text-tennis-700' : 'bg-red-50 text-red-600'}`}>{msg}</div>}
 
-      {/* 날짜 필터 */}
+      {/* ?좎쭨 ?꾪꽣 */}
       {uniqueDates.length > 0 && (
         <div className="bg-white rounded-xl border p-3 mb-4">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-stone-500 font-medium whitespace-nowrap">📅 날짜:</span>
+            <span className="text-xs text-stone-500 font-medium whitespace-nowrap">?뱟 ?좎쭨:</span>
             {uniqueDates.map(date => {
               const label = new Date(date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short' })
               const divsOnDate = Object.entries(divMatchDates).filter(([, d]) => d === date).map(([id]) => divisions.find(div => div.id === id)?.name).filter(Boolean)
               return (
                 <button key={date} onClick={() => { setDateFilter(date); setAutoDiv(''); setViewFilter('ALL') }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${dateFilter === date ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-stone-600 border-stone-300 hover:border-blue-400'}`}>
-                  {label} <span className="opacity-70">({divsOnDate.join('·')})</span>
+                  {label} <span className="opacity-70">({divsOnDate.join('쨌')})</span>
                 </button>
               )
             })}
@@ -517,36 +517,36 @@ export default function CourtsPage() {
         </div>
       )}
 
-      {/* 경기장 선택 */}
+      {/* 寃쎄린???좏깮 */}
       {venues.length > 0 && (
         <div className="bg-white rounded-xl border p-3 mb-4">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-xs text-stone-500 font-medium whitespace-nowrap">📍 경기장:</span>
-            <button onClick={() => setSelectedVenue('ALL')} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${selectedVenue==='ALL' ? 'bg-[#2d5016] text-white border-[#2d5016]' : 'bg-white text-stone-600 border-stone-300 hover:border-stone-400'}`}>🏟 전체 보기</button>
+            <span className="text-xs text-stone-500 font-medium whitespace-nowrap">?뱧 寃쎄린??</span>
+            <button onClick={() => setSelectedVenue('ALL')} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${selectedVenue==='ALL' ? 'bg-[#2d5016] text-white border-[#2d5016]' : 'bg-white text-stone-600 border-stone-300 hover:border-stone-400'}`}>?룦 ?꾩껜 蹂닿린</button>
             {venues.map(v => {
               const count = v.court_count || v.courts?.length || 0; const sn = v.short_name || v.name
               return <button key={v.id} onClick={() => setSelectedVenue(v.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${selectedVenue===v.id ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-stone-600 border-stone-300 hover:border-orange-400'}`}>{v.name} <span className="opacity-70">({sn}-1~{sn}-{count})</span></button>
             })}
           </div>
-          {selectedVenueInfo && <p className="text-xs text-stone-400 mt-2">{selectedVenueInfo.short_name}-1 ~ {selectedVenueInfo.short_name}-{selectedVenueInfo.court_count || selectedVenueInfo.courts?.length || 0} · PIN: {selectedVenueInfo.pin_plain}</p>}
+          {selectedVenueInfo && <p className="text-xs text-stone-400 mt-2">{selectedVenueInfo.short_name}-1 ~ {selectedVenueInfo.short_name}-{selectedVenueInfo.court_count || selectedVenueInfo.courts?.length || 0} 쨌 PIN: {selectedVenueInfo.pin_plain}</p>}
         </div>
       )}
 
-      {/* 자동 배정 패널 */}
+      {/* ?먮룞 諛곗젙 ?⑤꼸 */}
       <div className="bg-white rounded-xl border p-4 mb-4 space-y-4">
-        <h3 className="font-bold text-sm">🎯 자동 코트 배정</h3>
+        <h3 className="font-bold text-sm">?렞 ?먮룞 肄뷀듃 諛곗젙</h3>
         <div className="flex flex-wrap gap-3 items-start">
           <div>
-            <label className="text-xs text-stone-500 block mb-1">부문</label>
+            <label className="text-xs text-stone-500 block mb-1">遺臾?/label>
             <select value={autoDiv} onChange={e => setAutoDiv(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[140px]">
-              <option value="">부문 선택</option>
+              <option value="">遺臾??좏깮</option>
               {filteredDivisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              {hasTeamTies && <option value="TEAM">🏆 단체전</option>}
+              {hasTeamTies && <option value="TEAM">?룇 ?⑥껜??/option>}
             </select>
           </div>
           {autoDiv && autoDiv !== 'TEAM' && (
             <div>
-              <label className="text-xs text-stone-500 block mb-1">스테이지</label>
+              <label className="text-xs text-stone-500 block mb-1">?ㅽ뀒?댁?</label>
               <div className="flex flex-wrap gap-1">
                 {STAGE_TABS.map(tab => (
                   <button key={tab.key} onClick={() => setAutoStage(tab.key)}
@@ -561,10 +561,10 @@ export default function CourtsPage() {
 
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <label className="text-xs text-stone-500">배정 코트</label>
+            <label className="text-xs text-stone-500">諛곗젙 肄뷀듃</label>
             <button onClick={() => setAutoCourts(autoCourts.length===filteredCourtNames.length ? [] : [...filteredCourtNames])}
               className="text-xs px-2 py-0.5 rounded border border-dashed border-stone-400 text-stone-500 hover:border-tennis-500 hover:text-tennis-600 transition-all">
-              {autoCourts.length===filteredCourtNames.length ? '전체 해제' : '전체 선택'}
+              {autoCourts.length===filteredCourtNames.length ? '?꾩껜 ?댁젣' : '?꾩껜 ?좏깮'}
             </button>
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -580,21 +580,21 @@ export default function CourtsPage() {
         <div className="flex items-center gap-3 flex-wrap">
           <button onClick={autoAssignByDivision} disabled={!autoDiv || autoCourts.length===0 || assigning}
             className="bg-tennis-600 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-tennis-700 disabled:opacity-50 flex items-center gap-2">
-            {assigning ? <><span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />배정 중...</> : `🎯 ${autoDiv && autoDiv!=='TEAM' ? STAGE_LABEL[autoStage] : ''} 자동 배정`}
+            {assigning ? <><span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />諛곗젙 以?..</> : `?렞 ${autoDiv && autoDiv!=='TEAM' ? STAGE_LABEL[autoStage] : ''} ?먮룞 諛곗젙`}
           </button>
         </div>
 
-        {/* 코트 구역 설정 (접기) */}
+        {/* 肄뷀듃 援ъ뿭 ?ㅼ젙 (?묎린) */}
         <div className="border-t pt-3">
           <button onClick={() => setZoneOpen(!zoneOpen)} className="flex items-center gap-2 text-xs font-medium text-stone-600 hover:text-stone-800 transition-all">
-            <span>{zoneOpen ? '▾' : '▸'}</span><span>부서별 코트 구역 설정</span><span className="text-stone-400 font-normal">(예선용 / 본선 16강~)</span>
+            <span>{zoneOpen ? '?? : '??}</span><span>遺?쒕퀎 肄뷀듃 援ъ뿭 ?ㅼ젙</span><span className="text-stone-400 font-normal">(?덉꽑??/ 蹂몄꽑 16媛?)</span>
           </button>
           {zoneOpen && (
             <div className="mt-3 space-y-3">
               <div className="flex gap-1">
                 {(['group','finals'] as const).map(t => (
                   <button key={t} onClick={() => setZoneTab(t)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${zoneTab===t ? 'bg-stone-700 text-white border-stone-700' : 'border-stone-300 text-stone-500 hover:border-stone-500'}`}>
-                    {t==='group' ? '예선용 구역' : '본선용 구역 (16강~)'}
+                    {t==='group' ? '?덉꽑??援ъ뿭' : '蹂몄꽑??援ъ뿭 (16媛?)'}
                   </button>
                 ))}
               </div>
@@ -619,34 +619,34 @@ export default function CourtsPage() {
                   </div>
                 )
               })}
-              <button onClick={saveCourtZones} disabled={zoneSaving} className="bg-stone-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-stone-800 disabled:opacity-50">{zoneSaving ? '저장 중...' : '💾 구역 설정 저장'}</button>
+              <button onClick={saveCourtZones} disabled={zoneSaving} className="bg-stone-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-stone-800 disabled:opacity-50">{zoneSaving ? '???以?..' : '?뮶 援ъ뿭 ?ㅼ젙 ???}</button>
             </div>
           )}
         </div>
       </div>
 
-      {/* 뷰 필터 / 초기화 */}
+      {/* 酉??꾪꽣 / 珥덇린??*/}
       <div className="bg-white rounded-xl border p-3 mb-4">
         <div className="flex flex-wrap gap-2 items-center">
           <div className="flex gap-1 bg-stone-100 rounded-lg p-0.5">
-            <button onClick={() => setViewFilter('ALL')} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter==='ALL'?'bg-white shadow-sm':''}`}>전체</button>
+            <button onClick={() => setViewFilter('ALL')} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter==='ALL'?'bg-white shadow-sm':''}`}>?꾩껜</button>
             {filteredDivisions.map(d => <button key={d.id} onClick={() => setViewFilter(d.id)} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter===d.id?'bg-white shadow-sm':''}`}>{d.name}</button>)}
-            {hasTeamTies && <button onClick={() => setViewFilter('TEAM')} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter==='TEAM'?'bg-white shadow-sm':''}`}>단체전</button>}
+            {hasTeamTies && <button onClick={() => setViewFilter('TEAM')} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter==='TEAM'?'bg-white shadow-sm':''}`}>?⑥껜??/button>}
           </div>
           <div className="ml-auto flex gap-2">
-            {autoDiv && <button onClick={() => clearDivisionAssignments(autoDiv)} className="text-xs text-stone-400 hover:text-red-500 border border-stone-200 px-2 py-1 rounded-lg">{autoDiv==='TEAM'?'단체전':divisions.find(d=>d.id===autoDiv)?.name} 초기화</button>}
-            <button onClick={clearAllAssignments} className="text-xs text-stone-400 hover:text-red-500 border border-stone-200 px-2 py-1 rounded-lg">전체 초기화</button>
+            {autoDiv && <button onClick={() => clearDivisionAssignments(autoDiv)} className="text-xs text-stone-400 hover:text-red-500 border border-stone-200 px-2 py-1 rounded-lg">{autoDiv==='TEAM'?'?⑥껜??:divisions.find(d=>d.id===autoDiv)?.name} 珥덇린??/button>}
+            <button onClick={clearAllAssignments} className="text-xs text-stone-400 hover:text-red-500 border border-stone-200 px-2 py-1 rounded-lg">?꾩껜 珥덇린??/button>
           </div>
         </div>
       </div>
 
-      {/* ═══ 메인 그리드: 미배정 + 코트 ═══ */}
+      {/* ?먥븧??硫붿씤 洹몃━?? 誘몃같??+ 肄뷀듃 ?먥븧??*/}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
 
-        {/* 미배정 컬럼 */}
+        {/* 誘몃같??而щ읆 */}
         <div className="lg:col-span-1" data-unassigned onDragOver={handleDragOver} onDrop={handleDropOnUnassigned}>
           <div className="bg-white rounded-xl border overflow-hidden">
-            <div className="bg-stone-500 text-white px-4 py-2 font-bold text-sm">미배정 ({unassigned.length})</div>
+            <div className="bg-stone-500 text-white px-4 py-2 font-bold text-sm">誘몃같??({unassigned.length})</div>
             <div className="p-1.5 space-y-1 max-h-[70vh] overflow-y-auto">
               {unassigned.map(m => (
                 <MatchChip key={m.id} m={m} divColor={divColors[m.division_id]}
@@ -655,12 +655,12 @@ export default function CourtsPage() {
                   onTouchStart={() => handleTouchStart(m.id)}
                   onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} />
               ))}
-              {unassigned.length === 0 && <div className="text-xs text-stone-300 text-center py-6">없음</div>}
+              {unassigned.length === 0 && <div className="text-xs text-stone-300 text-center py-6">?놁쓬</div>}
             </div>
           </div>
         </div>
 
-        {/* 코트 그리드: lg에서 4컬럼, xl에서 더 넓게 */}
+        {/* 肄뷀듃 洹몃━?? lg?먯꽌 4而щ읆, xl?먯꽌 ???볤쾶 */}
         <div className="lg:col-span-4 grid grid-cols-2 xl:grid-cols-4 gap-3">
           {filteredCourtNames.map(court => {
             const courtItems = (byCourt.get(court)||[]).sort((a,b)=>(a.court_order||0)-(b.court_order||0))
@@ -672,8 +672,8 @@ export default function CourtsPage() {
             const hasPending = courtItems.some(m=>m.status==='PENDING')
             const zoneDiv = autoDiv && autoDiv!=='TEAM' ? (() => {
               const z = courtZones[autoDiv]; if (!z) return null
-              if (z.finals?.includes(court)) return { label:'본선', color:divColors[autoDiv] }
-              if (z.group?.includes(court))  return { label:'예선', color:divColors[autoDiv]+'99' }
+              if (z.finals?.includes(court)) return { label:'蹂몄꽑', color:divColors[autoDiv] }
+              if (z.group?.includes(court))  return { label:'?덉꽑', color:divColors[autoDiv]+'99' }
               return null
             })() : null
 
@@ -682,10 +682,10 @@ export default function CourtsPage() {
                 onDragOver={handleDragOver} onDrop={() => handleDropOnCourt(court)}
                 className={`bg-white rounded-xl border overflow-hidden min-h-[100px] transition-all ${touchOver==='court:'+court?'ring-2 ring-tennis-400 bg-tennis-50':''}`}>
 
-                {/* 코트 헤더 */}
+                {/* 肄뷀듃 ?ㅻ뜑 */}
                 <div className={`px-3 py-2 font-bold text-sm flex items-center justify-between ${isLive?'bg-red-700':'bg-[#2d5016]'} text-white`}>
                   <div className="flex items-center gap-1.5 min-w-0">
-                    {/* ✅ PC에서 코트명 잘리지 않게: truncate 제거, 긴 이름은 text-xs로 */}
+                    {/* ??PC?먯꽌 肄뷀듃紐??섎━吏 ?딄쾶: truncate ?쒓굅, 湲??대쫫? text-xs濡?*/}
                     <span className={`font-bold ${court.length > 6 ? 'text-xs' : 'text-sm'}`}>{court}</span>
                     {isLive && <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded-full animate-pulse flex-shrink-0">LIVE</span>}
                     {zoneDiv && <span style={{ background:zoneDiv.color }} className="text-[9px] px-1 py-0.5 rounded text-white/90 flex-shrink-0">{zoneDiv.label}</span>}
@@ -694,7 +694,7 @@ export default function CourtsPage() {
                     <span className="text-white/60 text-xs">{finished}/{courtItems.length}</span>
                     <button onClick={() => sendCourtNotify(court,'manual')} disabled={notifying===court||!hasPending}
                       className="text-white/80 hover:text-white disabled:opacity-30 text-sm leading-none">
-                      {notifying===court?'⏳':'🔔'}
+                      {notifying===court?'??:'?뵒'}
                     </button>
                   </div>
                 </div>
@@ -702,20 +702,20 @@ export default function CourtsPage() {
                 {notifyMsg[court] && <div className="px-3 py-1 text-xs bg-amber-50 text-amber-800 border-b">{notifyMsg[court]}</div>}
 
                 <div className="p-1.5 space-y-1 max-h-[60vh] overflow-y-auto">
-                  {/* 진행 중 / 대기 경기 */}
+                  {/* 吏꾪뻾 以?/ ?湲?寃쎄린 */}
                   {courtItems.filter(m=>m.status!=='FINISHED').map((m) => {
                     const allIdx = courtItems.indexOf(m)
                     let badge = ''
-                    if (m.status==='IN_PROGRESS') badge='🔴'
+                    if (m.status==='IN_PROGRESS') badge='?뵶'
                     else {
-                      if (currentIdx>=0&&allIdx===currentIdx) badge='🔴'
-                      else if (currentIdx>=0&&allIdx===currentIdx+1) badge='🟡'
-                      else if (currentIdx>=0&&allIdx===currentIdx+2) badge='🟢'
+                      if (currentIdx>=0&&allIdx===currentIdx) badge='?뵶'
+                      else if (currentIdx>=0&&allIdx===currentIdx+1) badge='?윞'
+                      else if (currentIdx>=0&&allIdx===currentIdx+2) badge='?윟'
                     }
                     const firstPendingIdx = courtItems.findIndex(mm => mm.status === 'PENDING')
                     const canStart = !m.is_team_tie && m.status === 'PENDING' && allIdx === firstPendingIdx
                     return (
-                      <MatchChip key={m.id} m={m} order={m.court_order||allIdx+1} badge={badge}
+                      <MatchChip key={m.id} m={m} order={m.court_order||allIdx+1} badge={badge} isCurrentSlot={m.status==='PENDING'&&allIdx===currentIdx}
                         divColor={divColors[m.division_id]}
                         onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
                         onClickStart={canStart?()=>startMatch(m.id):undefined}
@@ -727,7 +727,7 @@ export default function CourtsPage() {
                     )
                   })}
 
-                  {/* 완료 경기 접기 */}
+                  {/* ?꾨즺 寃쎄린 ?묎린 */}
                   {finished > 0 && (
                     <FinishedCourtItems
                       items={courtItems.filter(m=>m.status==='FINISHED')}
@@ -738,7 +738,7 @@ export default function CourtsPage() {
 
                   {courtItems.length===0 && (
                     <div className="text-xs text-stone-300 text-center py-6 border-2 border-dashed rounded-lg">
-                      드래그 또는 자동배정
+                      ?쒕옒洹??먮뒗 ?먮룞諛곗젙
                     </div>
                   )}
                 </div>
@@ -748,22 +748,22 @@ export default function CourtsPage() {
         </div>
       </div>
 
-      {/* 점수 입력 모달 */}
+      {/* ?먯닔 ?낅젰 紐⑤떖 */}
       {editMatch && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setEditMatch(null)}>
           <div className="bg-white rounded-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
             {editMatch.status==='FINISHED' && (
               <div className="mb-4 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2">
-                <span className="text-lg">⚠️</span>
+                <span className="text-lg">?좑툘</span>
                 <div>
-                  <p className="text-xs font-semibold text-amber-800">완료된 경기 수정 (운영자 모드)</p>
-                  <p className="text-xs text-amber-600 mt-0.5">기존 결과: {editMatch.score||'-'}</p>
+                  <p className="text-xs font-semibold text-amber-800">?꾨즺??寃쎄린 ?섏젙 (?댁쁺??紐⑤뱶)</p>
+                  <p className="text-xs text-amber-600 mt-0.5">湲곗〈 寃곌낵: {editMatch.score||'-'}</p>
                 </div>
               </div>
             )}
-            <h3 className="font-bold text-lg mb-1">경기 결과 입력/수정</h3>
+            <h3 className="font-bold text-lg mb-1">寃쎄린 寃곌낵 ?낅젰/?섏젙</h3>
             <p className="text-xs text-stone-400 mb-4">
-              {editMatch.match_num} · {editMatch.division_name} · {editMatch.round}
+              {editMatch.match_num} 쨌 {editMatch.division_name} 쨌 {editMatch.round}
               {editMatch.court && <span className="ml-1 font-medium text-[#2d5016]">({editMatch.court} #{editMatch.court_order})</span>}
             </p>
             <div className="flex items-center justify-center gap-4 my-4">
@@ -772,22 +772,22 @@ export default function CourtsPage() {
               <div className="text-center flex-1 font-medium">{editMatch.team_b_name||'TBD'}</div>
             </div>
             <div className="mb-4">
-              <label className="text-xs text-stone-500 mb-1 block">점수</label>
+              <label className="text-xs text-stone-500 mb-1 block">?먯닔</label>
               <input type="text" placeholder="6:4" value={editScore} onChange={e=>setEditScore(e.target.value)}
                 className="w-full border rounded-xl px-4 py-3 text-center text-lg font-bold" autoFocus />
             </div>
             <div className="mb-4">
-              <label className="text-xs text-stone-500 mb-1 block">승자</label>
+              <label className="text-xs text-stone-500 mb-1 block">?뱀옄</label>
               <div className="flex gap-2">
                 <button onClick={()=>setEditWinner('A')} className={`flex-1 py-2.5 rounded-xl text-sm font-medium border-2 transition-all ${editWinner==='A'?'bg-tennis-600 text-white border-tennis-600':'border-stone-200 hover:border-tennis-400'}`}>{editMatch.team_a_name||'A'}</button>
                 <button onClick={()=>setEditWinner('B')} className={`flex-1 py-2.5 rounded-xl text-sm font-medium border-2 transition-all ${editWinner==='B'?'bg-tennis-600 text-white border-tennis-600':'border-stone-200 hover:border-tennis-400'}`}>{editMatch.team_b_name||'B'}</button>
               </div>
             </div>
             <div className="flex gap-2">
-              <button onClick={()=>setEditMatch(null)} className="flex-1 py-2.5 rounded-xl border border-stone-300 text-sm text-stone-600">취소</button>
+              <button onClick={()=>setEditMatch(null)} className="flex-1 py-2.5 rounded-xl border border-stone-300 text-sm text-stone-600">痍⑥냼</button>
               <button onClick={submitResult} disabled={submitting||!editScore||!editWinner}
                 className={`flex-1 py-2.5 rounded-xl font-bold text-sm disabled:opacity-50 text-white ${editMatch.status==='FINISHED'?'bg-amber-500 hover:bg-amber-600':'bg-tennis-600 hover:bg-tennis-700'}`}>
-                {submitting?'저장 중..':editMatch.status==='FINISHED'?'강제 수정':'결과 저장'}
+                {submitting?'???以?.':editMatch.status==='FINISHED'?'媛뺤젣 ?섏젙':'寃곌낵 ???}
               </button>
             </div>
           </div>
@@ -797,7 +797,7 @@ export default function CourtsPage() {
   )
 }
 
-// ── 완료 경기 접기 컴포넌트
+// ?? ?꾨즺 寃쎄린 ?묎린 而댄룷?뚰듃
 function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }: {
   items: MatchSlim[]
   onClickScore: (m: MatchSlim) => void
@@ -809,8 +809,8 @@ function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }:
     <div className="border-t border-stone-100 mt-1 pt-1">
       <button onClick={() => setOpen(!open)}
         className="text-xs text-stone-400 hover:text-stone-600 w-full text-left px-1 py-0.5 flex items-center gap-1">
-        <span>{open ? '▼' : '▶'}</span>
-        <span>완료 {items.length}경기</span>
+        <span>{open ? '?? : '??}</span>
+        <span>?꾨즺 {items.length}寃쎄린</span>
       </button>
       {open && (
         <div className="space-y-1 mt-1">
@@ -819,13 +819,13 @@ function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }:
               <div className="flex items-center justify-between gap-1">
                 <div className="flex items-center gap-1.5 min-w-0 flex-1">
                   <span className="text-[10px] text-stone-400 font-mono flex-shrink-0">#{m.court_order}</span>
-                  {/* ✅ 팀명 줄바꿈 허용 */}
+                  {/* ???紐?以꾨컮轅??덉슜 */}
                   <span className="text-xs text-stone-500 break-words">{m.team_a_name} vs {m.team_b_name}</span>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
                   {m.score && <span className="text-xs font-bold text-stone-500">{m.score}</span>}
-                  <button onClick={() => onClickScore(m)} className="text-[10px] text-stone-300 hover:text-blue-500">✏</button>
-                  <button onClick={() => onClickUnassign(m.id)} className="text-[10px] text-stone-300 hover:text-red-500">✕</button>
+                  <button onClick={() => onClickScore(m)} className="text-[10px] text-stone-300 hover:text-blue-500">??/button>
+                  <button onClick={() => onClickUnassign(m.id)} className="text-[10px] text-stone-300 hover:text-red-500">??/button>
                 </div>
               </div>
             </div>
@@ -836,9 +836,9 @@ function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }:
   )
 }
 
-// ── MatchChip 컴포넌트
-function MatchChip({ m, order, badge, divColor, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
-  m: MatchSlim; order?: number; badge?: string; divColor?: string
+// ?? MatchChip 而댄룷?뚰듃
+function MatchChip({ m, order, badge, divColor, isCurrentSlot, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
+  m: MatchSlim; order?: number; badge?: string; divColor?: string; isCurrentSlot?: boolean
   onDragStart: (id: string) => void; onClickScore: () => void
   onClickStart?: () => void; onClickUnassign?: () => void
   onMoveUp?: () => void; onMoveDown?: () => void
@@ -851,32 +851,32 @@ function MatchChip({ m, order, badge, divColor, onDragStart, onClickScore, onCli
       className={`rounded-lg border p-2 text-xs cursor-grab active:cursor-grabbing transition-all ${
         isTeam
           ? (live?'bg-blue-50 border-blue-300':done?'bg-blue-50 border-blue-200':'bg-white border-blue-200 hover:border-blue-400')
-          : live?'bg-red-50 border-red-200':done?'bg-tennis-50 border-tennis-200':'bg-white border-stone-200 hover:border-stone-300'
+          : live?'bg-red-50 border-red-200':done?'bg-tennis-50 border-tennis-200':isCurrentSlot?'bg-amber-50 border-amber-300':'bg-white border-stone-200 hover:border-stone-300'
       }`}>
       <div className="flex items-center gap-1 mb-1">
         {order && <span className="text-stone-400 font-bold flex-shrink-0">#{order}</span>}
         {badge && <span className="text-[10px] flex-shrink-0">{badge}</span>}
         {isTeam
-          ? <span className="text-[10px] bg-blue-600 text-white px-1 rounded flex-shrink-0">단체</span>
+          ? <span className="text-[10px] bg-blue-600 text-white px-1 rounded flex-shrink-0">?⑥껜</span>
           : <span style={{ display:'inline-block',width:6,height:6,borderRadius:'50%',background:divColor||'#999',flexShrink:0 }} />
         }
         <span className="text-stone-400 truncate flex-1 min-w-0">
-          {isTeam ? m.match_num : `${m.division_name} · ${m.round}${m.group_label?` · ${m.group_label}`:''}`}
+          {isTeam ? m.match_num : `${m.division_name} 쨌 ${m.round}${m.group_label?` 쨌 ${m.group_label}`:''}`}
         </span>
         <div className="flex items-center gap-0.5 flex-shrink-0">
-          {onMoveUp    && <button onClick={e=>{e.stopPropagation();onMoveUp()}}    className="text-stone-300 hover:text-stone-600 px-0.5">▲</button>}
-          {onMoveDown  && <button onClick={e=>{e.stopPropagation();onMoveDown()}}  className="text-stone-300 hover:text-stone-600 px-0.5">▼</button>}
-          {onClickStart && <button onClick={e=>{e.stopPropagation();onClickStart()}} className="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded hover:bg-red-600">▶</button>}
+          {onMoveUp    && <button onClick={e=>{e.stopPropagation();onMoveUp()}}    className="text-stone-300 hover:text-stone-600 px-0.5">??/button>}
+          {onMoveDown  && <button onClick={e=>{e.stopPropagation();onMoveDown()}}  className="text-stone-300 hover:text-stone-600 px-0.5">??/button>}
+          {onClickStart && <button onClick={e=>{e.stopPropagation();onClickStart()}} className="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded hover:bg-red-600">??/button>}
           {!isTeam && (
             <button onClick={e=>{e.stopPropagation();onClickScore()}}
               className={`px-1 py-0.5 rounded text-[10px] transition-colors ${done?'text-amber-500 hover:text-amber-700':'text-stone-300 hover:text-blue-500'}`}>
-              {done?'재수정':'수정'}
+              {done?'?ъ닔??:'?섏젙'}
             </button>
           )}
-          {onClickUnassign && <button onClick={e=>{e.stopPropagation();onClickUnassign()}} className="text-stone-300 hover:text-red-400">✕</button>}
+          {onClickUnassign && <button onClick={e=>{e.stopPropagation();onClickUnassign()}} className="text-stone-300 hover:text-red-400">??/button>}
         </div>
       </div>
-      {/* ✅ 핵심: truncate 제거 → 팀명 줄바꿈 허용 */}
+      {/* ???듭떖: truncate ?쒓굅 ???紐?以꾨컮轅??덉슜 */}
       <div className={`font-medium leading-snug ${done?'text-stone-400 line-through':''}`}>
         {m.team_a_name} <span className="text-stone-300">vs</span> {m.team_b_name}
       </div>
@@ -886,3 +886,6 @@ function MatchChip({ m, order, badge, divColor, onDragStart, onClickScore, onCli
     </div>
   )
 }
+
+
+
