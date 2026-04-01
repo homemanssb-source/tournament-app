@@ -7,6 +7,9 @@ import { usePushSubscription } from '@/hooks/usePushSubscription'
 
 type Mode = 'select' | 'individual' | 'team';
 
+// ★ FIX-1: localStorage 키 — 알림/참석 처리 완료한 PIN 목록
+const NOTIF_DONE_KEY = 'pin_notif_done'
+
 export default function PinPage() {
   const router = useRouter()
   const [selectedEvent, setSelectedEvent] = useState('')
@@ -19,6 +22,8 @@ export default function PinPage() {
   const { status: pushStatus, message: pushMessage, subscribeWithPin } = usePushSubscription()
   const [loginSuccess, setLoginSuccess] = useState(false)
   const [loginPin, setLoginPin] = useState('')
+  // ★ FIX-2: checkinLoading 별도 관리 (pushStatus 타이밍 버그 해결)
+  const [checkinLoading, setCheckinLoading] = useState(false)
 
   useEffect(() => {
     const dashboardEventId = sessionStorage.getItem('dashboard_event_id')
@@ -50,36 +55,68 @@ export default function PinPage() {
     })
     setLoading(false)
     if (err) { setError(err.message || 'PIN이 올바르지 않습니다.'); return }
+
     sessionStorage.setItem('pin_session', JSON.stringify(data))
     sessionStorage.setItem('venue_pin', pin)
     sessionStorage.setItem('pin_event_id', selectedEvent)
+
+    // ★ FIX-1: 이미 처리한 PIN이면 알림 화면 건너뛰고 바로 이동
+    try {
+      const donePins = JSON.parse(localStorage.getItem(NOTIF_DONE_KEY) || '[]') as string[]
+      if (donePins.includes(pin)) {
+        router.push('/pin/matches')
+        return
+      }
+    } catch {}
 
     setLoginPin(pin)
     setLoginSuccess(true)
   }
 
-  // ★ 알림 허용 = 참석 확인 동시 처리
+  // ★ FIX-2: pushStatus state 미사용 → 로딩/이동 직접 제어
+  // ★ FIX-3: checked_in 저장을 구독 성공 여부와 완전 분리
   async function handleAllowNotification() {
-    // 1) 푸시 구독
-    await subscribeWithPin(loginPin)
+    setCheckinLoading(true)
+    try {
+      // 1) 푸시 구독 시도 (성공/실패 무관하게 계속)
+      await subscribeWithPin(loginPin)
 
-    // 2) ★ 참석 확인 저장
-    await supabase
-      .from('teams')
-      .update({ checked_in: true, checked_in_at: new Date().toISOString() })
-      .eq('pin_plain', loginPin)
-      .eq('event_id', selectedEvent)
+      // 2) 참석 확인 저장 — 구독 결과와 무관하게 항상 실행
+      await supabase
+        .from('teams')
+        .update({ checked_in: true, checked_in_at: new Date().toISOString() })
+        .eq('pin_plain', loginPin)
+        .eq('event_id', selectedEvent)
 
-    // pushStatus === 'success' 이면 useEffect에서 자동 이동
-    // 실패한 경우에도 이동
-    if (pushStatus !== 'loading') {
+      // 3) 완료 PIN 기록 → 다음 로그인 시 알림 화면 스킵
+      markNotifDone(loginPin)
+
+    } finally {
+      setCheckinLoading(false)
+    }
+
+    // pushStatus === 'success' 면 useEffect가 자동 이동 처리
+    // 그 외(error/idle/unsupported)는 여기서 바로 이동
+    if (pushStatus !== 'success') {
       router.push('/pin/matches')
     }
   }
 
-  // 건너뛰기 = 참석 확인 안 함
+  // 건너뛰기 — 참석 확인 없이 이동 (다음 로그인 시 또 뜸)
   function handleSkipNotification() {
     router.push('/pin/matches')
+  }
+
+  // ★ localStorage에 완료 PIN 기록 (최대 20개 보관)
+  function markNotifDone(pinCode: string) {
+    try {
+      const donePins = JSON.parse(localStorage.getItem(NOTIF_DONE_KEY) || '[]') as string[]
+      if (!donePins.includes(pinCode)) {
+        donePins.push(pinCode)
+        if (donePins.length > 20) donePins.shift()
+        localStorage.setItem(NOTIF_DONE_KEY, JSON.stringify(donePins))
+      }
+    } catch {}
   }
 
   async function handleTeamSubmit() {
@@ -139,10 +176,10 @@ export default function PinPage() {
             <>
               <button
                 onClick={handleAllowNotification}
-                disabled={pushStatus === 'loading'}
+                disabled={pushStatus === 'loading' || checkinLoading}
                 className="w-full bg-green-600 text-white font-bold py-4 rounded-xl hover:bg-green-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-lg shadow-lg"
               >
-                {pushStatus === 'loading' ? (
+                {(pushStatus === 'loading' || checkinLoading) ? (
                   <><span className="animate-spin">⏳</span> 처리 중...</>
                 ) : (
                   <>✅ 참석 확인 &amp; 알림 켜기</>
