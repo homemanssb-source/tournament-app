@@ -1,6 +1,10 @@
 'use client'
 import { useRef, useEffect } from 'react'
 
+// ============================================================
+// src/components/TournamentBracket.tsx
+// ============================================================
+
 interface BracketMatch {
   match_id?: string; match_num?: string; round?: string; slot?: number
   team_a_id?: string; team_b_id?: string; team_a_name?: string; team_b_name?: string
@@ -8,10 +12,7 @@ interface BracketMatch {
   next_match_id?: string; next_slot?: string
 }
 
-const ROUND_ORDER = [
-  '본선128강', '본선64강', '본선32강',
-  '16강', '8강', '4강', '결승'
-]
+const ROUND_ORDER = ['128강', '64강', '32강', '16강', '8강', '4강', '결승']
 
 const CARD_H = 64
 const MIN_GAP = 8
@@ -21,6 +22,22 @@ function getCardWidth(roundCount: number): number {
   if (roundCount >= 5) return 170
   if (roundCount >= 4) return 185
   return 205
+}
+
+function calcPositions(roundIdx: number, count: number, firstRoundCount: number, totalHeight: number): number[] {
+  if (roundIdx === 0) {
+    const spacing = (totalHeight - 60) / Math.max(count, 1)
+    return Array.from({ length: count }, (_, i) => i * spacing + (spacing - CARD_H) / 2)
+  }
+  const prevCount     = count * 2
+  const prevPositions = calcPositions(roundIdx - 1, prevCount, firstRoundCount, totalHeight)
+  const positions: number[] = []
+  for (let i = 0; i < count; i++) {
+    const top    = prevPositions[i * 2]     ?? 0
+    const bottom = prevPositions[i * 2 + 1] ?? top
+    positions.push((top + bottom) / 2)
+  }
+  return positions
 }
 
 export default function TournamentBracket({ matches }: { matches: BracketMatch[] }) {
@@ -45,7 +62,9 @@ export default function TournamentBracket({ matches }: { matches: BracketMatch[]
   for (const arr of byRound.values()) arr.sort((a, b) => (a.slot || 0) - (b.slot || 0))
 
   const rounds = ROUND_ORDER.filter(r => byRound.has(r))
-  if (!rounds.length) return <p className="text-center py-10 text-stone-400">토너먼트 데이터가 없습니다.</p>
+  if (!rounds.length) return (
+    <p className="text-center py-10 text-stone-400 text-sm">토너먼트 데이터가 없습니다.</p>
+  )
 
   const firstRoundCount = (byRound.get(rounds[0]) || []).length
   const totalHeight     = firstRoundCount * (CARD_H + MIN_GAP) + 60
@@ -55,18 +74,15 @@ export default function TournamentBracket({ matches }: { matches: BracketMatch[]
 
   return (
     <div className="w-full rounded-xl border border-stone-200 overflow-hidden">
-      {/* 헤더: overflow hidden, body 스크롤과 JS 동기화 */}
-      <div
-        ref={headerRef}
-        style={{ overflowX: 'hidden' }}
-        className="border-b border-stone-200 bg-stone-50"
-      >
+
+      {/* 헤더 — overflow hidden + JS 스크롤 동기화 */}
+      <div ref={headerRef} style={{ overflowX: 'hidden' }} className="border-b border-stone-200 bg-stone-50">
         <div className="flex" style={{ minWidth: totalWidth }}>
           {rounds.map(round => (
             <div
               key={round}
               style={{ width: COL_W, flexShrink: 0 }}
-              className="text-center py-2.5 text-xs font-bold text-stone-600 border-r border-stone-200 last:border-r-0"
+              className="text-center py-2 text-xs font-bold text-stone-500 tracking-wide border-r border-stone-100 last:border-r-0"
             >
               {round}
             </div>
@@ -75,70 +91,63 @@ export default function TournamentBracket({ matches }: { matches: BracketMatch[]
       </div>
 
       {/* 브래킷 본체 */}
-      <div ref={scrollRef} className="overflow-x-auto pb-4">
-        <div
-          className="relative flex"
-          style={{ minWidth: totalWidth, height: Math.max(totalHeight, 300) }}
-        >
+      <div
+        ref={scrollRef}
+        className="overflow-x-auto pb-4 bg-white"
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        style={{ WebkitOverflowScrolling: 'touch' } as any}
+      >
+        <div className="relative" style={{ minWidth: totalWidth, height: Math.max(totalHeight, 300) }}>
+
+          {/* SVG 연결선 */}
+          <svg
+            style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
+            width={totalWidth}
+            height={Math.max(totalHeight, 300)}
+          >
+            {rounds.map((round, rIdx) => {
+              if (rIdx === 0) return null
+              const count   = (byRound.get(round) || []).length
+              const curPos  = calcPositions(rIdx,     count,     firstRoundCount, totalHeight)
+              const prevPos = calcPositions(rIdx - 1, count * 2, firstRoundCount, totalHeight)
+              const xPrevR  = (rIdx - 1) * COL_W + CARD_W + 5
+              const xCurL   = rIdx * COL_W + 5
+              const midX    = (xPrevR + xCurL) / 2
+
+              return curPos.map((cy, i) => {
+                const topY = (prevPos[i * 2]     ?? 0) + CARD_H / 2
+                const botY = (prevPos[i * 2 + 1] ?? prevPos[i * 2] ?? 0) + CARD_H / 2
+                const curY = cy + CARD_H / 2
+                return (
+                  <g key={`conn-${rIdx}-${i}`}>
+                    <line x1={xPrevR} y1={topY} x2={midX}  y2={topY} stroke="#d6d3d1" strokeWidth={1.5} />
+                    <line x1={xPrevR} y1={botY} x2={midX}  y2={botY} stroke="#d6d3d1" strokeWidth={1.5} />
+                    <line x1={midX}   y1={topY} x2={midX}  y2={botY} stroke="#d6d3d1" strokeWidth={1.5} />
+                    <line x1={midX}   y1={curY} x2={xCurL} y2={curY} stroke="#d6d3d1" strokeWidth={1.5} />
+                  </g>
+                )
+              })
+            })}
+          </svg>
+
+          {/* 카드 */}
           {rounds.map((round, rIdx) => {
             const roundMatches = byRound.get(round) || []
-            const count        = roundMatches.length
-            const positions    = calcPositions(rIdx, count, firstRoundCount, totalHeight)
-
-            return (
-              <div key={round} className="flex-shrink-0 relative" style={{ width: COL_W }}>
-                {roundMatches.map((m, mIdx) => (
-                  <div
-                    key={m.match_id || mIdx}
-                    className="absolute"
-                    style={{ top: positions[mIdx], left: 5, right: 5 }}
-                  >
-                    <MatchCard m={m} />
-                    {rIdx < rounds.length - 1 && (
-                      <div className="absolute top-1/2 border-t-2 border-stone-300"
-                        style={{ right: -10, width: 10, transform: 'translateY(-50%)' }} />
-                    )}
-                    {rIdx > 0 && (
-                      <div className="absolute top-1/2 border-t-2 border-stone-300"
-                        style={{ left: -10, width: 10, transform: 'translateY(-50%)' }} />
-                    )}
-                  </div>
-                ))}
-
-                {rIdx > 0 && roundMatches.map((m, mIdx) => {
-                  const prevCount     = (byRound.get(rounds[rIdx - 1]) || []).length
-                  const prevPositions = calcPositions(rIdx - 1, prevCount, firstRoundCount, totalHeight)
-                  const prevTop       = prevPositions[mIdx * 2]
-                  const prevBottom    = prevPositions[mIdx * 2 + 1]
-                  if (prevTop === undefined || prevBottom === undefined) return null
-                  return (
-                    <div key={`vline-${mIdx}`} className="absolute border-l-2 border-stone-300"
-                      style={{ left: 4, top: prevTop + CARD_H / 2, height: prevBottom - prevTop }} />
-                  )
-                })}
+            const positions    = calcPositions(rIdx, roundMatches.length, firstRoundCount, totalHeight)
+            return roundMatches.map((m, mIdx) => (
+              <div
+                key={m.match_id || mIdx}
+                style={{ position: 'absolute', top: positions[mIdx], left: rIdx * COL_W + 5, width: CARD_W }}
+              >
+                <MatchCard m={m} />
               </div>
-            )
+            ))
           })}
+
         </div>
       </div>
     </div>
   )
-}
-
-function calcPositions(roundIdx: number, count: number, firstRoundCount: number, totalHeight: number): number[] {
-  if (roundIdx === 0) {
-    const spacing = (totalHeight - 60) / Math.max(count, 1)
-    return Array.from({ length: count }, (_, i) => i * spacing + (spacing - CARD_H) / 2)
-  }
-  const prevCount     = count * 2
-  const prevPositions = calcPositions(roundIdx - 1, prevCount, firstRoundCount, totalHeight)
-  const positions: number[] = []
-  for (let i = 0; i < count; i++) {
-    const top    = prevPositions[i * 2]     ?? 0
-    const bottom = prevPositions[i * 2 + 1] ?? top
-    positions.push((top + bottom) / 2)
-  }
-  return positions
 }
 
 function MatchCard({ m }: { m: BracketMatch }) {
@@ -150,36 +159,75 @@ function MatchCard({ m }: { m: BracketMatch }) {
 
   return (
     <div
-      className={`rounded-lg border text-xs overflow-hidden shadow-sm ${
-        inProgress     ? 'border-red-400 ring-1 ring-red-200' :
-        done && !isBye ? 'border-green-400 bg-white' :
-        isBye          ? 'border-amber-200 bg-amber-50/30' :
-                         'border-stone-200 bg-white'
-      }`}
       style={{ height: CARD_H }}
+      className={`rounded-lg border overflow-hidden shadow-sm flex flex-col ${
+        inProgress       ? 'border-red-300'
+        : done && !isBye ? 'border-green-300'
+        : isBye          ? 'border-amber-200'
+        :                  'border-stone-200'
+      } ${isBye ? 'bg-amber-50/40' : 'bg-white'}`}
     >
-      <div className={`flex items-center justify-between px-2.5 h-[26px] border-b border-stone-100 ${
-        aWon ? 'bg-blue-50 font-bold text-blue-800' : bWon && done ? 'text-stone-300' : ''
-      }`}>
-        <span className={`truncate flex-1 ${!m.team_a_name || m.team_a_name === 'TBD' ? 'text-stone-300 italic' : ''}`}>
-          {aWon && '🏆 '}{m.team_a_name || 'TBD'}
+      {/* LIVE 바 */}
+      {inProgress && (
+        <div className="flex items-center gap-1 px-2 bg-red-50 border-b border-red-100" style={{ height: 14, flexShrink: 0 }}>
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+          <span className="text-red-700 font-bold" style={{ fontSize: 9, letterSpacing: 1 }}>LIVE</span>
+        </div>
+      )}
+
+      {/* 팀 A */}
+      <div
+        className={`flex items-center px-2 border-b border-stone-100 ${
+          aWon ? 'bg-green-50' : bWon && done ? 'bg-stone-50' : ''
+        }`}
+        style={{ flex: 1 }}
+      >
+        <span className={`truncate flex-1 min-w-0 text-xs ${
+          aWon                                         ? 'font-bold text-green-800'
+          : !m.team_a_name || m.team_a_name === 'TBD' ? 'text-stone-300 italic'
+          : bWon && done                               ? 'text-stone-300'
+          :                                              'text-stone-800'
+        }`}>
+          {m.team_a_name || 'TBD'}
         </span>
-        {inProgress && m.team_a_id && <span className="text-red-400 ml-1 animate-pulse text-[10px]">●</span>}
+        {aWon && <span className="text-green-600 ml-1 flex-shrink-0 text-xs">✓</span>}
+        {inProgress && m.team_a_id && (
+          <span className="text-red-400 ml-1 flex-shrink-0 animate-pulse" style={{ fontSize: 9 }}>●</span>
+        )}
       </div>
-      <div className={`flex items-center justify-between px-2.5 h-[26px] ${
-        bWon ? 'bg-blue-50 font-bold text-blue-800' : aWon && done ? 'text-stone-300' : ''
-      }`}>
-        <span className={`truncate flex-1 ${!m.team_b_name || m.team_b_name === 'TBD' || isBye ? 'text-stone-300 italic' : ''}`}>
-          {bWon && '🏆 '}{isBye ? 'BYE' : (m.team_b_name || 'TBD')}
+
+      {/* 팀 B */}
+      <div
+        className={`flex items-center px-2 ${
+          bWon ? 'bg-green-50' : aWon && done ? 'bg-stone-50' : ''
+        }`}
+        style={{ flex: 1 }}
+      >
+        <span className={`truncate flex-1 min-w-0 text-xs ${
+          bWon                                                  ? 'font-bold text-green-800'
+          : isBye || !m.team_b_name || m.team_b_name === 'TBD' ? 'text-stone-300 italic'
+          : aWon && done                                        ? 'text-stone-300'
+          :                                                        'text-stone-800'
+        }`}>
+          {isBye ? 'BYE' : (m.team_b_name || 'TBD')}
         </span>
+        {bWon && <span className="text-green-600 ml-1 flex-shrink-0 text-xs">✓</span>}
       </div>
+
+      {/* 점수 바 */}
       {done && !isBye && m.score && (
-        <div className="text-center h-[12px] leading-[12px] bg-green-50 text-green-700 font-bold text-[10px] border-t border-stone-100">
+        <div
+          className="flex items-center justify-center bg-green-50 border-t border-green-100 text-green-700 font-bold"
+          style={{ height: 13, flexShrink: 0, fontSize: 10 }}
+        >
           {m.score}
         </div>
       )}
       {isBye && (
-        <div className="text-center h-[12px] leading-[12px] bg-amber-50 text-amber-500 font-medium text-[10px] border-t border-stone-100">
+        <div
+          className="flex items-center justify-center bg-amber-50 border-t border-amber-100 text-amber-600 font-bold tracking-widest"
+          style={{ height: 13, flexShrink: 0, fontSize: 9 }}
+        >
           BYE
         </div>
       )}
