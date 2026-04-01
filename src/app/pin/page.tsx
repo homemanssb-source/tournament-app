@@ -33,7 +33,7 @@ export default function PinPage() {
       })
   }, [])
 
-  // ✅ 알림 등록 성공 시 자동 이동
+  // 알림 등록 성공 시 1.5초 후 자동 이동
   useEffect(() => {
     if (pushStatus === 'success') {
       const t = setTimeout(() => router.push('/pin/matches'), 1500)
@@ -58,15 +58,26 @@ export default function PinPage() {
     setLoginSuccess(true)
   }
 
+  // ★ 알림 허용 = 참석 확인 동시 처리
   async function handleAllowNotification() {
+    // 1) 푸시 구독
     await subscribeWithPin(loginPin)
-    // pushStatus가 success로 바뀌면 useEffect에서 자동 이동
+
+    // 2) ★ 참석 확인 저장
+    await supabase
+      .from('teams')
+      .update({ checked_in: true, checked_in_at: new Date().toISOString() })
+      .eq('pin_plain', loginPin)
+      .eq('event_id', selectedEvent)
+
+    // pushStatus === 'success' 이면 useEffect에서 자동 이동
     // 실패한 경우에도 이동
     if (pushStatus !== 'loading') {
       router.push('/pin/matches')
     }
   }
 
+  // 건너뛰기 = 참석 확인 안 함
   function handleSkipNotification() {
     router.push('/pin/matches')
   }
@@ -104,20 +115,24 @@ export default function PinPage() {
 
   function resetMode() { setMode('select'); setPin(''); setError(''); setTeamTies([]) }
 
+  // 로그인 성공 → 참석확인 + 알림 화면
   if (loginSuccess) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4">
         <div className="text-6xl mb-4">🔔</div>
-        <h1 className="text-xl font-bold mb-2 text-center">코트 배정 알림 받기</h1>
-        <p className="text-stone-500 text-sm mb-8 text-center">
-          내 코트 차례가 되면<br />앱이 꺼져 있어도 알림이 와요
+        <h1 className="text-xl font-bold mb-2 text-center">참석 확인 &amp; 알림 받기</h1>
+        <p className="text-stone-500 text-sm mb-2 text-center">
+          알림을 허용하면 <strong>참석 확인</strong>이 자동으로 완료됩니다.
+        </p>
+        <p className="text-stone-400 text-xs mb-8 text-center">
+          내 코트 차례가 되면 앱이 꺼져 있어도 알림이 와요
         </p>
         <div className="w-full max-w-sm space-y-3">
           {pushStatus === 'success' ? (
             <div className="text-center py-4">
-              <div className="text-3xl mb-2">✅</div>
-              <p className="text-green-600 font-medium">{pushMessage}</p>
-              {/* ✅ 자동 이동 중 표시 */}
+              <div className="text-4xl mb-3">✅</div>
+              <p className="text-green-600 font-bold text-lg">참석 확인 완료!</p>
+              <p className="text-green-500 text-sm mt-1">{pushMessage}</p>
               <p className="text-stone-400 text-sm mt-2">경기 목록으로 이동 중...</p>
             </div>
           ) : (
@@ -125,12 +140,12 @@ export default function PinPage() {
               <button
                 onClick={handleAllowNotification}
                 disabled={pushStatus === 'loading'}
-                className="w-full bg-amber-500 text-white font-bold py-4 rounded-xl hover:bg-amber-600 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-lg"
+                className="w-full bg-green-600 text-white font-bold py-4 rounded-xl hover:bg-green-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-lg shadow-lg"
               >
                 {pushStatus === 'loading' ? (
-                  <><span className="animate-spin">⏳</span> 등록 중...</>
+                  <><span className="animate-spin">⏳</span> 처리 중...</>
                 ) : (
-                  <><span>🔔</span> 알림 허용하기</>
+                  <>✅ 참석 확인 &amp; 알림 켜기</>
                 )}
               </button>
               {pushStatus === 'error' && (
@@ -142,6 +157,9 @@ export default function PinPage() {
               >
                 알림 없이 계속하기
               </button>
+              <p className="text-xs text-stone-300 text-center">
+                건너뛰면 참석 확인이 되지 않습니다
+              </p>
             </>
           )}
         </div>
