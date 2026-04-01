@@ -77,11 +77,12 @@ export default function PinPage() {
   // ★ FIX-3: checked_in 저장을 구독 성공 여부와 완전 분리
   async function handleAllowNotification() {
     setCheckinLoading(true)
+    let subscribeOk = false
     try {
-      // 1) 푸시 구독 시도 (성공/실패 무관하게 계속)
-      await subscribeWithPin(loginPin)
+      // 1) 푸시 구독 시도 — 반환값(boolean)으로 성공 여부 판단
+      subscribeOk = await subscribeWithPin(loginPin)
 
-      // 2) 참석 확인 저장 — 구독 결과와 무관하게 항상 실행
+      // 2) 참석 확인 저장 — 구독 성공/실패 무관하게 항상 실행
       await supabase
         .from('teams')
         .update({ checked_in: true, checked_in_at: new Date().toISOString() })
@@ -95,9 +96,9 @@ export default function PinPage() {
       setCheckinLoading(false)
     }
 
-    // pushStatus === 'success' 면 useEffect가 자동 이동 처리
-    // 그 외(error/idle/unsupported)는 여기서 바로 이동
-    if (pushStatus !== 'success') {
+    // 구독 성공(ok=true) → useEffect가 1.5초 후 자동 이동
+    // 구독 실패(ok=false) → 여기서 바로 이동 (pushStatus state 미사용)
+    if (!subscribeOk) {
       router.push('/pin/matches')
     }
   }
