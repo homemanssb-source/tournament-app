@@ -1,12 +1,27 @@
 'use client'
+// ============================================================
+// src/components/useDashboard.tsx
+// ✅ [FIX] useEventId: sessionStorage → localStorage
+//    layout.tsx가 localStorage에 저장하므로 동일하게 맞춤
+// ============================================================
 import { useEffect, useState } from 'react'
 import { supabase, Division } from '@/lib/supabase'
 
 export function useEventId(): string {
   const [id, setId] = useState('')
   useEffect(() => {
-    const stored = sessionStorage.getItem('dashboard_event_id') || ''
+    // ✅ layout.tsx가 localStorage에 저장 → 동일하게 localStorage에서 읽기
+    const stored = localStorage.getItem('dashboard_event_id') || ''
     setId(stored)
+
+    // ✅ 다른 탭/창에서 대회 변경 시 즉시 반영
+    function onStorage(e: StorageEvent) {
+      if (e.key === 'dashboard_event_id' && e.newValue) {
+        setId(e.newValue)
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
   }, [])
   return id
 }
