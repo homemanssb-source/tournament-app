@@ -20,8 +20,18 @@ interface CourtQueueMatch {
   team_a_name: string; team_b_name: string; division_name: string
 }
 
+// 인앱 알림 배너 타입
+interface InAppNotif {
+  id: number
+  title: string
+  body: string
+}
+
 const ROUND_ORDER: Record<string, number> = { group:0, GROUP:0, R32:1, R16:2, QF:3, SF:4, F:5, '본선32강':1, '본선16강':1, '16강':2, '8강':3, '4강':4, '결승':5 }
 const ROUND_LABEL: Record<string, string> = { group:'예선', GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', '본선32강':'32강', '본선16강':'16강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
+
+// 연속 오류 허용 횟수 (이 이상 실패하면 재로그인)
+const MAX_ERRORS = 3
 
 export default function PinMatchesPage() {
   const router = useRouter()
@@ -38,8 +48,26 @@ export default function PinMatchesPage() {
   const [notifAllowed, setNotifAllowed]     = useState(false)
   const [notifRequested, setNotifRequested] = useState(false)
   const prevWaitRef = useRef<Map<string, number>>(new Map())
+  // ✅ 연속 오류 카운터 — 일시적 네트워크 오류로 튕기지 않도록
+  const errorCountRef = useRef(0)
+
+  // ✅ 인앱 알림 배너 상태
+  const [inAppNotifs, setInAppNotifs] = useState<InAppNotif[]>([])
+  const notifIdRef = useRef(0)
 
   const { autoResubscribe, subscribeWithPin } = usePushSubscription()
+
+  // ✅ 인앱 알림 표시 함수
+  const showInAppNotif = useCallback((title: string, body: string) => {
+    const id = ++notifIdRef.current
+    setInAppNotifs(prev => [...prev, { id, title, body }])
+    // 진동 (모바일)
+    if ('vibrate' in navigator) navigator.vibrate([200, 100, 200])
+    // 5초 후 자동 제거
+    setTimeout(() => {
+      setInAppNotifs(prev => prev.filter(n => n.id !== id))
+    }, 5000)
+  }, [])
 
   useEffect(() => {
     const raw = sessionStorage.getItem('pin_session')
@@ -55,6 +83,20 @@ export default function PinMatchesPage() {
     autoResubscribe()
   }, [])
 
+  // ✅ SW 메시지 수신 → 포그라운드 인앱 알림 표시
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return
+
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type === 'PUSH_NOTIFICATION') {
+        showInAppNotif(event.data.title, event.data.body)
+      }
+    }
+
+    navigator.serviceWorker.addEventListener('message', handler)
+    return () => navigator.serviceWorker.removeEventListener('message', handler)
+  }, [showInAppNotif])
+
   useEffect(() => {
     if (!session) return
     const iv = setInterval(() => loadData(session), 15000)
@@ -63,7 +105,38 @@ export default function PinMatchesPage() {
 
   const loadData = useCallback(async (s: any) => {
     const { data, error } = await supabase.rpc('rpc_pin_list_matches', { p_token: s.token })
-    if (error) { sessionStorage.removeItem('pin_session'); router.replace('/pin'); return }
+
+    if (error) {
+      // ✅ 튕김 방지: 인증 오류(코드 확인)가 아닌 이상 바로 튕기지 않음
+      // Supabase RPC 에러 코드 PGRST301 = JWT 만료, 42501 = 권한 없음
+      const isAuthError =
+        error.code === 'PGRST301' ||
+        error.code === '42501' ||
+        error.message?.includes('JWT') ||
+        error.message?.includes('invalid token')
+
+      if (isAuthError) {
+        // 진짜 인증 오류 → 즉시 재로그인
+        sessionStorage.removeItem('pin_session')
+        router.replace('/pin')
+        return
+      }
+
+      // 일시적 오류 — 카운터 증가
+      errorCountRef.current += 1
+      console.warn(`[PIN] loadData error (${errorCountRef.current}/${MAX_ERRORS}):`, error.message)
+
+      if (errorCountRef.current >= MAX_ERRORS) {
+        // 반복 실패 → 재로그인 유도 (세션은 유지하여 PIN 재입력 없이 복귀 가능)
+        sessionStorage.removeItem('pin_session')
+        router.replace('/pin')
+      }
+      // setLoading(false) 하지 않음 → 기존 데이터 유지
+      return
+    }
+
+    // 성공 → 오류 카운터 리셋
+    errorCountRef.current = 0
 
     const myMatches: PinMatch[] = data.matches || []
     setMatches(myMatches)
@@ -72,8 +145,6 @@ export default function PinMatchesPage() {
     const queueMap = new Map<string, CourtQueueMatch[]>()
 
     if (courts.length > 0) {
-      // ✅ 당일 경기만 필터
-      // divisions 테이블에서 내 경기 날짜 조회 후 같은 날짜 경기만 포함
       const myDivIds = [...new Set(myMatches.map(m => m.division_id).filter(Boolean))]
       let myDates: string[] = []
 
@@ -87,9 +158,6 @@ export default function PinMatchesPage() {
         )] as string[]
       }
 
-      // ✅ 쿼리 단순화: 전체 가져온 후 클라이언트에서 필터
-      // - BYE 제외: score !== 'BYE' (NULL 포함)
-      // - 당일 경기만: match_date 기준
       const { data: rawMatches } = await supabase
         .from('v_matches_with_teams')
         .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
@@ -98,8 +166,8 @@ export default function PinMatchesPage() {
         .order('court').order('court_order')
 
       const allMatches = (rawMatches || []).filter((m: any) => {
-        if (m.score === 'BYE') return false  // BYE 제외
-        if (myDates.length > 0 && m.match_date && !myDates.includes(m.match_date)) return false  // 다른 날 제외
+        if (m.score === 'BYE') return false
+        if (myDates.length > 0 && m.match_date && !myDates.includes(m.match_date)) return false
         return true
       })
 
@@ -119,9 +187,15 @@ export default function PinMatchesPage() {
         const myIdx   = queue.findIndex(q => q.id === m.id)
         const remaining = curIdx >= 0 && myIdx >= 0 ? Math.max(0, myIdx - curIdx) : 0
 
+        // ✅ 폴링 기반 인앱 알림 (포그라운드에서 직접 감지)
         if (notifAllowed && remaining === 1) {
           const prev = prevWaitRef.current.get(m.court) ?? 99
-          if (prev > 1) sendBrowserNotif(m.court)
+          if (prev > 1) {
+            // SW Push 알림 외에 폴링으로도 인앱 알림 표시
+            showInAppNotif('🎾 곧 내 차례!', `${m.court}에서 다음 경기로 이동해주세요.`)
+            // 기존 sendBrowserNotif도 함께 (백그라운드 대비)
+            sendBrowserNotif(m.court)
+          }
         }
         if (m.court) prevWaitRef.current.set(m.court, remaining)
       }
@@ -129,11 +203,11 @@ export default function PinMatchesPage() {
 
     setCourtQueues(queueMap)
     setLoading(false)
-  }, [notifAllowed])
+  }, [notifAllowed, showInAppNotif])
 
   function sendBrowserNotif(court: string) {
     if (!('Notification' in window) || Notification.permission !== 'granted') return
-    new Notification('🎾 곧 내 차례!', { body: `${court}에서 다음 경기로 이동해주세요.`, icon: '/icon.png', tag: `court-${court}` })
+    new Notification('🎾 곧 내 차례!', { body: `${court}에서 다음 경기로 이동해주세요.`, icon: '/icon-192x192.png', tag: `court-${court}` })
   }
 
   async function requestNotification() {
@@ -143,7 +217,7 @@ export default function PinMatchesPage() {
       const perm = await Notification.requestPermission()
       setNotifAllowed(perm === 'granted')
       if (perm === 'granted') {
-        new Notification('제주 테니스 토너먼트', { body: '경기 알림이 활성화되었습니다.', icon: '/icon.png' })
+        showInAppNotif('🎾 알림 켜짐', '경기 알림이 활성화되었습니다.')
         const pin = session?.pin || sessionStorage.getItem('venue_pin') || session?.token
         if (pin) await subscribeWithPin(pin)
         else autoResubscribe()
@@ -186,7 +260,7 @@ export default function PinMatchesPage() {
   function NotifButton() {
     if (notifAllowed) {
       return (
-        <button onClick={() => { autoResubscribe(); sendBrowserNotif('테스트') }}
+        <button onClick={() => { autoResubscribe(); showInAppNotif('🎾 알림 테스트', '알림이 정상적으로 작동하고 있습니다.') }}
           className="text-xs text-white/60 hover:text-white/90 flex items-center gap-1" title="알림 켜짐">
           🔔 알림 켜짐
         </button>
@@ -218,6 +292,27 @@ export default function PinMatchesPage() {
 
   return (
     <div className="min-h-screen bg-stone-50">
+      {/* ✅ 인앱 알림 배너 (화면 켜져 있을 때도 표시) */}
+      <div className="fixed top-0 left-0 right-0 z-50 pointer-events-none">
+        <div className="max-w-2xl mx-auto px-4 pt-2 space-y-2">
+          {inAppNotifs.map(n => (
+            <div key={n.id}
+              className="pointer-events-auto bg-[#2d5016] text-white rounded-2xl shadow-2xl px-4 py-3 flex items-start gap-3 animate-slideDown">
+              <span className="text-2xl flex-shrink-0">🎾</span>
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-sm">{n.title}</div>
+                <div className="text-xs text-white/80 mt-0.5">{n.body}</div>
+              </div>
+              <button
+                onClick={() => setInAppNotifs(prev => prev.filter(x => x.id !== n.id))}
+                className="text-white/60 hover:text-white text-lg leading-none flex-shrink-0">
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <header className="bg-[#2d5016] text-white sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
           <div>
@@ -462,7 +557,6 @@ function CourtQueue({ queue, myMatchId, court }: {
 
       {expanded && (
         <div className="px-4 pb-3 space-y-1.5">
-          {/* 진행중/대기 경기 */}
           {queue.filter(q => q.status !== 'FINISHED').map((q, i) => {
             const isLive = q.status === 'IN_PROGRESS'
             const isMe   = q.id === myMatchId
@@ -481,7 +575,6 @@ function CourtQueue({ queue, myMatchId, court }: {
               </div>
             )
           })}
-          {/* 완료 경기 접기 */}
           {queue.filter(q => q.status === 'FINISHED').length > 0 && (
             <FinishedQueue items={queue.filter(q => q.status === 'FINISHED')} />
           )}
