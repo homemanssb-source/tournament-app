@@ -25,17 +25,30 @@ export default function PinPage() {
   // ★ FIX-2: checkinLoading 별도 관리 (pushStatus 타이밍 버그 해결)
   const [checkinLoading, setCheckinLoading] = useState(false)
 
+  // ✅ localStorage에서 대회 읽기 (운영자 대시보드와 공유)
   useEffect(() => {
-    const dashboardEventId = sessionStorage.getItem('dashboard_event_id')
+    const dashboardEventId = localStorage.getItem('dashboard_event_id')
     if (dashboardEventId) {
       setSelectedEvent(dashboardEventId)
       return
     }
+    // 없으면 가장 최근 active 대회 자동 선택
     supabase.from('events').select('id').eq('status', 'active')
       .order('date', { ascending: false }).limit(1)
       .then(({ data }) => {
         if (data?.[0]?.id) setSelectedEvent(data[0].id)
       })
+  }, [])
+
+  // ✅ 운영자가 다른 창에서 대회를 바꾸면 즉시 반영
+  useEffect(() => {
+    function onStorageChange(e: StorageEvent) {
+      if (e.key === 'dashboard_event_id' && e.newValue) {
+        setSelectedEvent(e.newValue)
+      }
+    }
+    window.addEventListener('storage', onStorageChange)
+    return () => window.removeEventListener('storage', onStorageChange)
   }, [])
 
   // 알림 등록 성공 시 1.5초 후 자동 이동

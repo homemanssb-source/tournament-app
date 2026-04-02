@@ -11,9 +11,9 @@ export default function AdminPinPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  // ✅ localStorage에서 대회 읽기 (운영자 대시보드와 공유)
   useEffect(() => {
-    // ✅ 운영자 대시보드에서 선택한 대회 우선 사용
-    const dashboardEventId = sessionStorage.getItem('dashboard_event_id')
+    const dashboardEventId = localStorage.getItem('dashboard_event_id')
     if (dashboardEventId) {
       setSelectedEvent(dashboardEventId)
       return
@@ -24,6 +24,17 @@ export default function AdminPinPage() {
       .then(({ data }) => {
         if (data?.[0]?.id) setSelectedEvent(data[0].id)
       })
+  }, [])
+
+  // ✅ 운영자가 다른 창에서 대회를 바꾸면 즉시 반영
+  useEffect(() => {
+    function onStorageChange(e: StorageEvent) {
+      if (e.key === 'dashboard_event_id' && e.newValue) {
+        setSelectedEvent(e.newValue)
+      }
+    }
+    window.addEventListener('storage', onStorageChange)
+    return () => window.removeEventListener('storage', onStorageChange)
   }, [])
 
   async function handleSubmit() {

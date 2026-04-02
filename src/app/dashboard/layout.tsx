@@ -5,6 +5,7 @@
 // ✅ 페이지 이동 시 대회 고정 (router.refresh 제거)
 // ✅ AggregateError 방지 (async/await + try/finally)
 // ✅ 대회 자동 선택: 오늘 기준 가장 가까운 미래 대회 우선
+// ✅ localStorage 사용 → 다른 탭/창과 대회 선택 동기화
 // ============================================================
 'use client'
 import { useEffect, useState } from 'react'
@@ -52,13 +53,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           .order('date', { ascending: true })
         setEvents(evList ?? [])
 
-        // 3. 대회 ID 결정
-        const stored = sessionStorage.getItem('dashboard_event_id')
+        // 3. 대회 ID 결정 (localStorage 사용 → 다른 창과 공유)
+        const stored = localStorage.getItem('dashboard_event_id')
         // stored 값이 현재 목록에 실제로 존재하는지 검증
         const storedValid = stored && (evList ?? []).some(e => e.id === stored)
 
         if (storedValid) {
-          // sessionStorage 값이 유효하면 그대로 사용
+          // localStorage 값이 유효하면 그대로 사용
           setEventId(stored!)
         } else {
           // 없거나 목록에 없는 ID면 → 오늘 기준 가장 가까운 대회 자동 선택
@@ -74,7 +75,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           const id = best?.id ?? ''
           if (id) {
             setEventId(id)
-            sessionStorage.setItem('dashboard_event_id', id)
+            localStorage.setItem('dashboard_event_id', id)
           }
         }
 
@@ -99,10 +100,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   async function handleLogout() { await supabase.auth.signOut(); router.push('/') }
 
-  // 대회 변경 시 sessionStorage 저장 (router.refresh 없음 → 페이지 유지)
+  // 대회 변경 시 localStorage 저장 → 다른 탭/창이 storage 이벤트로 즉시 감지
   function handleEventChange(id: string) {
     setEventId(id)
-    sessionStorage.setItem('dashboard_event_id', id)
+    localStorage.setItem('dashboard_event_id', id)
   }
 
   if (isLoginPage) return <>{children}</>
