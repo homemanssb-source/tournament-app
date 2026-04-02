@@ -50,6 +50,29 @@ function sortGroupMatches(list: MatchSlim[]): MatchSlim[] {
   return sorted
 }
 
+// ✅ [FIX-②] 전체 코트 목록(courtNames 배열)에서 글로벌 인덱스로 court_number 계산
+// 베뉴A(한라-1,한라-2,한라-3) + 베뉴B(제주-1,제주-2,제주-3) →
+// 글로벌: 한라-1=1, 한라-2=2, 한라-3=3, 제주-1=4, 제주-2=5, 제주-3=6
+function getGlobalCourtNumber(court: string, allCourtNames: string[]): number {
+  const idx = allCourtNames.indexOf(court)
+  if (idx >= 0) return idx + 1
+  // fallback: 마지막 '-' 뒤 숫자
+  const last = court.split('-').pop() || '0'
+  return /^\d+$/.test(last) ? parseInt(last, 10) : 0
+}
+
+// ✅ [FIX-②] 글로벌 court_number → courtName 역변환
+function globalCourtNumToName(courtNumber: number, allCourtNames: string[], venueList: Venue[]): string {
+  // allCourtNames 배열이 있으면 인덱스로 직접 역변환
+  if (allCourtNames.length > 0 && courtNumber >= 1 && courtNumber <= allCourtNames.length) {
+    return allCourtNames[courtNumber - 1]
+  }
+  // fallback: 베뉴 없거나 범위 초과
+  if (venueList.length === 0) return `코트-${courtNumber}`
+  const last = venueList[venueList.length - 1]
+  return `${last.short_name || last.name}-${courtNumber}`
+}
+
 export default function CourtsPage() {
   const eventId = useEventId()
   const { divisions } = useDivisions(eventId)
@@ -73,6 +96,14 @@ export default function CourtsPage() {
     if (!venue) return []
     return makeCourtNames(venue.short_name || venue.name, venue.court_count || venue.courts?.length || 0)
   }, [selectedVenue, venues])
+
+  // ✅ [FIX-②] 전체 베뉴 기준 글로벌 코트 목록 (베뉴 선택과 무관하게 항상 전체)
+  const allCourtNames = React.useMemo(() => {
+    if (venuesRef.current.length === 0) return courtNames
+    return venuesRef.current.flatMap(v =>
+      makeCourtNames(v.short_name || v.name, v.court_count || v.courts?.length || 0)
+    )
+  }, [venues]) // venues state 변경 시 재계산
 
   const [autoDiv, setAutoDiv]       = useState('')
   const [autoStage, setAutoStage]   = useState<StageKey>('GROUP')
@@ -121,15 +152,19 @@ export default function CourtsPage() {
   useEffect(() => { startTimeRef.current       = startTime       }, [startTime])
   useEffect(() => { venueStartTimesRef.current = venueStartTimes }, [venueStartTimes])
 
+  // ✅ [FIX-②] syncCourtOrderRef: 글로벌 court_number → courtName 역변환
   function syncCourtOrderRef(matchList: MatchSlim[], tieList: TieWithClubs[]) {
     const counter: Record<string, number> = {}
     for (const m of matchList) {
       if (m.court && m.court_order) counter[m.court] = Math.max(counter[m.court] || 0, m.court_order)
     }
+    // 전체 베뉴 기준 글로벌 코트 목록
+    const allCN = venuesRef.current.flatMap(v =>
+      makeCourtNames(v.short_name || v.name, v.court_count || v.courts?.length || 0)
+    )
     for (const t of tieList) {
       const cn = (t as any).court_number; if (!cn) continue
-      const venue = venuesRef.current.find(v => cn >= 1 && cn <= (v.court_count || v.courts?.length || 0))
-      const court = venue ? `${venue.short_name || venue.name}-${cn}` : `코트-${cn}`
+      const court = globalCourtNumToName(cn, allCN, venuesRef.current)
       const order = (t as any).court_order
       if (order) counter[court] = Math.max(counter[court] || 0, order)
     }
@@ -253,9 +288,11 @@ export default function CourtsPage() {
       if (divTies.length === 0) { setMsg('배정할 단체전 경기가 없습니다.'); return }
       setAssigning(true)
       try {
+        // ✅ [FIX-②] 글로벌 court_number: allCourtNames 배열 인덱스(1-based) 사용
+        // 베뉴A 3코트 + 베뉴B 3코트 → 한라-1=1,한라-2=2,한라-3=3,제주-1=4,제주-2=5,제주-3=6
         for (let i = 0; i < divTies.length; i++) {
           const court = autoCourts[i % autoCourts.length]
-          const courtNum = parseInt(court.split('-').pop() || '0')
+          const courtNum = getGlobalCourtNumber(court, allCourtNames)
           const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
           await supabase.from('ties').update({ court_number:courtNum, court_order:nextOrder }).eq('id', divTies[i].id)
         }
@@ -326,7 +363,8 @@ export default function CourtsPage() {
 
   async function assignItemToCourt(itemId: string, court: string) {
     if (itemId.startsWith('tie_')) {
-      const courtNum = parseInt(court.split('-').pop() || '0')
+      // ✅ [FIX-②] 드래그 배정도 글로벌 court_number 사용
+      const courtNum = getGlobalCourtNumber(court, allCourtNames)
       const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
       await supabase.from('ties').update({ court_number:courtNum, court_order:nextOrder }).eq('id', itemId.replace('tie_',''))
       sendCourtNotify(court, 'court_changed'); loadTies()
@@ -434,22 +472,25 @@ export default function CourtsPage() {
     setTouchDragId(null); setTouchOver(null)
   }
 
+  // ✅ [FIX-①②⑤] tiesToMatchSlim: 글로벌 court_number → courtName, DB 실제 court_order 사용
   function tiesToMatchSlim(tieList: TieWithClubs[]): MatchSlim[] {
     return tieList.filter(t => !t.is_bye).map(t => {
       const cn = (t as any).court_number
       let courtName: string | null = null
       if (cn != null) {
-        const venue = venuesRef.current.find(v => cn >= 1 && cn <= (v.court_count || v.courts?.length || 0))
-        courtName = venue ? `${venue.short_name||venue.name}-${cn}` : `코트-${cn}`
+        // ✅ [FIX-①②] 글로벌 court_number → courtName 역변환 (short_name-N 포맷 통일)
+        courtName = globalCourtNumToName(cn, allCourtNames, venuesRef.current)
       }
       const statusMap: Record<string,string> = { pending:'PENDING', lineup_phase:'PENDING', lineup_ready:'PENDING', in_progress:'IN_PROGRESS', completed:'FINISHED' }
       return {
         id:`tie_${t.id}`, match_num:`T#${t.tie_order}`, stage:'TEAM', round:t.round||'group',
         team_a_name:t.club_a?.name||'TBD', team_b_name:t.club_b?.name||'TBD',
         team_a_id:t.club_a_id||'', team_b_id:t.club_b_id||'',
-        court:courtName, court_order:cn ? ((t as any).court_order ?? (100+(t.tie_order||0))) : null,
+        court:courtName,
+        // ✅ [FIX-⑤] DB 실제 court_order 사용 (100+tie_order 하드코딩 제거)
+        court_order:cn ? ((t as any).court_order ?? t.tie_order ?? 999) : null,
         status:statusMap[t.status]||'PENDING',
-        score:(t.status==='completed'||t.status==='in_progress') ? `${t.club_a_rubbers_won}-${t.club_b_rubbers_won}` : null,
+        score:(t.status==='completed'||t.status==='in_progress') ? `${t.club_a_rubbers_won ?? 0}-${t.club_b_rubbers_won ?? 0}` : null,
         winner_team_id:t.winning_club_id||null,
         division_name:'단체전', division_id:t.division_id||'TEAM',
         locked_by_participant:false, group_label:null, is_team_tie:true,
@@ -660,7 +701,7 @@ export default function CourtsPage() {
           </div>
         </div>
 
-        {/* 코트 그리드: lg에서 4컬럼, xl에서 더 넓게 */}
+        {/* 코트 그리드 */}
         <div className="lg:col-span-4 grid grid-cols-2 xl:grid-cols-4 gap-3">
           {filteredCourtNames.map(court => {
             const courtItems = (byCourt.get(court)||[]).sort((a,b)=>(a.court_order||0)-(b.court_order||0))
@@ -682,10 +723,8 @@ export default function CourtsPage() {
                 onDragOver={handleDragOver} onDrop={() => handleDropOnCourt(court)}
                 className={`bg-white rounded-xl border overflow-hidden min-h-[100px] transition-all ${touchOver==='court:'+court?'ring-2 ring-tennis-400 bg-tennis-50':''}`}>
 
-                {/* 코트 헤더 */}
                 <div className={`px-3 py-2 font-bold text-sm flex items-center justify-between ${isLive?'bg-red-700':'bg-[#2d5016]'} text-white`}>
                   <div className="flex items-center gap-1.5 min-w-0">
-                    {/* ✅ PC에서 코트명 잘리지 않게: truncate 제거, 긴 이름은 text-xs로 */}
                     <span className={`font-bold ${court.length > 6 ? 'text-xs' : 'text-sm'}`}>{court}</span>
                     {isLive && <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded-full animate-pulse flex-shrink-0">LIVE</span>}
                     {zoneDiv && <span style={{ background:zoneDiv.color }} className="text-[9px] px-1 py-0.5 rounded text-white/90 flex-shrink-0">{zoneDiv.label}</span>}
@@ -702,7 +741,6 @@ export default function CourtsPage() {
                 {notifyMsg[court] && <div className="px-3 py-1 text-xs bg-amber-50 text-amber-800 border-b">{notifyMsg[court]}</div>}
 
                 <div className="p-1.5 space-y-1 max-h-[60vh] overflow-y-auto">
-                  {/* 진행 중 / 대기 경기 */}
                   {courtItems.filter(m=>m.status!=='FINISHED').map((m) => {
                     const allIdx = courtItems.indexOf(m)
                     let badge = ''
@@ -728,7 +766,6 @@ export default function CourtsPage() {
                     )
                   })}
 
-                  {/* 완료 경기 접기 */}
                   {finished > 0 && (
                     <FinishedCourtItems
                       items={courtItems.filter(m=>m.status==='FINISHED')}
@@ -820,7 +857,6 @@ function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }:
               <div className="flex items-center justify-between gap-1">
                 <div className="flex items-center gap-1.5 min-w-0 flex-1">
                   <span className="text-[10px] text-stone-400 font-mono flex-shrink-0">#{m.court_order}</span>
-                  {/* ✅ 팀명 줄바꿈 허용 */}
                   <span className="text-xs text-stone-500 break-words">{m.team_a_name} vs {m.team_b_name}</span>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
@@ -877,7 +913,6 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, onDragStart, onCl
           {onClickUnassign && <button onClick={e=>{e.stopPropagation();onClickUnassign()}} className="text-stone-300 hover:text-red-400">✕</button>}
         </div>
       </div>
-      {/* ✅ 핵심: truncate 제거 → 팀명 줄바꿈 허용 */}
       <div className={`font-medium leading-snug ${done?'text-stone-400 line-through':''}`}>
         {m.team_a_name} <span className="text-stone-300">vs</span> {m.team_b_name}
       </div>

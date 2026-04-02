@@ -1,12 +1,20 @@
 'use client'
 // ============================================================
 // src/app/dashboard/timetable/page.tsx
-// ✅ ties 직접 select로 started_at/ended_at 타입 에러 해결
-// ✅ fetchTies 대신 supabase 직접 쿼리 (필요한 컬럼만)
+// ✅ [FIX-①] 단체전 코트명 포맷 통일: venues 로드 후 short_name-N 변환
+// ✅ [FIX-⑤] 단체전 court_order: DB 실제값 사용 (100+tie_order 하드코딩 제거)
+// ✅ [FIX] 개인전 BYE 필터: .neq('score','BYE') 제거 → 클라이언트 필터
 // ============================================================
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useEventId } from '@/components/useDashboard'
+
+interface Venue {
+  id: string
+  name: string
+  short_name: string
+  court_count: number
+}
 
 interface MatchRow {
   id: string
@@ -32,11 +40,37 @@ interface CourtTimeline {
   })[]
 }
 
+// ✅ court_number(숫자) → short_name-N 포맷 변환
+// courts/page.tsx의 tiesToMatchSlim()과 동일한 로직
+function courtNumToName(courtNumber: number, venues: Venue[]): string {
+  if (venues.length === 0) return `코트-${courtNumber}`
+  // 베뉴가 1개면 단순 매핑
+  if (venues.length === 1) {
+    const v = venues[0]
+    return `${v.short_name || v.name}-${courtNumber}`
+  }
+  // 베뉴가 여러 개: court_number를 글로벌 순서로 해석
+  // 베뉴 순서대로 코트를 순차 할당한 것으로 가정
+  let offset = 0
+  for (const v of venues) {
+    const count = v.court_count || 0
+    if (courtNumber <= offset + count) {
+      const localNum = courtNumber - offset
+      return `${v.short_name || v.name}-${localNum}`
+    }
+    offset += count
+  }
+  // 범위 초과 시 마지막 베뉴 기준
+  const last = venues[venues.length - 1]
+  return `${last.short_name || last.name}-${courtNumber}`
+}
+
 export default function TimetablePage() {
   const eventId = useEventId()
 
-  const [matches, setMatches] = useState<MatchRow[]>([])
-  const [loading, setLoading] = useState(true)
+  const [matches, setMatches]   = useState<MatchRow[]>([])
+  const [venues, setVenues]     = useState<Venue[]>([])
+  const [loading, setLoading]   = useState(true)
 
   const [startTime, setStartTime] = useState(() => {
     const now = new Date()
@@ -46,57 +80,84 @@ export default function TimetablePage() {
   const [warmupDuration, setWarmupDuration] = useState(10)
   const [showFinished, setShowFinished]     = useState(true)
 
-  const loadData = useCallback(async () => {
+  // ✅ venues 먼저 로드 (court_number → courtName 변환에 필요)
+  const loadVenues = useCallback(async () => {
+    if (!eventId) return
+    const { data } = await supabase
+      .from('venues')
+      .select('id, name, short_name, court_count')
+      .eq('event_id', eventId)
+      .order('created_at')
+    setVenues((data || []) as Venue[])
+    return (data || []) as Venue[]
+  }, [eventId])
+
+  const loadData = useCallback(async (venueList?: Venue[]) => {
     if (!eventId) return
     try {
-      // 개인전
+      const currentVenues = venueList ?? venues
+
+      // ✅ 개인전: .neq('score','BYE') 제거 → 클라이언트 필터 (NULL score 포함)
       const { data: matchData } = await supabase
         .from('v_matches_with_teams')
         .select('id, match_num, court, court_order, status, score, team_a_name, team_b_name, division_name, round, started_at, ended_at')
         .eq('event_id', eventId)
         .not('court', 'is', null)
-        .neq('score', 'BYE')
         .order('court')
         .order('court_order', { ascending: true, nullsFirst: false })
 
-      const indivRows: MatchRow[] = (matchData || []).map((m: any) => ({
-        id: m.id, match_num: m.match_num,
-        court: m.court, court_order: m.court_order ?? 999,
-        status: m.status, score: m.score,
-        team_a_name: m.team_a_name, team_b_name: m.team_b_name,
-        division_name: m.division_name, round: m.round,
-        started_at: m.started_at ?? null, ended_at: m.ended_at ?? null,
-        is_team: false,
-      }))
+      const indivRows: MatchRow[] = (matchData || [])
+        .filter((m: any) => m.score !== 'BYE')  // ✅ 클라이언트 필터
+        .map((m: any) => ({
+          id: m.id, match_num: m.match_num,
+          court: m.court, court_order: m.court_order ?? 999,
+          status: m.status, score: m.score,
+          team_a_name: m.team_a_name, team_b_name: m.team_b_name,
+          division_name: m.division_name, round: m.round,
+          started_at: m.started_at ?? null, ended_at: m.ended_at ?? null,
+          is_team: false,
+        }))
 
-      // 단체전 — started_at/ended_at 포함해서 직접 select
+      // ✅ 단체전: court_order DB 실제값 사용 + courtName 포맷 통일
       const { data: tieData } = await supabase
         .from('ties')
-        .select('id, tie_order, status, round, court_number, is_bye, club_a_rubbers_won, club_b_rubbers_won, started_at, ended_at, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name)')
+        .select('id, tie_order, court_order, status, round, court_number, is_bye, club_a_rubbers_won, club_b_rubbers_won, started_at, ended_at, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name)')
         .eq('event_id', eventId)
         .not('court_number', 'is', null)
         .eq('is_bye', false)
-        .order('tie_order')
+        .order('court_order', { ascending: true, nullsFirst: false })
 
-      const tieRows: MatchRow[] = (tieData || []).map((t: any) => ({
-        id: t.id, match_num: `T#${t.tie_order}`,
-        court: `코트 ${t.court_number}`, court_order: 100 + (t.tie_order ?? 0),
-        status: t.status === 'completed' ? 'FINISHED' : t.status === 'in_progress' ? 'IN_PROGRESS' : 'PENDING',
-        score: (t.status === 'completed' || t.status === 'in_progress') ? `${t.club_a_rubbers_won}-${t.club_b_rubbers_won}` : null,
-        team_a_name: t.club_a?.name ?? 'TBD', team_b_name: t.club_b?.name ?? 'TBD',
-        division_name: '단체전', round: t.round ?? 'group',
-        started_at: t.started_at ?? null, ended_at: t.ended_at ?? null,
-        is_team: true,
-      }))
+      const tieRows: MatchRow[] = (tieData || []).map((t: any) => {
+        // ✅ [FIX-①] courts/page.tsx의 tiesToMatchSlim과 동일한 courtName 생성
+        const courtName = courtNumToName(t.court_number, currentVenues)
+        // ✅ [FIX-⑤] DB의 실제 court_order 사용 (100+tie_order 하드코딩 제거)
+        const courtOrder = t.court_order ?? t.tie_order ?? 999
+        return {
+          id: t.id, match_num: `T#${t.tie_order}`,
+          court: courtName, court_order: courtOrder,
+          status: t.status === 'completed' ? 'FINISHED' : t.status === 'in_progress' ? 'IN_PROGRESS' : 'PENDING',
+          score: (t.status === 'completed' || t.status === 'in_progress') ? `${t.club_a_rubbers_won ?? 0}-${t.club_b_rubbers_won ?? 0}` : null,
+          team_a_name: t.club_a?.name ?? 'TBD', team_b_name: t.club_b?.name ?? 'TBD',
+          division_name: '단체전', round: t.round ?? 'group',
+          started_at: t.started_at ?? null, ended_at: t.ended_at ?? null,
+          is_team: true,
+        }
+      })
 
       setMatches([...indivRows, ...tieRows])
     } finally {
       setLoading(false)
     }
+  }, [eventId, venues])
+
+  useEffect(() => {
+    if (!eventId) return
+    // venues 먼저 로드한 뒤 loadData에 직접 전달 (venues state 반영 타이밍 이슈 방지)
+    loadVenues().then(venueList => loadData(venueList))
   }, [eventId])
 
-  useEffect(() => { loadData() }, [loadData])
   useEffect(() => {
+    if (!eventId) return
     const iv = setInterval(() => loadData(), 15000)
     return () => clearInterval(iv)
   }, [loadData])

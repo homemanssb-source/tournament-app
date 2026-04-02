@@ -1,4 +1,6 @@
-﻿// src/app/api/notify/court/route.ts
+// src/app/api/notify/court/route.ts
+// ✅ [FIX-⑥] courtNum 파싱: replace(/[^0-9]/g,'') → split('-').pop() 방식으로 개선
+//    "한라-2" → 2, "제주A-10" → 10 (숫자가 여러 개 섞인 short_name 안전)
 import { NextRequest, NextResponse } from 'next/server'
 import { getServiceClient } from '@/lib/supabase'
 
@@ -24,7 +26,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'event_id, court 필수' }, { status: 400 })
     }
 
-    const courtNum = parseInt(court.replace(/[^0-9]/g, ''))
+    // ✅ [FIX-⑥] 코트명 마지막 숫자 파싱 (short_name-N 포맷 대응)
+    // "한라-2" → split('-') → ['한라','2'] → pop() → '2' → parseInt → 2
+    // "제주A-10" → pop() → '10' → 10
+    // "코트-1" → pop() → '1' → 1
+    // 단, short_name 자체에 숫자가 없는 경우 대비: fallback으로 전체에서 숫자 추출
+    const lastPart = court.split('-').pop() || ''
+    const courtNum = /^\d+$/.test(lastPart)
+      ? parseInt(lastPart, 10)
+      : parseInt(court.replace(/[^0-9]/g, ''), 10) || 0
 
     let teamAId: string | null = null
     let teamBId: string | null = null
