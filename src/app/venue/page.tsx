@@ -11,22 +11,25 @@ export default function VenueLoginPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // ✅ localStorage에서 대회 읽기 (운영자 대시보드와 공유)
+  // ✅ localStorage 우선 → 없으면 오늘 기준 가장 가까운 대회 자동 선택 (휴대폰 대응)
   useEffect(() => {
     const dashboardEventId = localStorage.getItem('dashboard_event_id')
     if (dashboardEventId) {
       setSelectedEvent(dashboardEventId)
       return
     }
-    // 없으면 가장 최근 active 대회 자동 선택
-    supabase.from('events').select('id').eq('status', 'active')
-      .order('date', { ascending: false }).limit(1)
+    supabase.from('events').select('id, date')
+      .order('date', { ascending: true })
       .then(({ data }) => {
-        if (data?.[0]?.id) setSelectedEvent(data[0].id)
+        if (!data || data.length === 0) return
+        const today = new Date().toISOString().split('T')[0]
+        const upcoming = data.filter(e => e.date >= today)
+        const best = upcoming[0] ?? data[data.length - 1]
+        if (best?.id) setSelectedEvent(best.id)
       })
   }, [])
 
-  // ✅ 운영자가 다른 창에서 대회를 바꾸면 즉시 반영
+  // ✅ 같은 기기 내 다른 탭에서 대회 바꾸면 즉시 반영
   useEffect(() => {
     function onStorageChange(e: StorageEvent) {
       if (e.key === 'dashboard_event_id' && e.newValue) {

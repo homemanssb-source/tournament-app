@@ -7,7 +7,6 @@ import { usePushSubscription } from '@/hooks/usePushSubscription'
 
 type Mode = 'select' | 'individual' | 'team';
 
-// ★ FIX-1: localStorage 키 — 알림/참석 처리 완료한 PIN 목록
 const NOTIF_DONE_KEY = 'pin_notif_done'
 
 export default function PinPage() {
@@ -22,25 +21,27 @@ export default function PinPage() {
   const { status: pushStatus, message: pushMessage, subscribeWithPin } = usePushSubscription()
   const [loginSuccess, setLoginSuccess] = useState(false)
   const [loginPin, setLoginPin] = useState('')
-  // ★ FIX-2: checkinLoading 별도 관리 (pushStatus 타이밍 버그 해결)
   const [checkinLoading, setCheckinLoading] = useState(false)
 
-  // ✅ localStorage에서 대회 읽기 (운영자 대시보드와 공유)
+  // ✅ localStorage 우선 → 없으면 오늘 기준 가장 가까운 대회 자동 선택 (휴대폰 대응)
   useEffect(() => {
     const dashboardEventId = localStorage.getItem('dashboard_event_id')
     if (dashboardEventId) {
       setSelectedEvent(dashboardEventId)
       return
     }
-    // 없으면 가장 최근 active 대회 자동 선택
-    supabase.from('events').select('id').eq('status', 'active')
-      .order('date', { ascending: false }).limit(1)
+    supabase.from('events').select('id, date')
+      .order('date', { ascending: true })
       .then(({ data }) => {
-        if (data?.[0]?.id) setSelectedEvent(data[0].id)
+        if (!data || data.length === 0) return
+        const today = new Date().toISOString().split('T')[0]
+        const upcoming = data.filter(e => e.date >= today)
+        const best = upcoming[0] ?? data[data.length - 1]
+        if (best?.id) setSelectedEvent(best.id)
       })
   }, [])
 
-  // ✅ 운영자가 다른 창에서 대회를 바꾸면 즉시 반영
+  // ✅ 같은 기기 내 다른 탭에서 대회 바꾸면 즉시 반영
   useEffect(() => {
     function onStorageChange(e: StorageEvent) {
       if (e.key === 'dashboard_event_id' && e.newValue) {
@@ -51,7 +52,6 @@ export default function PinPage() {
     return () => window.removeEventListener('storage', onStorageChange)
   }, [])
 
-  // 알림 등록 성공 시 1.5초 후 자동 이동
   useEffect(() => {
     if (pushStatus === 'success') {
       const t = setTimeout(() => router.push('/pin/matches'), 1500)
@@ -73,7 +73,6 @@ export default function PinPage() {
     sessionStorage.setItem('venue_pin', pin)
     sessionStorage.setItem('pin_event_id', selectedEvent)
 
-    // ★ FIX-1: 이미 처리한 PIN이면 알림 화면 건너뛰고 바로 이동
     try {
       const donePins = JSON.parse(localStorage.getItem(NOTIF_DONE_KEY) || '[]') as string[]
       if (donePins.includes(pin)) {
@@ -86,42 +85,29 @@ export default function PinPage() {
     setLoginSuccess(true)
   }
 
-  // ★ FIX-2: pushStatus state 미사용 → 로딩/이동 직접 제어
-  // ★ FIX-3: checked_in 저장을 구독 성공 여부와 완전 분리
   async function handleAllowNotification() {
     setCheckinLoading(true)
     let subscribeOk = false
     try {
-      // 1) 푸시 구독 시도 — 반환값(boolean)으로 성공 여부 판단
       subscribeOk = await subscribeWithPin(loginPin)
-
-      // 2) 참석 확인 저장 — 구독 성공/실패 무관하게 항상 실행
       await supabase
         .from('teams')
         .update({ checked_in: true, checked_in_at: new Date().toISOString() })
         .eq('pin_plain', loginPin)
         .eq('event_id', selectedEvent)
-
-      // 3) 완료 PIN 기록 → 다음 로그인 시 알림 화면 스킵
       markNotifDone(loginPin)
-
     } finally {
       setCheckinLoading(false)
     }
-
-    // 구독 성공(ok=true) → useEffect가 1.5초 후 자동 이동
-    // 구독 실패(ok=false) → 여기서 바로 이동 (pushStatus state 미사용)
     if (!subscribeOk) {
       router.push('/pin/matches')
     }
   }
 
-  // 건너뛰기 — 참석 확인 없이 이동 (다음 로그인 시 또 뜸)
   function handleSkipNotification() {
     router.push('/pin/matches')
   }
 
-  // ★ localStorage에 완료 PIN 기록 (최대 20개 보관)
   function markNotifDone(pinCode: string) {
     try {
       const donePins = JSON.parse(localStorage.getItem(NOTIF_DONE_KEY) || '[]') as string[]
@@ -166,7 +152,6 @@ export default function PinPage() {
 
   function resetMode() { setMode('select'); setPin(''); setError(''); setTeamTies([]) }
 
-  // 로그인 성공 → 참석확인 + 알림 화면
   if (loginSuccess) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-4">
