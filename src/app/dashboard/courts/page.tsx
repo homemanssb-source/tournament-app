@@ -24,6 +24,7 @@ const STAGE_TABS: { key: StageKey; label: string }[] = [
   { key: '본선128강',  label: '128강' },
   { key: '본선64강',   label: '64강' },
   { key: '본선32강',   label: '32강' },
+  { key: '본선16강',   label: '본선16강' },
   { key: '16강',       label: '16강' },
   { key: '8강',        label: '8강' },
   { key: '4강',        label: '4강' },
@@ -331,7 +332,7 @@ export default function CourtsPage() {
 
   async function assignFinals(round: string) {
     const stageVal = ROUND_TO_STAGE[round] || 'FINALS'
-    const targets  = matches.filter(m => m.division_id === autoDiv && m.stage === stageVal && m.round === round && !m.court && m.status !== 'FINISHED')
+    const targets  = matches.filter(m => m.division_id === autoDiv && m.stage === stageVal && m.round === round && !m.court && m.status !== 'FINISHED').sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true }))
     if (targets.length === 0) { setMsg(`배정할 ${STAGE_LABEL[round] || round} 경기가 없습니다.`); return }
     const pool = getCourtPool(autoDiv, round)
     const updates: { id: string; court: string; court_order: number }[] = []
@@ -349,7 +350,7 @@ export default function CourtsPage() {
     const divName = divisions.find(d => d.id === autoDiv)?.name || ''; let total = 0
     for (const round of ['본선128강','본선64강','본선32강','본선16강','16강','8강','4강','결승']) {
       const pool    = getCourtPool(autoDiv, round)
-      const targets = matches.filter(m => m.division_id === autoDiv && m.stage === (ROUND_TO_STAGE[round]||'FINALS') && m.round === round && !m.court && m.status !== 'FINISHED')
+      const targets = matches.filter(m => m.division_id === autoDiv && m.stage === (ROUND_TO_STAGE[round]||'FINALS') && m.round === round && !m.court && m.status !== 'FINISHED').sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true }))
       if (targets.length === 0) continue
       for (const m of targets) {
         const court = getLeastLoaded(pool)
@@ -589,12 +590,25 @@ export default function CourtsPage() {
             <div>
               <label className="text-xs text-stone-500 block mb-1">스테이지</label>
               <div className="flex flex-wrap gap-1">
-                {STAGE_TABS.map(tab => (
-                  <button key={tab.key} onClick={() => setAutoStage(tab.key)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${autoStage===tab.key ? (tab.key==='ALL_FINALS'?'bg-purple-600 text-white border-purple-600':'bg-tennis-600 text-white border-tennis-600') : 'border-stone-300 hover:border-tennis-400'}`}>
-                    {tab.label}
-                  </button>
-                ))}
+                {(() => {
+                  // 해당 부문의 실제 존재하는 본선 라운드만 추출
+                  const existingRounds = new Set(
+                    matches
+                      .filter(m => m.division_id === autoDiv && m.stage === 'FINALS')
+                      .map(m => m.round)
+                  )
+                  const activeTabs = STAGE_TABS.filter(tab => {
+                    if (tab.key === 'GROUP') return true
+                    if (tab.key === 'ALL_FINALS') return existingRounds.size >= 2
+                    return existingRounds.has(tab.key)
+                  })
+                  return activeTabs.map(tab => (
+                    <button key={tab.key} onClick={() => setAutoStage(tab.key)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${autoStage===tab.key ? (tab.key==='ALL_FINALS'?'bg-purple-600 text-white border-purple-600':'bg-tennis-600 text-white border-tennis-600') : 'border-stone-300 hover:border-tennis-400'}`}>
+                      {tab.label}
+                    </button>
+                  ))
+                })()}
               </div>
             </div>
           )}
