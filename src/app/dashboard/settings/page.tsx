@@ -61,9 +61,34 @@ export default function SettingsPage() {
   const [divDateMsg, setDivDateMsg]     = useState('')
   const [divDateSaving, setDivDateSaving] = useState<string | null>(null)
 
+  // ✅ 수정: layout.tsx가 sessionStorage에 쓰기 전에 이 페이지가 먼저 읽는 타이밍 버그 수정
+  // 300ms 후 재시도 + storage 이벤트로 변경 감지
   useEffect(() => {
-    const stored = sessionStorage.getItem('dashboard_event_id')
-    if (stored) { setEventId(stored); loadEvent(stored); loadVenues(stored); loadDivisions(stored) }
+    function applyId(id: string) {
+      setEventId(id)
+      loadEvent(id)
+      loadVenues(id)
+      loadDivisions(id)
+    }
+
+    function tryLoad(): boolean {
+      const stored = sessionStorage.getItem('dashboard_event_id')
+      if (stored) { applyId(stored); return true }
+      return false
+    }
+
+    if (!tryLoad()) {
+      // layout이 아직 sessionStorage를 저장하지 않은 경우 잠시 후 재시도
+      const t = setTimeout(() => tryLoad(), 300)
+      return () => clearTimeout(t)
+    }
+
+    // sessionStorage가 다른 탭에서 변경될 때도 반응 (선택사항)
+    function onStorage(e: StorageEvent) {
+      if (e.key === 'dashboard_event_id' && e.newValue) applyId(e.newValue)
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
   }, [])
 
   async function loadDivisions(eid: string) {
