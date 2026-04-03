@@ -71,14 +71,14 @@ export default function SettingsPage() {
       loadDivisions(id)
     }
 
-    const stored = sessionStorage.getItem('dashboard_event_id')
+    const stored = localStorage.getItem('dashboard_event_id')
     if (stored) { applyId(stored); return }
 
     // 아직 없으면 200ms 간격으로 최대 15회(3초) 재시도
     let attempts = 0
     const timer = setInterval(() => {
       attempts++
-      const id = sessionStorage.getItem('dashboard_event_id')
+      const id = localStorage.getItem('dashboard_event_id')
       if (id) {
         clearInterval(timer)
         applyId(id)
