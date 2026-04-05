@@ -23,6 +23,28 @@ export default function PinPage() {
   const [loginPin, setLoginPin] = useState('')
   const [checkinLoading, setCheckinLoading] = useState(false)
 
+  // ✅ 이미 로그인된 세션 있으면 바로 /pin/matches로 이동
+  useEffect(() => {
+    let raw = sessionStorage.getItem('pin_session')
+    if (!raw) {
+      const lsRaw = localStorage.getItem('pin_session')
+      if (lsRaw) {
+        try {
+          const parsed = JSON.parse(lsRaw)
+          if (parsed._savedAt && Date.now() - parsed._savedAt < 12 * 60 * 60 * 1000) {
+            sessionStorage.setItem('pin_session', lsRaw)
+            raw = lsRaw
+          } else {
+            localStorage.removeItem('pin_session')
+          }
+        } catch {
+          localStorage.removeItem('pin_session')
+        }
+      }
+    }
+    if (raw) router.replace('/pin/matches')
+  }, [])
+
   // ✅ localStorage 우선 → 없으면 오늘 기준 가장 가까운 대회 자동 선택 (휴대폰 대응)
   useEffect(() => {
     const dashboardEventId = localStorage.getItem('dashboard_event_id')
