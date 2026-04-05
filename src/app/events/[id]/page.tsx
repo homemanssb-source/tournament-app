@@ -50,18 +50,24 @@ export default function EventDetailPage() {
 
   useEffect(() => {
     (async () => {
-      const { data: ev } = await supabase.from('events').select('*').eq('id', eventId).single()
+      // ✅ events + divisions 병렬 로드
+      const [{ data: ev }, { data: divs }] = await Promise.all([
+        supabase.from('events').select('*').eq('id', eventId).single(),
+        supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order'),
+      ])
       setEvent(ev)
       if (ev?.event_type === 'team') setMode('team')
       else setMode('individual')
 
-      const { data: divs } = await supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order')
       setDivisions(divs || [])
       if (divs?.length) setActiveDivision(divs[0].id)
       setTeamDivisions(divs || [])
       if (divs?.length) setSelectedTeamDiv(divs[0].id)
 
-      await loadTeamData(divs?.[0]?.id)
+      // ✅ 개인전이면 팀 데이터 로드 스킵
+      if (ev?.event_type === 'team' || ev?.event_type === 'both') {
+        await loadTeamData(divs?.[0]?.id)
+      }
       setLoading(false)
       logAccess(eventId, 'event_detail')
     })()
@@ -96,9 +102,10 @@ export default function EventDetailPage() {
       const { data: grps } = await supabase.from('groups').select('*').eq('event_id', eventId).order('group_num')
       const filteredGrps = divId ? (grps || []).filter((g: any) => g.division_id === divId) : (grps || [])
       setGroups(filteredGrps)
-      for (const g of filteredGrps) {
+      // ✅ 병렬 로드
+      await Promise.all(filteredGrps.map(async (g: any) => {
         map[g.id] = await fetchStandings(eventId, g.id)
-      }
+      }))
     }
     setStandingsMap(map)
   }, [eventId, selectedTeamDiv])
@@ -389,7 +396,7 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
       setGroups(gData || [])
 
       const map: Record<string, any[]> = {}
-      for (const g of (gData || [])) {
+      await Promise.all((gData || []).map(async (g: any) => {
         const { data: sData } = await supabase
           .from('v_matches_with_teams').select('*')
           .eq('event_id', eventId).eq('group_id', g.id)
@@ -411,11 +418,10 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
           teamMap[m.team_a_id].scored  += sa; teamMap[m.team_a_id].against += sb
           teamMap[m.team_b_id].scored  += sb; teamMap[m.team_b_id].against += sa
         }
-        const ranked = Object.values(teamMap).sort((a, b) =>
+        map[g.id] = Object.values(teamMap).sort((a, b) =>
           b.win - a.win || (b.scored - b.against) - (a.scored - a.against)
         )
-        map[g.id] = ranked
-      }
+      }))
       setStandings(map)
       setLoading(false)
     })()
