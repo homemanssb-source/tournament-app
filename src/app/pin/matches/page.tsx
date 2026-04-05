@@ -70,7 +70,25 @@ export default function PinMatchesPage() {
   }, [])
 
   useEffect(() => {
-    const raw = sessionStorage.getItem('pin_session')
+    // ✅ sessionStorage 우선, 없으면 localStorage에서 복구 (다른 페이지 갔다와도 유지)
+    let raw = sessionStorage.getItem('pin_session')
+    if (!raw) {
+      const lsRaw = localStorage.getItem('pin_session')
+      if (lsRaw) {
+        try {
+          const parsed = JSON.parse(lsRaw)
+          // 만료 확인 (12시간)
+          if (parsed._savedAt && Date.now() - parsed._savedAt < 12 * 60 * 60 * 1000) {
+            raw = lsRaw
+            sessionStorage.setItem('pin_session', lsRaw) // sessionStorage 복구
+          } else {
+            localStorage.removeItem('pin_session')
+          }
+        } catch {
+          localStorage.removeItem('pin_session')
+        }
+      }
+    }
     if (!raw) { router.replace('/pin'); return }
     const s = JSON.parse(raw)
     setSession(s)
@@ -146,24 +164,24 @@ export default function PinMatchesPage() {
 
     if (courts.length > 0) {
       const myDivIds = [...new Set(myMatches.map(m => m.division_id).filter(Boolean))]
-      let myDates: string[] = []
 
-      if (myDivIds.length > 0) {
-        const { data: divRows } = await supabase
-          .from('divisions')
-          .select('match_date')
-          .in('id', myDivIds)
-        myDates = [...new Set(
-          (divRows || []).map((d: any) => d.match_date).filter(Boolean)
-        )] as string[]
-      }
+      // ✅ divisions + v_matches_with_teams 병렬 로드
+      const [divResult, matchResult] = await Promise.all([
+        myDivIds.length > 0
+          ? supabase.from('divisions').select('match_date').in('id', myDivIds)
+          : Promise.resolve({ data: [] }),
+        supabase
+          .from('v_matches_with_teams')
+          .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
+          .eq('event_id', s.event_id)
+          .in('court', courts)
+          .order('court').order('court_order'),
+      ])
 
-      const { data: rawMatches } = await supabase
-        .from('v_matches_with_teams')
-        .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
-        .eq('event_id', s.event_id)
-        .in('court', courts)
-        .order('court').order('court_order')
+      const myDates = [...new Set(
+        (divResult.data || []).map((d: any) => d.match_date).filter(Boolean)
+      )] as string[]
+      const rawMatches = matchResult.data
 
       const allMatches = (rawMatches || []).filter((m: any) => {
         if (m.score === 'BYE') return false
@@ -254,6 +272,7 @@ export default function PinMatchesPage() {
     sessionStorage.removeItem('pin_session')
     sessionStorage.removeItem('venue_pin')
     sessionStorage.removeItem('pin_event_id')
+    localStorage.removeItem('pin_session')
     router.replace('/pin')
   }
 

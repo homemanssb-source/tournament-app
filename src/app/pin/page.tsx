@@ -69,9 +69,12 @@ export default function PinPage() {
     setLoading(false)
     if (err) { setError(err.message || 'PIN이 올바르지 않습니다.'); return }
 
-    sessionStorage.setItem('pin_session', JSON.stringify(data))
+    const sessionData = { ...data, _savedAt: Date.now() }
+    sessionStorage.setItem('pin_session', JSON.stringify(sessionData))
     sessionStorage.setItem('venue_pin', pin)
     sessionStorage.setItem('pin_event_id', selectedEvent)
+    // ✅ localStorage에도 저장 → 다른 페이지 갔다 와도 튕기지 않음 (12시간 유효)
+    localStorage.setItem('pin_session', JSON.stringify(sessionData))
 
     try {
       const donePins = JSON.parse(localStorage.getItem(NOTIF_DONE_KEY) || '[]') as string[]
