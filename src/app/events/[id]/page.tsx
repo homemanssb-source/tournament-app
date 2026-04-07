@@ -20,6 +20,39 @@ type Mode = 'individual' | 'team'
 type IndividualTab = 'groups' | 'tournament' | 'results' | 'courts'
 type TeamTab = 'standings' | 'matches' | 'bracket' | 'courts'
 
+// ─── 공통 헬퍼: "전태홍(제주하나)/강기호(행복배틀)" → [{ name, club }] ───
+function parsePlayers(raw: string): { name: string; club: string }[] {
+  if (!raw || raw === 'TBD' || raw === 'BYE') return []
+  return raw.split('/').map(p => {
+    const m = p.trim().match(/^(.+?)\((.+)\)$/)
+    return m ? { name: m[1].trim(), club: m[2].trim() } : { name: p.trim(), club: '' }
+  })
+}
+
+// 선수 쌍: 이름 굵게, 클럽명 아래 작게 각자 표시
+function PlayerPair({ raw, winner, trophy, align = 'left' }: { raw: string; winner?: boolean; trophy?: boolean; align?: 'left' | 'right' }) {
+  const players = parsePlayers(raw)
+  if (players.length === 0) {
+    return <span className={`font-bold text-sm ${winner ? 'text-[#2d5016]' : 'text-stone-500'}`}>{raw || 'TBD'}</span>
+  }
+  return (
+    <div className={`flex items-start gap-1 min-w-0 ${align === 'right' ? 'flex-row-reverse' : 'flex-row'}`}>
+      {trophy && <span className="text-xs flex-shrink-0 self-start pt-0.5">🏆</span>}
+      {players.map((p, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <span className="text-stone-300 self-start pt-0.5 text-xs flex-shrink-0">/</span>}
+          <div className={`min-w-0 flex-1 ${align === 'right' ? 'text-right' : ''}`}>
+            {/* 이름: 절대 안잘림 */}
+            <div className={`text-sm font-bold leading-tight whitespace-nowrap ${winner ? 'text-[#2d5016]' : 'text-stone-700'}`}>{p.name}</div>
+            {/* 클럽명: 공간 부족하면 ellipsis */}
+            {p.club && <div className="text-[11px] text-stone-400 truncate leading-tight">{p.club}</div>}
+          </div>
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
 async function logAccess(eventId: string, page: string, tab?: string) {
   try {
     const device = window.innerWidth < 768 ? 'mobile' : 'desktop'
@@ -335,8 +368,8 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
           <div className="p-3">
             {g.teams.map((t: any, i: number) => (
               <div key={t.team_id} className="flex items-center gap-2 py-2 border-b border-stone-100 last:border-0">
-                <span className="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-500">{i + 1}</span>
-                <span className="font-bold text-base text-stone-800">{t.team_name}</span>
+                <span className="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-500 flex-shrink-0">{i + 1}</span>
+                <PlayerPair raw={t.team_name} />
               </div>
             ))}
           </div>
@@ -541,20 +574,22 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
 }
 
 function MatchResultRow({ m }: { m: any }) {
+  const aWon = m.winner_team_id === m.team_a_id
+  const bWon = m.winner_team_id === m.team_b_id
   return (
     <div className="bg-white rounded-xl border p-3">
-      <div className="flex items-center justify-between text-xs text-stone-400 mb-1.5">
+      <div className="flex items-center justify-between text-xs text-stone-400 mb-2">
         <span>{m.group_label || m.round} · {m.match_num}</span>
         {m.court && <span className="text-[#2d5016] font-medium">{m.court}</span>}
       </div>
-      <div className="flex items-center">
-        <span className={`flex-1 text-sm font-bold ${m.winner_team_id === m.team_a_id ? 'text-[#2d5016]' : 'text-stone-500'}`}>
-          {m.winner_team_id === m.team_a_id && '🏆 '}{m.team_a_name}
-        </span>
-        <span className="text-lg font-black mx-3 text-stone-800">{m.score}</span>
-        <span className={`flex-1 text-sm font-bold text-right ${m.winner_team_id === m.team_b_id ? 'text-[#2d5016]' : 'text-stone-500'}`}>
-          {m.team_b_name}{m.winner_team_id === m.team_b_id && ' 🏆'}
-        </span>
+      <div className="flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <PlayerPair raw={m.team_a_name} winner={aWon} trophy={aWon} />
+        </div>
+        <span className="text-lg font-black mx-1 text-stone-800 flex-shrink-0">{m.score}</span>
+        <div className="flex-1 min-w-0">
+          <PlayerPair raw={m.team_b_name} winner={bWon} trophy={bWon} align="right" />
+        </div>
       </div>
     </div>
   )

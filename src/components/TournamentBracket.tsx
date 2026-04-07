@@ -14,8 +14,17 @@ interface BracketMatch {
 
 const ROUND_ORDER = ['128강', '64강', '32강', '16강', '8강', '4강', '결승']
 
-const CARD_H = 64
+const CARD_H = 82
 const MIN_GAP = 8
+
+// "전태홍(제주하나)/강기호(행복배틀)" → [{ name, club }]
+function parsePlayers(raw: string): { name: string; club: string }[] {
+  if (!raw || raw === 'TBD' || raw === 'BYE') return []
+  return raw.split('/').map(p => {
+    const m = p.trim().match(/^(.+?)\((.+)\)$/)
+    return m ? { name: m[1].trim(), club: m[2].trim() } : { name: p.trim(), club: '' }
+  })
+}
 
 function getCardWidth(roundCount: number): number {
   if (roundCount >= 6) return 155
@@ -177,41 +186,46 @@ function MatchCard({ m }: { m: BracketMatch }) {
 
       {/* 팀 A */}
       <div
-        className={`flex items-center px-2 border-b border-stone-100 ${
+        className={`flex items-start px-2 py-1 border-b border-stone-100 ${
           aWon ? 'bg-green-50' : bWon && done ? 'bg-stone-50' : ''
         }`}
-        style={{ flex: 1 }}
+        style={{ flex: 1, minHeight: 0 }}
       >
-        <span className={`truncate flex-1 min-w-0 text-xs ${
-          aWon                                         ? 'font-bold text-green-800'
-          : !m.team_a_name || m.team_a_name === 'TBD' ? 'text-stone-300 italic'
-          : bWon && done                               ? 'text-stone-300'
-          :                                              'text-stone-800'
-        }`}>
-          {m.team_a_name || 'TBD'}
-        </span>
-        {aWon && <span className="text-green-600 ml-1 flex-shrink-0 text-xs">✓</span>}
-        {inProgress && m.team_a_id && (
-          <span className="text-red-400 ml-1 flex-shrink-0 animate-pulse" style={{ fontSize: 9 }}>●</span>
-        )}
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <TeamRow
+            raw={m.team_a_name}
+            won={aWon}
+            muted={bWon && done}
+            tbd={!m.team_a_name || m.team_a_name === 'TBD'}
+          />
+        </div>
+        <div className="flex-shrink-0 flex items-center gap-0.5 ml-1 pt-0.5">
+          {aWon && <span className="text-green-600 text-xs">✓</span>}
+          {inProgress && m.team_a_id && (
+            <span className="text-red-400 animate-pulse" style={{ fontSize: 9 }}>●</span>
+          )}
+        </div>
       </div>
 
       {/* 팀 B */}
       <div
-        className={`flex items-center px-2 ${
+        className={`flex items-start px-2 py-1 ${
           bWon ? 'bg-green-50' : aWon && done ? 'bg-stone-50' : ''
         }`}
-        style={{ flex: 1 }}
+        style={{ flex: 1, minHeight: 0 }}
       >
-        <span className={`truncate flex-1 min-w-0 text-xs ${
-          bWon                                                  ? 'font-bold text-green-800'
-          : isBye || !m.team_b_name || m.team_b_name === 'TBD' ? 'text-stone-300 italic'
-          : aWon && done                                        ? 'text-stone-300'
-          :                                                        'text-stone-800'
-        }`}>
-          {isBye ? 'BYE' : (m.team_b_name || 'TBD')}
-        </span>
-        {bWon && <span className="text-green-600 ml-1 flex-shrink-0 text-xs">✓</span>}
+        <div className="flex-1 min-w-0 overflow-hidden">
+          {isBye
+            ? <span className="text-stone-300 italic text-xs">BYE</span>
+            : <TeamRow
+                raw={m.team_b_name}
+                won={bWon}
+                muted={aWon && done}
+                tbd={!m.team_b_name || m.team_b_name === 'TBD'}
+              />
+          }
+        </div>
+        {bWon && <span className="text-green-600 flex-shrink-0 ml-1 text-xs pt-0.5">✓</span>}
       </div>
 
       {/* 점수 바 */}
@@ -231,6 +245,42 @@ function MatchCard({ m }: { m: BracketMatch }) {
           BYE
         </div>
       )}
+    </div>
+  )
+}
+
+// 선수명 우선 — 이름은 절대 안잘림, 클럽명만 ellipsis
+function TeamRow({ raw, won, muted, tbd }: { raw?: string; won?: boolean; muted?: boolean; tbd?: boolean }) {
+  if (tbd || !raw) {
+    return <span className="text-stone-300 italic text-xs">TBD</span>
+  }
+  const players = parsePlayers(raw)
+  if (players.length === 0) {
+    return <span className={`text-xs font-bold ${won ? 'text-green-800' : muted ? 'text-stone-300' : 'text-stone-800'}`}>{raw}</span>
+  }
+  return (
+    <div className="flex items-start gap-1 min-w-0">
+      {players.map((p, i) => (
+        <div key={i} className="flex items-start gap-0.5 min-w-0 flex-1">
+          {i > 0 && <span className="text-stone-300 text-[10px] flex-shrink-0 pt-px">/</span>}
+          <div className="min-w-0 flex-1">
+            {/* 이름: overflow visible, 절대 안잘림 */}
+            <div className={`text-xs font-bold leading-tight whitespace-nowrap ${
+              won ? 'text-green-800' : muted ? 'text-stone-300' : 'text-stone-800'
+            }`}>
+              {p.name}
+            </div>
+            {/* 클럽명: 공간 부족하면 ellipsis */}
+            {p.club && (
+              <div className={`text-[10px] leading-tight truncate ${
+                won ? 'text-green-600' : muted ? 'text-stone-200' : 'text-stone-400'
+              }`}>
+                {p.club}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

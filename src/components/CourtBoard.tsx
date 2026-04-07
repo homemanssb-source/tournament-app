@@ -21,6 +21,15 @@ interface Venue {
   id: string; name: string; short_name: string; court_count: number
 }
 
+// ✅ "전태홍(제주하나)/강기호(행복배틀)" → [{ name, club }]
+function parsePlayers(raw: string): { name: string; club: string }[] {
+  if (!raw || raw === 'TBD' || raw === 'BYE') return []
+  return raw.split('/').map(p => {
+    const m = p.trim().match(/^(.+?)\((.+)\)$/)
+    return m ? { name: m[1].trim(), club: m[2].trim() } : { name: p.trim(), club: '' }
+  })
+}
+
 // ✅ courts/page.tsx, timetable/page.tsx와 동일한 변환 함수
 function courtNumToName(courtNumber: number, venues: Venue[]): string {
   if (venues.length === 0) return `코트-${courtNumber}`
@@ -399,10 +408,16 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
                         </div>
                         <span className="text-stone-400">{m.division_name}</span>
                       </div>
-                      <div className={`font-medium leading-snug ${isDone ? 'line-through text-stone-400' : ''}`}>
-                        {m.team_a_name}
-                        <span className="text-stone-300 mx-1">vs</span>
-                        {m.team_b_name}
+                      <div className={isDone ? 'opacity-50' : ''}>
+                        {m.is_team_tie ? (
+                          <span className="font-medium text-xs">{m.team_a_name} vs {m.team_b_name}</span>
+                        ) : (
+                          <div className="flex items-start gap-1 min-w-0">
+                            <div className="flex-1 min-w-0"><PlayerPairInline raw={m.team_a_name} /></div>
+                            <span className="text-stone-300 text-[10px] flex-shrink-0 self-center">vs</span>
+                            <div className="flex-1 min-w-0"><PlayerPairInline raw={m.team_b_name} /></div>
+                          </div>
+                        )}
                       </div>
                       {m.score && <div className={`mt-0.5 font-bold ${isDone ? 'text-stone-500' : 'text-tennis-700'}`}>{m.score}</div>}
                     </div>
@@ -413,6 +428,27 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// 선수 쌍 인라인 렌더링: 이름 굵게, 클럽명 아래 작게 (각자)
+function PlayerPairInline({ raw }: { raw: string }) {
+  const players = parsePlayers(raw)
+  if (players.length === 0) return <span className="font-bold text-stone-800 text-xs">{raw || 'TBD'}</span>
+  return (
+    <div className="flex items-start gap-1 min-w-0 flex-1">
+      {players.map((p, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <span className="text-stone-300 text-[10px] flex-shrink-0 pt-px">/</span>}
+          <div className="min-w-0 flex-1">
+            {/* 이름: 절대 안잘림 */}
+            <div className="font-bold text-stone-800 text-xs leading-tight whitespace-nowrap">{p.name}</div>
+            {/* 클럽명: 공간 부족하면 ellipsis */}
+            {p.club && <div className="text-[10px] text-stone-400 leading-tight truncate">{p.club}</div>}
+          </div>
+        </React.Fragment>
+      ))}
     </div>
   )
 }
