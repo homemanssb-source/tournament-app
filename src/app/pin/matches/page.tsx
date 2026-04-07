@@ -540,7 +540,9 @@ function getTbdCandidates(finalsMatches: FinalsMatch[], matchId: string, abSlot:
     '결승':'4강','4강':'8강','8강':'16강','16강':'32강','32강':'64강','64강':'128강',
     'F':'SF','SF':'QF','QF':'R16','R16':'R32','R32':'R64','R64':'R128',
   }
+  console.log('[PIN TBD] matchId:', matchId, 'finalsCount:', finalsMatches.length, 'slot:', abSlot)
   const cur = finalsMatches.find(m => m.id === matchId)
+  console.log('[PIN TBD] cur found:', !!cur, cur?.round, cur?.division_id?.slice(0,8))
   if (!cur) return []
   const prevRound = PREV[cur.round]
   if (!prevRound) return []
