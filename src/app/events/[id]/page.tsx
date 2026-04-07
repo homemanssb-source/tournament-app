@@ -524,13 +524,12 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
                             }
                           </td>
                           <td className="px-3 py-2.5">
-                            <span className={`font-medium ${isFirst && !isTied ? 'text-green-800' : 'text-stone-800'}`}>
-                              {t.name}
-                            </span>
-                            {/* ✅ '통과' 뱃지 제거 */}
-                            {isTied && (
-                              <span className="ml-1.5 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">동률</span>
-                            )}
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <PlayerPair raw={t.name} winner={isFirst && !isTied} />
+                              {isTied && (
+                                <span className="ml-1 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium flex-shrink-0">동률</span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-3 py-2.5 text-center font-bold text-green-700">{t.win}</td>
                           <td className="px-3 py-2.5 text-center text-stone-400">{t.lose}</td>
