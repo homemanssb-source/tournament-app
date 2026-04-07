@@ -4,6 +4,8 @@
 // ✅ [FIX-①⑨] 단체전 court명: '코트 N' → venues 기반 short_name-N 통일
 // ✅ [FIX-⑤⑨] 단체전 court_order: 100+tie_order → DB 실제값 사용
 // ✅ [FIX-⑨]  allCourts 정렬: 숫자+접두어 혼재 안전 처리
+// ✅ [FIX-클럽명] PlayerPairInline 클럽명 최대 5자 + ... 축약 표시
+// ✅ [FIX-검색] allTeams → 선수 이름 단위 추출, 매칭도 이름 기반
 // ============================================================
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -35,6 +37,21 @@ function parsePlayers(raw: string): { name: string; club: string }[] {
     const m = p.trim().match(/^(.+?)\((.+)\)$/)
     return m ? { name: m[1].trim(), club: m[2].trim() } : { name: p.trim(), club: '' }
   })
+}
+
+// ✅ 클럽명 축약: 최대 maxLen자, 초과 시 '…'
+function shortClub(club: string, maxLen = 5): string {
+  if (!club) return ''
+  return club.length > maxLen ? club.slice(0, maxLen) + '…' : club
+}
+
+// ✅ 전체 팀 문자열에서 선수 이름만 추출 (검색용)
+function extractPlayerNames(raw: string): string[] {
+  if (!raw || raw === 'TBD' || raw === 'BYE') return []
+  return raw.split('/').map(p => {
+    const m = p.trim().match(/^(.+?)\(/)
+    return m ? m[1].trim() : p.trim()
+  }).filter(Boolean)
 }
 
 // ✅ courts/page.tsx, timetable/page.tsx와 동일한 변환 함수
@@ -222,27 +239,35 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
   const allVenues = [...new Set(allCourts.map(getVenueName))].sort()
   const courts = venueFilter === 'ALL' ? allCourts : allCourts.filter(c => getVenueName(c) === venueFilter)
 
-  const allTeams = Array.from(new Set(
-    matches.flatMap(m => [m.team_a_name, m.team_b_name]).filter(n => n && n !== 'TBD')
-  )).sort()
+  // ✅ [FIX-검색] 팀 전체 문자열 대신 선수 이름 단위로 자동완성 목록 구성
+  const allPlayerNames = React.useMemo(() => {
+    const nameSet = new Set<string>()
+    for (const m of matches) {
+      extractPlayerNames(m.team_a_name).forEach(n => nameSet.add(n))
+      extractPlayerNames(m.team_b_name).forEach(n => nameSet.add(n))
+    }
+    return Array.from(nameSet).sort()
+  }, [matches])
 
   function handleQuery(v: string) {
     setQuery(v); setResult(null)
     if (!v.trim()) { setSugg([]); setShowSugg(false); return }
-    const filtered = allTeams.filter(t => t.toLowerCase().includes(v.toLowerCase()))
+    const filtered = allPlayerNames.filter(n => n.toLowerCase().includes(v.toLowerCase()))
     setSugg(filtered.slice(0, 6)); setShowSugg(filtered.length > 0)
   }
 
+  // ✅ [FIX-검색] team_a_name / team_b_name 내 선수 이름 포함 여부로 매칭
   function doSearch(name?: string) {
     const target = (name ?? query).trim()
     setQuery(target); setSugg([]); setShowSugg(false)
     if (!target) return
     for (const [court, cms] of byCourt) {
       const sorted = [...cms].sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
-      const idx = sorted.findIndex(m =>
-        m.team_a_name.toLowerCase().includes(target.toLowerCase()) ||
-        m.team_b_name.toLowerCase().includes(target.toLowerCase())
-      )
+      const idx = sorted.findIndex(m => {
+        const namesA = extractPlayerNames(m.team_a_name)
+        const namesB = extractPlayerNames(m.team_b_name)
+        return [...namesA, ...namesB].some(n => n.toLowerCase().includes(target.toLowerCase()))
+      })
       if (idx >= 0) { setResult({ name: target, court, idx }); return }
     }
     setResult({ name: target, court: '', idx: -1 })
@@ -344,7 +369,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
               onChange={e => handleQuery(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && doSearch()}
               onFocus={() => query && suggestions.length > 0 && setShowSugg(true)}
-              placeholder="팀/선수 이름으로 검색"
+              placeholder="선수 이름으로 검색"
               className="w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-tennis-400" />
             {showSugg && suggestions.length > 0 && (
               <div ref={suggRef} className="absolute top-full left-0 right-0 mt-1 bg-white border rounded-xl shadow-lg z-10 overflow-hidden">
@@ -417,19 +442,19 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
               </div>
               <div className="p-2 space-y-1.5 max-h-[50vh] overflow-y-auto">
                 {cms.map((m, idx) => {
-                  const isDone = m.status === 'FINISHED'
+                  const isDone    = m.status === 'FINISHED'
                   const isLiveMat = m.status === 'IN_PROGRESS'
                   const isCurrent = idx === curIdx
-                  const isNext = idx === curIdx + 1
-                  const isSearch = searchResult?.court === court && searchResult.idx === idx
+                  const isNext    = idx === curIdx + 1
+                  const isSearch  = searchResult?.court === court && searchResult.idx === idx
 
                   return (
                     <div key={m.id} className={`rounded-lg px-3 py-2 text-xs transition-all border ${
-                      isSearch   ? 'bg-blue-50 border-blue-300 ring-1 ring-blue-300'
-                      : isDone   ? 'bg-stone-50 border-stone-100 opacity-50'
+                      isSearch    ? 'bg-blue-50 border-blue-300 ring-1 ring-blue-300'
+                      : isDone    ? 'bg-stone-50 border-stone-100 opacity-50'
                       : isLiveMat ? 'bg-red-50 border-red-200'
                       : isCurrent ? 'bg-amber-50 border-amber-200'
-                      : isNext   ? 'bg-yellow-50/50 border-stone-100'
+                      : isNext    ? 'bg-yellow-50/50 border-stone-100'
                       : m.is_team_tie ? 'bg-blue-50/40 border-blue-100'
                       : 'bg-white border-stone-100'
                     }`}>
@@ -449,9 +474,9 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
                         {m.is_team_tie ? (
                           <span className="font-medium text-xs">{m.team_a_name} vs {m.team_b_name}</span>
                         ) : (
-                          <div className="flex items-start gap-1 min-w-0">
+                          <div className="flex items-center gap-1 min-w-0">
                             <div className="flex-1 min-w-0"><PlayerPairInline raw={m.team_a_name} finalsMatches={finalsMatches} matchId={m.id} slot="A" /></div>
-                            <span className="text-stone-300 text-[10px] flex-shrink-0 self-center">vs</span>
+                            <span className="text-stone-300 text-[10px] flex-shrink-0">vs</span>
                             <div className="flex-1 min-w-0"><PlayerPairInline raw={m.team_b_name} finalsMatches={finalsMatches} matchId={m.id} slot="B" /></div>
                           </div>
                         )}
@@ -504,7 +529,7 @@ function getTbdCandidates(finalsMatches: FinalsMatch[], matchId: string, slot: '
   return names
 }
 
-// 선수 쌍 인라인 렌더링: 이름 굵게, 클럽명 아래 작게 / TBD면 예상 후보 표시
+// ✅ [FIX-클럽명] 선수 쌍 인라인 렌더링: 이름 굵게, 클럽명 최대 5자로 축약
 function PlayerPairInline({ raw, finalsMatches, matchId, slot }: {
   raw: string
   finalsMatches?: FinalsMatch[]
@@ -531,13 +556,19 @@ function PlayerPairInline({ raw, finalsMatches, matchId, slot }: {
   const players = parsePlayers(raw)
   if (players.length === 0) return <span className="font-bold text-stone-800 text-xs">{raw || 'TBD'}</span>
   return (
-    <div className="flex items-start gap-1 min-w-0 flex-1">
+    <div className="flex items-start gap-0.5 min-w-0 flex-1">
       {players.map((p, i) => (
         <React.Fragment key={i}>
           {i > 0 && <span className="text-stone-300 text-[10px] flex-shrink-0 pt-px">/</span>}
           <div className="min-w-0 flex-1">
+            {/* 선수 이름: 절대 안 잘림 */}
             <div className="font-bold text-stone-800 text-xs leading-tight whitespace-nowrap">{p.name}</div>
-            {p.club && <div className="text-[10px] text-stone-400 leading-tight truncate">{p.club}</div>}
+            {/* 클럽명: 최대 5자로 축약 */}
+            {p.club && (
+              <div className="text-[9px] text-stone-400 leading-tight whitespace-nowrap" title={p.club}>
+                {shortClub(p.club, 5)}
+              </div>
+            )}
           </div>
         </React.Fragment>
       ))}
