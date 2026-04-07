@@ -34,6 +34,15 @@ const ROUND_TO_STAGE: Record<string, string> = { R32:'FINALS', R16:'FINALS', QF:
 const ZONE_FINALS = new Set(['R16','QF','SF','F','16강','8강','4강','결승','128강','64강','32강'])
 const STAGE_LABEL: Record<string, string> = { GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', ALL_FINALS:'전체본선', '128강':'128강', '64강':'64강', '32강':'32강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
 
+// "전태홍(제주하나)/강기호(행복배틀)" → [{ name, club }]
+function parsePlayers(raw: string): { name: string; club: string }[] {
+  if (!raw || raw === 'TBD' || raw === 'BYE') return []
+  return raw.split('/').map(p => {
+    const m = p.trim().match(/^(.+?)\((.+)\)$/)
+    return m ? { name: m[1].trim(), club: m[2].trim() } : { name: p.trim(), club: '' }
+  })
+}
+
 function makeCourtNames(shortName: string, count: number): string[] {
   const prefix = shortName?.trim() || '코트'
   return Array.from({ length: count }, (_, i) => `${prefix}-${i + 1}`)
@@ -736,27 +745,25 @@ export default function CourtsPage() {
       </div>
 
       {/* ═══ 메인 그리드: 미배정 + 코트 ═══ */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 items-start">
 
         {/* 미배정 컬럼 */}
-        <div className="lg:col-span-1" data-unassigned onDragOver={handleDragOver} onDrop={handleDropOnUnassigned}>
-          <div className="bg-white rounded-xl border overflow-hidden">
-            <div className="bg-stone-500 text-white px-4 py-2 font-bold text-sm">미배정 ({unassigned.length})</div>
-            <div className="p-1.5 space-y-1 max-h-[70vh] overflow-y-auto">
-              {unassigned.map(m => (
-                <MatchChip key={m.id} m={m} divColor={divColors[m.division_id]}
-                  onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
-                  onClickUnassign={() => unassignItem(m.id)}
-                  onTouchStart={() => handleTouchStart(m.id)}
-                  onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} />
-              ))}
-              {unassigned.length === 0 && <div className="text-xs text-stone-300 text-center py-6">없음</div>}
-            </div>
-          </div>
-        </div>
+        <UnassignedColumn
+          unassigned={unassigned}
+          divColors={divColors}
+          touchOver={touchOver}
+          onDragOver={handleDragOver}
+          onDrop={handleDropOnUnassigned}
+          onDragStart={setDragMatch}
+          onClickScore={openScoreEdit}
+          onClickUnassign={unassignItem}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        />
 
         {/* 코트 그리드 */}
-        <div className="lg:col-span-4 grid grid-cols-2 xl:grid-cols-4 gap-3">
+        <div className="lg:col-span-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
           {filteredCourtNames.map(court => {
             const courtItems = (byCourt.get(court)||[]).sort((a,b)=>(a.court_order||0)-(b.court_order||0))
             const finished   = courtItems.filter(m=>m.status==='FINISHED').length
@@ -911,7 +918,7 @@ function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }:
               <div className="flex items-center justify-between gap-1">
                 <div className="flex items-center gap-1.5 min-w-0 flex-1">
                   <span className="text-[10px] text-stone-400 font-mono flex-shrink-0">#{m.court_order}</span>
-                  <span className="text-xs text-stone-500 break-words">{m.team_a_name} vs {m.team_b_name}</span>
+                  <span className="text-xs text-stone-500"><MatchTeamRow raw={m.team_a_name} done /><span className="text-stone-300 mx-0.5">vs</span><MatchTeamRow raw={m.team_b_name} done /></span>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
                   {m.score && <span className="text-xs font-bold text-stone-500">{m.score}</span>}
@@ -967,12 +974,81 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, onDragStart, onCl
           {onClickUnassign && <button onClick={e=>{e.stopPropagation();onClickUnassign()}} className="text-stone-300 hover:text-red-400">✕</button>}
         </div>
       </div>
-      <div className={`font-medium leading-snug ${done?'text-stone-400 line-through':''}`}>
-        {m.team_a_name} <span className="text-stone-300">vs</span> {m.team_b_name}
+      <div className={done ? 'opacity-50' : ''}>
+        <MatchTeamRow raw={m.team_a_name} done={done} />
+        <div className="text-stone-300 text-[10px] leading-none my-0.5">vs</div>
+        <MatchTeamRow raw={m.team_b_name} done={done} />
       </div>
       {m.score && (
         <div className={`mt-0.5 font-bold ${isTeam?'text-blue-600':done?'text-stone-400':'text-tennis-600'}`}>{m.score}</div>
       )}
+    </div>
+  )
+}
+
+// ── 선수명 표시: 이름 굵게(안잘림) + 클럽명 작게(ellipsis)
+function MatchTeamRow({ raw, done }: { raw: string; done?: boolean }) {
+  const players = parsePlayers(raw)
+  if (players.length === 0) {
+    return <span className={`text-xs font-bold ${done ? 'text-stone-400' : 'text-stone-800'}`}>{raw || 'TBD'}</span>
+  }
+  return (
+    <div className="flex items-start gap-1 min-w-0">
+      {players.map((p, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <span className="text-stone-300 text-[9px] flex-shrink-0 pt-px">/</span>}
+          <div className="min-w-0 flex-1">
+            <div className={`text-xs font-bold leading-tight whitespace-nowrap ${done ? 'text-stone-400' : 'text-stone-800'}`}>
+              {p.name}
+            </div>
+            {p.club && (
+              <div className="text-[9px] leading-tight truncate text-stone-400">{p.club}</div>
+            )}
+          </div>
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
+// ── 미배정 컬럼: 모바일 접기 가능
+function UnassignedColumn({ unassigned, divColors, touchOver, onDragOver, onDrop, onDragStart, onClickScore, onClickUnassign, onTouchStart, onTouchMove, onTouchEnd }: {
+  unassigned: MatchSlim[]
+  divColors: Record<string, string>
+  touchOver: string | null
+  onDragOver: (e: React.DragEvent) => void
+  onDrop: () => void
+  onDragStart: (id: string) => void
+  onClickScore: (m: MatchSlim) => void
+  onClickUnassign: (id: string) => void
+  onTouchStart: (id: string) => void
+  onTouchMove: (e: React.TouchEvent) => void
+  onTouchEnd: () => void
+}) {
+  const [open, setOpen] = React.useState(true)
+  return (
+    <div className="lg:col-span-1" data-unassigned onDragOver={onDragOver} onDrop={onDrop}>
+      <div className={`bg-white rounded-xl border overflow-hidden transition-all ${touchOver === 'unassigned' ? 'ring-2 ring-stone-400' : ''}`}>
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="w-full bg-stone-500 text-white px-4 py-2 font-bold text-sm flex items-center justify-between"
+        >
+          <span>미배정 ({unassigned.length})</span>
+          <span className="text-white/60 text-xs lg:hidden">{open ? '▲' : '▼'}</span>
+        </button>
+        {open && (
+          <div className="p-1.5 space-y-1 max-h-[40vh] lg:max-h-[70vh] overflow-y-auto">
+            {unassigned.map(m => (
+              <MatchChip key={m.id} m={m} divColor={divColors[m.division_id]}
+                onDragStart={onDragStart} onClickScore={() => onClickScore(m)}
+                onClickUnassign={() => onClickUnassign(m.id)}
+                onTouchStart={() => onTouchStart(m.id)}
+                onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} />
+            ))}
+            {unassigned.length === 0 && <div className="text-xs text-stone-300 text-center py-6">없음</div>}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
