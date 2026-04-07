@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // [앱B] 개인전 본선 결과 → 앱A 전송 API
 // src/app/api/sync/push-results/route.ts
 //
@@ -6,6 +6,7 @@
 // - 토너먼트 라운드로 순위 자동 계산
 // - 복식 팀 2명 각각 개별 포인트 부여
 // - 이름 + 클럽으로 앱A member 매칭
+// ★ 수정: p1_club / p2_club 개별 조회로 동명이인 오매칭 방지
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -36,7 +37,6 @@ function getAppBServiceClient() {
 }
 
 // ── 토너먼트 라운드 → 순위 매핑 ──
-// round 값 예시: 'F' (결승), 'SF' (4강), 'QF' (8강), 'R16' (16강), 'R32' (32강)
 function getRankFromRound(round: string, isWinner: boolean): string {
   const r = round.toUpperCase().replace(/\s/g, '');
 
@@ -55,7 +55,6 @@ function getRankFromRound(round: string, isWinner: boolean): string {
   if (r === 'R32' || r === '32강') {
     return '32강';
   }
-  // 기타 라운드
   return '참가';
 }
 
@@ -63,10 +62,6 @@ function getRankFromRound(round: string, isWinner: boolean): string {
 const RANK_PRIORITY: Record<string, number> = {
   '우승': 1, '준우승': 2, '4강': 3, '8강': 4, '16강': 5, '32강': 6, '참가': 7,
 };
-
-function betterRank(a: string, b: string): string {
-  return (RANK_PRIORITY[a] || 99) <= (RANK_PRIORITY[b] || 99) ? a : b;
-}
 
 // ── 앱A에서 이름+클럽으로 회원 매칭 ──
 async function findMemberByNameAndClub(
@@ -154,10 +149,11 @@ export async function POST(request: NextRequest) {
     }
 
     // ── 2. 관련 팀 정보 조회 ──
+    // ★ 수정: p1_club, p2_club 추가 조회
     const teamIds = [...new Set(matches.flatMap(m => [m.team_a_id, m.team_b_id].filter(Boolean)))];
     const { data: teamsData } = await appB
       .from('teams')
-      .select('id, player1_name, player2_name, division_name, club_name')
+      .select('id, player1_name, player2_name, division_name, club_name, p1_club, p2_club')
       .in('id', teamIds);
 
     const teamMap = new Map((teamsData || []).map(t => [t.id, t]));
@@ -172,7 +168,6 @@ export async function POST(request: NextRequest) {
     const divMap = new Map((divsData || []).map(d => [d.id, d.name]));
 
     // ── 4. 각 팀의 최고 순위 계산 ──
-    // 팀별로 가장 좋은 순위만 유지
     const teamBestRank = new Map<string, { rank: string; divisionName: string }>();
 
     for (const match of matches) {
@@ -245,9 +240,10 @@ export async function POST(request: NextRequest) {
       if (!team) continue;
 
       const points = calcPoints(divisionName, rank);
+      // ★ 수정: player1은 p1_club, player2는 p2_club 사용 (없으면 club_name 폴백)
       const players = [
-        { name: team.player1_name, club: team.club_name },
-        { name: team.player2_name, club: team.club_name },
+        { name: team.player1_name, club: team.p1_club || team.club_name },
+        { name: team.player2_name, club: team.p2_club || team.club_name },
       ];
 
       for (const player of players) {
@@ -314,7 +310,7 @@ export async function POST(request: NextRequest) {
       success: true,
       synced: syncedCount,
       skipped: skippedCount,
-      total: teamBestRank.size * 2, // 팀 수 × 2명
+      total: teamBestRank.size * 2,
       unmatched: unmatchedPlayers.length > 0 ? unmatchedPlayers : undefined,
       errors: errors.length > 0 ? errors : undefined,
     }, { headers: corsHeaders });
