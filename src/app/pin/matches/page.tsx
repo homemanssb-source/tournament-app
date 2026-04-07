@@ -559,6 +559,8 @@ function getTbdCandidates(finalsMatches: FinalsMatch[], matchId: string, abSlot:
   const prevList = finalsMatches
     .filter(m => m.division_id === cur.division_id && m.round === prevRound)
     .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+  const pm = abSlot === 'A' ? prevList[myLocalIdx * 2] : prevList[myLocalIdx * 2 + 1]
+  if (!pm) return []
   const strip = (raw: string) => raw.split('/').map(p => p.replace(/\(.*?\)/g, '').trim()).join('/')
   if (pm.status === 'FINISHED' && pm.winner_team_id) {
     const w = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
