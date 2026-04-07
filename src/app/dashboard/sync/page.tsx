@@ -186,6 +186,10 @@ function SyncDashboardInner() {
                 <div className="bg-white rounded-lg border p-6 space-y-3">
                   <h3 className="font-semibold">개인전 참가자</h3>
                   <p className="text-sm text-gray-600">동기화: {individualLogs.length}팀</p>
+                  <button onClick={handleUpdateClubs} disabled={syncing}
+                    className="w-full bg-amber-500 text-white py-3 rounded-lg hover:bg-amber-600 disabled:opacity-50">
+                    {syncing ? '업데이트 중...' : '🏷️ 기존 팀 클럽명 업데이트'}
+                  </button>
                   <button onClick={handlePullIndividual} disabled={syncing}
                     className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50">
                     {syncing ? '동기화중...' : '개인전 가져오기'}
