@@ -960,8 +960,8 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
 }) {
   const done = m.status==='FINISHED'; const live = m.status==='IN_PROGRESS'; const isTeam = m.is_team_tie
 
-  // TBD 예상 후보: 정렬 인덱스 기반으로 직전 라운드 2경기에서 후보 추출
-  // DB slot은 전체 통합 번호 → 같은 부서+라운드 내 정렬 순서(localIdx)로 매칭
+  // TBD 예상 후보: slot 오프셋 기반으로 직전 라운드 정확한 2경기 추출
+  // slot은 전체 통합 번호 → 각 라운드 최솟값(minSlot) 기준 로컬 인덱스로 변환
   function getTbdCandidates(teamName: string | null): string[] {
     if (teamName && teamName !== 'TBD') return []
     if (!allMatches || isTeam) return []
@@ -972,22 +972,23 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
     const prevRound = PREV[m.round]
     if (!prevRound) return []
 
-    // 현재 라운드에서 같은 부서 경기들을 slot 순 정렬 후 내 인덱스 파악
-    const curRoundMatches = allMatches
-      .filter(pm => pm.division_id === m.division_id && pm.round === m.round && pm.stage === 'FINALS')
-      .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
-    const myIdx = curRoundMatches.findIndex(pm => pm.id === m.id)
-    if (myIdx < 0) return []
-
-    // 직전 라운드 경기들 slot 순 정렬
+    // 같은 부서 직전 라운드 경기들 slot 순 정렬
     const prevRoundMatches = allMatches
       .filter(pm => pm.division_id === m.division_id && pm.round === prevRound && pm.stage === 'FINALS')
       .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+    if (prevRoundMatches.length === 0) return []
 
-    // 직전 라운드는 2배수 → 내 인덱스 * 2, * 2 + 1 번째 경기가 후보
-    const idxA = myIdx * 2
-    const idxB = myIdx * 2 + 1
-    const candidates = [prevRoundMatches[idxA], prevRoundMatches[idxB]].filter(Boolean)
+    // 같은 부서 현재 라운드 경기들 slot 순 정렬 후 내 로컬 인덱스 파악
+    const curRoundMatches = allMatches
+      .filter(pm => pm.division_id === m.division_id && pm.round === m.round && pm.stage === 'FINALS')
+      .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+    const myLocalIdx = curRoundMatches.findIndex(pm => pm.id === m.id)
+    if (myLocalIdx < 0) return []
+
+    // 직전 라운드는 2배수 경기 → 로컬 인덱스 기준 2개 추출
+    const candA = prevRoundMatches[myLocalIdx * 2]
+    const candB = prevRoundMatches[myLocalIdx * 2 + 1]
+    const candidates = [candA, candB].filter(Boolean)
 
     const names: string[] = []
     for (const pm of candidates) {

@@ -171,23 +171,23 @@ function MatchCard({ m, byRound, roundIdx, rounds }: {
   const aWon       = !!(m.winner_team_id && m.winner_team_id === m.team_a_id)
   const bWon       = !!(m.winner_team_id && m.winner_team_id === m.team_b_id)
 
-  // TBD 예상 후보: 정렬 인덱스 기반으로 직전 라운드 2경기에서 후보 추출
+  // TBD 예상 후보: 같은 라운드 내 로컬 인덱스 기반으로 직전 라운드 정확한 2경기 추출
   function getTbdCandidates(teamName?: string): string[] {
     if (teamName && teamName !== 'TBD') return []
     if (!byRound || roundIdx === undefined || !rounds || roundIdx === 0) return []
     const prevRound = rounds[roundIdx - 1]
     if (!prevRound) return []
 
-    // 현재 라운드 내 정렬 후 내 인덱스 파악
+    // 현재 라운드 내 slot 정렬 후 내 로컬 인덱스 파악
     const curMatches = (byRound.get(rounds[roundIdx]) || []).slice().sort((a, b) => (a.slot || 0) - (b.slot || 0))
-    const myIdx = curMatches.findIndex(pm => pm.match_id === m.match_id)
-    if (myIdx < 0) return []
+    const myLocalIdx = curMatches.findIndex(pm => pm.match_id === m.match_id)
+    if (myLocalIdx < 0) return []
 
-    // 직전 라운드 slot 순 정렬
+    // 직전 라운드 slot 정렬 후 로컬 인덱스로 정확히 2경기 추출
     const prevMatches = (byRound.get(prevRound) || []).slice().sort((a, b) => (a.slot || 0) - (b.slot || 0))
-    const idxA = myIdx * 2
-    const idxB = myIdx * 2 + 1
-    const candidates = [prevMatches[idxA], prevMatches[idxB]].filter(Boolean)
+    const candA = prevMatches[myLocalIdx * 2]
+    const candB = prevMatches[myLocalIdx * 2 + 1]
+    const candidates = [candA, candB].filter(Boolean)
 
     const names: string[] = []
     for (const pm of candidates) {
