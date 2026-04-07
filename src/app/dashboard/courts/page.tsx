@@ -983,9 +983,8 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
 }) {
   const done = m.status==='FINISHED'; const live = m.status==='IN_PROGRESS'; const isTeam = m.is_team_tie
 
-  // TBD 예상 후보: slot 오프셋 기반으로 직전 라운드 정확한 2경기 추출
-  // slot은 전체 통합 번호 → 각 라운드 최솟값(minSlot) 기준 로컬 인덱스로 변환
-  function getTbdCandidates(teamName: string | null): string[] {
+  // TBD 예상 후보: A슬롯/B슬롯 각각 직전 라운드 1경기씩 표시
+  function getTbdCandidates(teamName: string | null, abSlot: 'A' | 'B'): string[] {
     if (teamName && teamName !== 'TBD') return []
     if (!allMatches || isTeam) return []
     const PREV: Record<string,string> = {
@@ -995,54 +994,31 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
     const prevRound = PREV[m.round]
     if (!prevRound) return []
 
-    // 같은 부서 직전 라운드 경기들 slot 순 정렬
-    const prevRoundMatches = allMatches
-      .filter(pm => pm.division_id === m.division_id && pm.round === prevRound && pm.stage === 'FINALS')
+    // 직전 라운드 경기 slot 순 정렬
+    const prevList = allMatches
+      .filter(pm => pm.division_id === m.division_id && pm.round === prevRound)
       .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+    if (prevList.length === 0) return []
 
-    // stage 없으면 stage 조건 제거하고 재시도
-    const prevRoundMatchesFallback = prevRoundMatches.length > 0 ? prevRoundMatches :
-      allMatches
-        .filter(pm => pm.division_id === m.division_id && pm.round === prevRound)
-        .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
-    if (prevRoundMatchesFallback.length === 0) return []
-
-    // 같은 부서 현재 라운드 경기들 slot 순 정렬 후 내 로컬 인덱스 파악
-    const curRoundMatches = allMatches
-      .filter(pm => pm.division_id === m.division_id && pm.round === m.round && pm.stage === 'FINALS')
+    // 현재 라운드 내 로컬 인덱스
+    const curList = allMatches
+      .filter(pm => pm.division_id === m.division_id && pm.round === m.round)
       .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
-
-    // stage 없으면 stage 조건 제거하고 재시도
-    const curRoundMatchesFallback = curRoundMatches.length > 0 ? curRoundMatches :
-      allMatches
-        .filter(pm => pm.division_id === m.division_id && pm.round === m.round)
-        .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
-
-    const myLocalIdx = curRoundMatchesFallback.findIndex(pm => pm.id === m.id)
+    const myLocalIdx = curList.findIndex(pm => pm.id === m.id)
     if (myLocalIdx < 0) return []
-    const prevFinal = prevRoundMatchesFallback
 
-    // 직전 라운드는 2배수 경기 → 로컬 인덱스 기준 2개 추출
-    const candA = prevFinal[myLocalIdx * 2]
-    const candB = prevFinal[myLocalIdx * 2 + 1]
-    const candidates = [candA, candB].filter(Boolean)
+    // A슬롯 → prevList[myLocalIdx*2], B슬롯 → prevList[myLocalIdx*2+1]
+    const pm = abSlot === 'A' ? prevList[myLocalIdx * 2] : prevList[myLocalIdx * 2 + 1]
+    if (!pm) return []
 
-    const stripClub = (raw: string) => raw.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/')
-    const names: string[] = []
-    for (const pm of candidates) {
-      if (pm.status === 'FINISHED' && pm.winner_team_id) {
-        // 완료 경기: 승자만
-        const winner = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
-        if (winner && winner !== 'TBD') names.push(stripClub(winner))
-      } else if (pm.team_a_name && pm.team_a_name !== 'TBD' && pm.team_b_name && pm.team_b_name !== 'TBD') {
-        // 양쪽 모두 확정된 경기만 후보 표시 (한쪽 NULL이면 표시 안 함)
-        names.push(stripClub(pm.team_a_name))
-        names.push(stripClub(pm.team_b_name))
-      } else if (pm.team_a_name && pm.team_a_name !== 'TBD' && !pm.team_b_name) {
-        // team_b가 null/TBD인 경우 → team_a만
-        names.push(stripClub(pm.team_a_name))
-      }
+    const strip = (raw: string) => raw.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/')
+    if (pm.status === 'FINISHED' && pm.winner_team_id) {
+      const winner = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
+      return winner && winner !== 'TBD' ? [strip(winner)] : []
     }
+    const names: string[] = []
+    if (pm.team_a_name && pm.team_a_name !== 'TBD') names.push(strip(pm.team_a_name))
+    if (pm.team_b_name && pm.team_b_name !== 'TBD') names.push(strip(pm.team_b_name))
     return names
   }
   return (
@@ -1091,9 +1067,9 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
         )
       })()}
       <div className={done ? 'opacity-50' : ''}>
-        <MatchTeamRow raw={m.team_a_name} done={done} candidates={getTbdCandidates(m.team_a_name)} />
+        <MatchTeamRow raw={m.team_a_name} done={done} candidates={getTbdCandidates(m.team_a_name, 'A')} />
         <div className="text-stone-300 text-[10px] leading-none my-0.5">vs</div>
-        <MatchTeamRow raw={m.team_b_name} done={done} candidates={getTbdCandidates(m.team_b_name)} />
+        <MatchTeamRow raw={m.team_b_name} done={done} candidates={getTbdCandidates(m.team_b_name, 'B')} />
       </div>
       {m.score && (
         <div className={`mt-0.5 font-bold ${isTeam?'text-blue-600':done?'text-stone-400':'text-tennis-600'}`}>{m.score}</div>
