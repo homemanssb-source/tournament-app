@@ -12,7 +12,7 @@ interface BracketMatch {
   next_match_id?: string; next_slot?: string
 }
 
-const ROUND_ORDER = ['128강', '64강', '32강', '16강', '8강', '4강', '결승']
+const ROUND_ORDER = ['128강', '64강', '32강', '16강', '8강', '4강', '결승', 'R128', 'R64', 'R32', 'R16', 'QF', 'SF', 'F']
 
 const CARD_H = 82
 const MIN_GAP = 8

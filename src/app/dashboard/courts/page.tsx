@@ -831,7 +831,7 @@ export default function CourtsPage() {
                       <MatchChip key={m.id} m={m} order={m.court_order||allIdx+1} badge={badge}
                         isCurrentSlot={m.status==='PENDING'&&allIdx===currentIdx}
                         divColor={divColors[m.division_id]}
-                        allMatches={matches}
+                        allMatches={allItems}
                         onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
                         onClickStart={canStart?()=>startMatch(m.id):undefined}
                         onClickUnassign={() => unassignItem(m.id)}
@@ -965,7 +965,7 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
     if (teamName && teamName !== 'TBD') return []
     if (!allMatches || !m.slot || isTeam) return []
     // 이전 라운드 순서: ROUND_ORDER 역방향
-    const PREV: Record<string,string> = { '결승':'4강','4강':'8강','8강':'16강','16강':'32강','32강':'64강','64강':'128강' }
+    const PREV: Record<string,string> = { '결승':'4강','4강':'8강','8강':'16강','16강':'32강','32강':'64강','64강':'128강', 'F':'SF','SF':'QF','QF':'R16','R16':'R32','R32':'R64','R64':'R128' }
     const prevRound = PREV[m.round]
     if (!prevRound) return []
     // 같은 부서 이전 라운드 경기들 중 slot이 연결된 것 (slot 2개 → 1개 진출)
@@ -975,6 +975,7 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
     const prevMatches = allMatches.filter(pm =>
       pm.division_id === m.division_id &&
       pm.round === prevRound &&
+      pm.stage === 'FINALS' &&
       pm.slot !== null && pm.slot !== undefined &&
       (pm.slot === slotA || pm.slot === slotB)
     )
