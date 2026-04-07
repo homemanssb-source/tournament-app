@@ -21,7 +21,7 @@ interface FinalsMatch {
   id: string; round: string; slot: number | null; stage: string
   division_id: string; team_a_name: string | null; team_b_name: string | null
   team_a_id: string | null; team_b_id: string | null
-  winner_team_id: string | null; status: string
+  winner_team_id: string | null; status: string; match_num?: string
 }
 
 interface Venue {
@@ -122,13 +122,27 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
 
     setMatches([...indivMatches, ...tieMatches])
 
-    // TBD 예상 후보용: 전체 FINALS 경기 (코트 미배정 포함)
-    const { data: finalsData } = await supabase
-      .from('v_matches_with_teams')
-      .select('id, round, slot, stage, division_id, team_a_name, team_b_name, team_a_id, team_b_id, winner_team_id, status')
+    // TBD 예상 후보용: matches 테이블 직접 조회
+    // v_matches_with_teams 뷰는 team_b_id=NULL인 경기를 누락시킬 수 있어서
+    // matches 원본 테이블 + teams LEFT JOIN으로 이름 조회
+    const { data: rawMatches } = await supabase
+      .from('matches')
+      .select('id, round, slot, stage, division_id, team_a_id, team_b_id, winner_team_id, status')
       .eq('event_id', eventId)
       .eq('stage', 'FINALS')
-    setFinalsMatches((finalsData || []) as FinalsMatch[])
+      .order('slot', { ascending: true, nullsFirst: true })
+    // team id → name 매핑 (v_matches_with_teams에서 court 있는 것만으로 보완)
+    const teamNameMap: Record<string, string> = {}
+    ;(matchData as any[] || []).forEach((m: any) => {
+      if (m.team_a_id && m.team_a_name) teamNameMap[m.team_a_id] = m.team_a_name
+      if (m.team_b_id && m.team_b_name) teamNameMap[m.team_b_id] = m.team_b_name
+    })
+    const finalsWithNames: FinalsMatch[] = (rawMatches || []).map((m: any) => ({
+      ...m,
+      team_a_name: m.team_a_id ? (teamNameMap[m.team_a_id] || null) : null,
+      team_b_name: m.team_b_id ? (teamNameMap[m.team_b_id] || null) : null,
+    }))
+    setFinalsMatches(finalsWithNames)
 
     setLoading(false)
     setLastUpdate(new Date())
