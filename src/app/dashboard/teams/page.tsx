@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 import React from 'react'
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -8,6 +8,7 @@ interface Team {
   id: string; team_num: string; team_name: string; player1_name: string; player2_name: string
   pin_plain: string; division_id: string; division_name: string; event_id: string
   p1_grade: string | null; p2_grade: string | null; club_name: string | null
+  p1_club: string | null; p2_club: string | null
 }
 
 export default function TeamsPage() {
@@ -43,7 +44,9 @@ export default function TeamsPage() {
           t.player1_name.toLowerCase().includes(q) ||
           t.player2_name.toLowerCase().includes(q) ||
           t.team_name.toLowerCase().includes(q) ||
-          (t.club_name || '').toLowerCase().includes(q)
+          (t.club_name || '').toLowerCase().includes(q) ||
+          (t.p1_club || '').toLowerCase().includes(q) ||
+          (t.p2_club || '').toLowerCase().includes(q)
         )
       })
     : teams
@@ -324,12 +327,15 @@ export default function TeamsPage() {
                           <input type="text" value={editP1} onChange={e => setEditP1(e.target.value)}
                             className="border rounded px-2 py-1 text-sm w-full" autoFocus />
                         ) : (
-                          <span className="font-medium">
-                            {searchQuery.trim()
-                              ? highlightMatch(t.player1_name, searchQuery)
-                              : t.player1_name}
-                            {t.p1_grade && <span className="text-xs text-blue-500 ml-1">{t.p1_grade}</span>}
-                          </span>
+                          <div>
+                            <span className="font-medium">
+                              {searchQuery.trim()
+                                ? highlightMatch(t.player1_name, searchQuery)
+                                : t.player1_name}
+                              {t.p1_grade && <span className="text-xs text-blue-500 ml-1">{t.p1_grade}</span>}
+                            </span>
+                            {t.p1_club && <div className="text-xs text-stone-400">{t.p1_club}</div>}
+                          </div>
                         )}
                       </td>
                       <td className="px-4 py-2">
@@ -342,12 +348,15 @@ export default function TeamsPage() {
                             <button onClick={() => setEditId(null)} className="text-stone-400 text-xs">취소</button>
                           </div>
                         ) : (
-                          <span className="font-medium">
-                            {searchQuery.trim()
-                              ? highlightMatch(t.player2_name, searchQuery)
-                              : t.player2_name}
-                            {t.p2_grade && <span className="text-xs text-blue-500 ml-1">{t.p2_grade}</span>}
-                          </span>
+                          <div>
+                            <span className="font-medium">
+                              {searchQuery.trim()
+                                ? highlightMatch(t.player2_name, searchQuery)
+                                : t.player2_name}
+                              {t.p2_grade && <span className="text-xs text-blue-500 ml-1">{t.p2_grade}</span>}
+                            </span>
+                            {t.p2_club && <div className="text-xs text-stone-400">{t.p2_club}</div>}
+                          </div>
                         )}
                       </td>
                       <td className="px-4 py-2 text-xs text-stone-500">{t.club_name || '-'}</td>

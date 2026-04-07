@@ -18,6 +18,19 @@ function generatePin(): string {
   return String(100000 + Math.floor(Math.random() * 900000));
 }
 
+// 클럽명 축약: "제주하나클럽" → "제주하나"
+function shortenClub(club: string | null | undefined): string {
+  if (!club) return '';
+  return club.replace(/테니스클럽$/, '').replace(/클럽$/, '').replace(/테니스$/, '').trim();
+}
+
+// "홍길동(제주하나)/홍길금(제주아라)" 형식 생성
+function buildTeamName(p1Name: string, p1Club: string | null, p2Name: string, p2Club: string | null): string {
+  const p1 = p1Club ? `${p1Name}(${p1Club})` : p1Name;
+  const p2 = p2Name ? (p2Club ? `${p2Name}(${p2Club})` : p2Name) : '';
+  return p2 ? `${p1}/${p2}` : p1;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { event_id, app_a_event_id } = await request.json();
@@ -116,10 +129,12 @@ export async function POST(request: NextRequest) {
         const member1 = team.member1_id ? memberMap[team.member1_id] : null;
         const member2 = team.member2_id ? memberMap[team.member2_id] : null;
 
-        const p1Name = member1?.name || '';
-        const p2Name = member2?.name || '';
-        // team_name: 앱A에 이미 "신승배/고형길" 형식으로 있음, 없으면 직접 조합
-        const teamName = team.team_name || (p2Name ? `${p1Name}/${p2Name}` : p1Name);
+        const p1Name  = member1?.name || '';
+        const p2Name  = member2?.name || '';
+        const p1Club  = shortenClub(member1?.club) || null;
+        const p2Club  = shortenClub(member2?.club) || null;
+        // team_name: "홍길동(제주하나)/홍길금(제주아라)" 형식
+        const teamName = buildTeamName(p1Name, p1Club, p2Name, p2Club);
         // PIN: member1의 pin_code 사용, 없으면 랜덤 생성
         const pinPlain = member1?.pin_code ? String(member1.pin_code) : generatePin();
         // 등급
@@ -136,6 +151,8 @@ export async function POST(request: NextRequest) {
             team_name:     teamName,
             player1_name:  p1Name,
             player2_name:  p2Name,
+            p1_club:       p1Club,
+            p2_club:       p2Club,
             pin_plain:     pinPlain,
             p1_grade:      p1Grade,
             p2_grade:      p2Grade,
