@@ -99,7 +99,8 @@ function globalCourtNumToName(courtNumber: number, allCourtNames: string[], venu
 export default function CourtsPage() {
   const eventId = useEventId()
   const { divisions } = useDivisions(eventId)
-  const [matches, setMatches] = useState<MatchSlim[]>([])
+  const [matches, setMatches]             = useState<MatchSlim[]>([])
+  const [allFinalsMatches, setAllFinalsMatches] = useState<MatchSlim[]>([])
   const [ties, setTies]       = useState<TieWithClubs[]>([])
   const [loading, setLoading] = useState(true)
   const [msg, setMsg]         = useState('')
@@ -254,6 +255,28 @@ export default function CourtsPage() {
       setMatches(matchList); matchesRef.current = matchList
       setTies(tieList);      tiesRef.current    = tieList
       syncCourtOrderRef(matchList, tieList)
+
+      // TBD 후보용: matches 테이블 직접 조회 (뷰 NULL팀 누락 방지)
+      const { data: rawFinals } = await supabase
+        .from('matches')
+        .select('id, match_num, round, slot, stage, division_id, team_a_id, team_b_id, winner_team_id, status')
+        .eq('event_id', eventId)
+        .eq('stage', 'FINALS')
+        .order('slot', { ascending: true, nullsFirst: true })
+      // team_id → name 매핑 (이미 로드한 matchList에서 추출)
+      const tNameMap: Record<string, string> = {}
+      matchList.forEach(m => {
+        if (m.team_a_id && m.team_a_name) tNameMap[m.team_a_id] = m.team_a_name
+        if (m.team_b_id && m.team_b_name) tNameMap[m.team_b_id] = m.team_b_name
+      })
+      const finalsWithNames = (rawFinals || []).map((m: any) => ({
+        ...m,
+        team_a_name: m.team_a_id ? (tNameMap[m.team_a_id] || '') : '',
+        team_b_name: m.team_b_id ? (tNameMap[m.team_b_id] || '') : '',
+        court: null, court_order: null, score: null,
+        division_name: '', group_label: null, locked_by_participant: false,
+      })) as MatchSlim[]
+      setAllFinalsMatches(finalsWithNames)
     } catch {}
     finally { if (showLoading) setLoading(false) }
   }, [eventId])
@@ -831,7 +854,7 @@ export default function CourtsPage() {
                       <MatchChip key={m.id} m={m} order={m.court_order||allIdx+1} badge={badge}
                         isCurrentSlot={m.status==='PENDING'&&allIdx===currentIdx}
                         divColor={divColors[m.division_id]}
-                        allMatches={matches}
+                        allMatches={allFinalsMatches.length > 0 ? allFinalsMatches : matches}
                         onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
                         onClickStart={canStart?()=>startMatch(m.id):undefined}
                         onClickUnassign={() => unassignItem(m.id)}
@@ -962,7 +985,7 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
 
   // TBD 예상 후보: slot 오프셋 기반으로 직전 라운드 정확한 2경기 추출
   // slot은 전체 통합 번호 → 각 라운드 최솟값(minSlot) 기준 로컬 인덱스로 변환
-  function getTbdCandidates(teamName: string | null, slot: 'A' | 'B' = 'A'): string[] {
+  function getTbdCandidates(teamName: string | null): string[] {
     if (teamName && teamName !== 'TBD') return []
     if (!allMatches || isTeam) return []
     const PREV: Record<string,string> = {
@@ -1000,12 +1023,9 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
     const prevFinal = prevRoundMatchesFallback
 
     // 직전 라운드는 2배수 경기 → 로컬 인덱스 기준 2개 추출
-    // A슬롯 → 직전 라운드 첫번째 경기, B슬롯 → 직전 라운드 두번째 경기
     const candA = prevFinal[myLocalIdx * 2]
     const candB = prevFinal[myLocalIdx * 2 + 1]
-    const candidates = slot === 'A'
-      ? [candA].filter(Boolean)
-      : [candB].filter(Boolean)
+    const candidates = [candA, candB].filter(Boolean)
 
     const stripClub = (raw: string) => raw.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/')
     const names: string[] = []
@@ -1071,9 +1091,9 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
         )
       })()}
       <div className={done ? 'opacity-50' : ''}>
-        <MatchTeamRow raw={m.team_a_name} done={done} candidates={getTbdCandidates(m.team_a_name, 'A')} />
+        <MatchTeamRow raw={m.team_a_name} done={done} candidates={getTbdCandidates(m.team_a_name)} />
         <div className="text-stone-300 text-[10px] leading-none my-0.5">vs</div>
-        <MatchTeamRow raw={m.team_b_name} done={done} candidates={getTbdCandidates(m.team_b_name, 'B')} />
+        <MatchTeamRow raw={m.team_b_name} done={done} candidates={getTbdCandidates(m.team_b_name)} />
       </div>
       {m.score && (
         <div className={`mt-0.5 font-bold ${isTeam?'text-blue-600':done?'text-stone-400':'text-tennis-600'}`}>{m.score}</div>
