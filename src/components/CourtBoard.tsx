@@ -122,17 +122,23 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
 
     setMatches([...indivMatches, ...tieMatches])
 
-    // TBD 예상 후보용: matches 테이블 직접 조회
-    // v_matches_with_teams 뷰는 team_b_id=NULL인 경기를 누락시킬 수 있어서
-    // matches 원본 테이블 + teams LEFT JOIN으로 이름 조회
-    const { data: rawMatches } = await supabase
-      .from('matches')
-      .select('id, round, slot, stage, division_id, team_a_id, team_b_id, winner_team_id, status')
-      .eq('event_id', eventId)
-      .eq('stage', 'FINALS')
-      .order('slot', { ascending: true, nullsFirst: true })
-    // team id → name 매핑 (v_matches_with_teams에서 court 있는 것만으로 보완)
+    // TBD 예상 후보용: matches + teams 조인으로 직접 조회 (NULL팀 경기 포함)
+    const [{ data: rawMatches }, { data: teamsData }] = await Promise.all([
+      supabase
+        .from('matches')
+        .select('id, round, slot, stage, division_id, team_a_id, team_b_id, winner_team_id, status')
+        .eq('event_id', eventId)
+        .eq('stage', 'FINALS')
+        .order('slot', { ascending: true, nullsFirst: true }),
+      supabase
+        .from('teams')
+        .select('id, name')
+        .eq('event_id', eventId),
+    ])
+    // team id → name 매핑 (teams 테이블 전체)
     const teamNameMap: Record<string, string> = {}
+    ;(teamsData || []).forEach((t: any) => { if (t.id && t.name) teamNameMap[t.id] = t.name })
+    // court 있는 경기에서도 보완 (teams 테이블에 없는 경우 대비)
     ;(matchData as any[] || []).forEach((m: any) => {
       if (m.team_a_id && m.team_a_name) teamNameMap[m.team_a_id] = m.team_a_name
       if (m.team_b_id && m.team_b_name) teamNameMap[m.team_b_id] = m.team_b_name
