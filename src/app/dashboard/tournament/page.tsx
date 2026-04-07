@@ -12,8 +12,8 @@ export default function TournamentPage() {
   const [msg, setMsg] = useState('')
   const [generating, setGenerating] = useState(false)
 
-  // 진출 설정
-  const [advancePerGroup, setAdvancePerGroup] = useState(1)
+  // 진출 설정 - 기본값 2 (예선 2팀 전부 본선 진출)
+  const [advancePerGroup, setAdvancePerGroup] = useState(2)
 
   useEffect(() => { if (eventId && selected) loadBracket() }, [eventId, selected])
 
@@ -36,7 +36,7 @@ export default function TournamentPage() {
     setGenerating(false)
 
     if (error) { setMsg('❌ ' + error.message); return }
-    setMsg(`✅ 본선 토너먼트 생성 완료! ${data?.matches_created || ''}경기 (BYE ${data?.byes || 0}개)`)
+    setMsg(`✅ 본선 토너먼트 생성 완료! ${data?.matches_created || ''}경기 (BYE ${data?.byes || 0}개) · 진출 ${data?.adv_teams || ''}팀 · ${data?.bracket_size || ''}강 브래킷`)
     loadBracket()
   }
 
