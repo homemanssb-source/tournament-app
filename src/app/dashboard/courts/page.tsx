@@ -960,35 +960,43 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
 }) {
   const done = m.status==='FINISHED'; const live = m.status==='IN_PROGRESS'; const isTeam = m.is_team_tie
 
-  // TBD 예상 후보: slot 기반으로 이전 라운드에서 올라올 팀 계산
+  // TBD 예상 후보: 정렬 인덱스 기반으로 직전 라운드 2경기에서 후보 추출
+  // DB slot은 전체 통합 번호 → 같은 부서+라운드 내 정렬 순서(localIdx)로 매칭
   function getTbdCandidates(teamName: string | null): string[] {
     if (teamName && teamName !== 'TBD') return []
-    if (!allMatches || !m.slot || isTeam) return []
-    // 이전 라운드 순서: ROUND_ORDER 역방향
-    const PREV: Record<string,string> = { '결승':'4강','4강':'8강','8강':'16강','16강':'32강','32강':'64강','64강':'128강', 'F':'SF','SF':'QF','QF':'R16','R16':'R32','R32':'R64','R64':'R128' }
+    if (!allMatches || isTeam) return []
+    const PREV: Record<string,string> = {
+      '결승':'4강','4강':'8강','8강':'16강','16강':'32강','32강':'64강','64강':'128강',
+      'F':'SF','SF':'QF','QF':'R16','R16':'R32','R32':'R64','R64':'R128'
+    }
     const prevRound = PREV[m.round]
     if (!prevRound) return []
-    // 같은 부서 이전 라운드 경기들 중 slot이 연결된 것 (slot 2개 → 1개 진출)
-    // A팀 slot: (m.slot * 2 - 1), B팀 slot: (m.slot * 2)
-    const slotA = m.slot * 2 - 1
-    const slotB = m.slot * 2
-    const prevMatches = allMatches.filter(pm =>
-      pm.division_id === m.division_id &&
-      pm.round === prevRound &&
-      pm.stage === 'FINALS' &&
-      pm.slot !== null && pm.slot !== undefined &&
-      (pm.slot === slotA || pm.slot === slotB)
-    )
+
+    // 현재 라운드에서 같은 부서 경기들을 slot 순 정렬 후 내 인덱스 파악
+    const curRoundMatches = allMatches
+      .filter(pm => pm.division_id === m.division_id && pm.round === m.round && pm.stage === 'FINALS')
+      .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+    const myIdx = curRoundMatches.findIndex(pm => pm.id === m.id)
+    if (myIdx < 0) return []
+
+    // 직전 라운드 경기들 slot 순 정렬
+    const prevRoundMatches = allMatches
+      .filter(pm => pm.division_id === m.division_id && pm.round === prevRound && pm.stage === 'FINALS')
+      .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+
+    // 직전 라운드는 2배수 → 내 인덱스 * 2, * 2 + 1 번째 경기가 후보
+    const idxA = myIdx * 2
+    const idxB = myIdx * 2 + 1
+    const candidates = [prevRoundMatches[idxA], prevRoundMatches[idxB]].filter(Boolean)
+
     const names: string[] = []
-    for (const pm of prevMatches) {
-      // 이미 승자 확정된 경우
+    for (const pm of candidates) {
       if (pm.status === 'FINISHED' && pm.winner_team_id) {
         const winner = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
-        if (winner && winner !== 'TBD') names.push(winner.split('/').map(p => p.replace(/\(.*\)/,'').trim()).join('/'))
+        if (winner && winner !== 'TBD') names.push(winner.split('/').map((p: string) => p.replace(/\(.*?\)/g,'').trim()).join('/'))
       } else {
-        // 아직 진행 중 — 양쪽 후보 다 표시
-        if (pm.team_a_name && pm.team_a_name !== 'TBD') names.push(pm.team_a_name.split('/').map(p => p.replace(/\(.*\)/,'').trim()).join('/'))
-        if (pm.team_b_name && pm.team_b_name !== 'TBD') names.push(pm.team_b_name.split('/').map(p => p.replace(/\(.*\)/,'').trim()).join('/'))
+        if (pm.team_a_name && pm.team_a_name !== 'TBD') names.push(pm.team_a_name.split('/').map((p: string) => p.replace(/\(.*?\)/g,'').trim()).join('/'))
+        if (pm.team_b_name && pm.team_b_name !== 'TBD') names.push(pm.team_b_name.split('/').map((p: string) => p.replace(/\(.*?\)/g,'').trim()).join('/'))
       }
     }
     return names

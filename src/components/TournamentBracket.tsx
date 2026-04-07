@@ -171,26 +171,34 @@ function MatchCard({ m, byRound, roundIdx, rounds }: {
   const aWon       = !!(m.winner_team_id && m.winner_team_id === m.team_a_id)
   const bWon       = !!(m.winner_team_id && m.winner_team_id === m.team_b_id)
 
-  // TBD 예상 후보: slot 기반으로 이전 라운드 후보 추출 (이름만, 클럽 제거)
+  // TBD 예상 후보: 정렬 인덱스 기반으로 직전 라운드 2경기에서 후보 추출
   function getTbdCandidates(teamName?: string): string[] {
     if (teamName && teamName !== 'TBD') return []
-    if (!byRound || roundIdx === undefined || !rounds || roundIdx === 0 || !m.slot) return []
+    if (!byRound || roundIdx === undefined || !rounds || roundIdx === 0) return []
     const prevRound = rounds[roundIdx - 1]
     if (!prevRound) return []
-    const prevMatches = byRound.get(prevRound) || []
-    const slotA = m.slot * 2 - 1
-    const slotB = m.slot * 2
-    const candidates = prevMatches.filter(pm => pm.slot === slotA || pm.slot === slotB)
+
+    // 현재 라운드 내 정렬 후 내 인덱스 파악
+    const curMatches = (byRound.get(rounds[roundIdx]) || []).slice().sort((a, b) => (a.slot || 0) - (b.slot || 0))
+    const myIdx = curMatches.findIndex(pm => pm.match_id === m.match_id)
+    if (myIdx < 0) return []
+
+    // 직전 라운드 slot 순 정렬
+    const prevMatches = (byRound.get(prevRound) || []).slice().sort((a, b) => (a.slot || 0) - (b.slot || 0))
+    const idxA = myIdx * 2
+    const idxB = myIdx * 2 + 1
+    const candidates = [prevMatches[idxA], prevMatches[idxB]].filter(Boolean)
+
     const names: string[] = []
     for (const pm of candidates) {
       if (pm.status === 'FINISHED' && pm.winner_team_id) {
         const w = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
-        if (w && w !== 'TBD') names.push(w.split('/').map((p: string) => p.replace(/\(.*\)/, '').trim()).join('/'))
+        if (w && w !== 'TBD') names.push(w.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/'))
       } else {
         if (pm.team_a_name && pm.team_a_name !== 'TBD')
-          names.push(pm.team_a_name.split('/').map((p: string) => p.replace(/\(.*\)/, '').trim()).join('/'))
+          names.push(pm.team_a_name.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/'))
         if (pm.team_b_name && pm.team_b_name !== 'TBD')
-          names.push(pm.team_b_name.split('/').map((p: string) => p.replace(/\(.*\)/, '').trim()).join('/'))
+          names.push(pm.team_b_name.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/'))
       }
     }
     return names
