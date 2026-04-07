@@ -148,7 +148,7 @@ export default function TournamentBracket({ matches }: { matches: BracketMatch[]
                 key={m.match_id || mIdx}
                 style={{ position: 'absolute', top: positions[mIdx], left: rIdx * COL_W + 5, width: CARD_W }}
               >
-                <MatchCard m={m} />
+                <MatchCard m={m} byRound={byRound} roundIdx={rIdx} rounds={rounds} />
               </div>
             ))
           })}
@@ -159,12 +159,42 @@ export default function TournamentBracket({ matches }: { matches: BracketMatch[]
   )
 }
 
-function MatchCard({ m }: { m: BracketMatch }) {
+function MatchCard({ m, byRound, roundIdx, rounds }: {
+  m: BracketMatch
+  byRound?: Map<string, BracketMatch[]>
+  roundIdx?: number
+  rounds?: string[]
+}) {
   const isBye      = m.score === 'BYE'
   const done       = m.status === 'FINISHED'
   const inProgress = m.status === 'IN_PROGRESS'
   const aWon       = !!(m.winner_team_id && m.winner_team_id === m.team_a_id)
   const bWon       = !!(m.winner_team_id && m.winner_team_id === m.team_b_id)
+
+  // TBD 예상 후보: slot 기반으로 이전 라운드 후보 추출 (이름만, 클럽 제거)
+  function getTbdCandidates(teamName?: string): string[] {
+    if (teamName && teamName !== 'TBD') return []
+    if (!byRound || roundIdx === undefined || !rounds || roundIdx === 0 || !m.slot) return []
+    const prevRound = rounds[roundIdx - 1]
+    if (!prevRound) return []
+    const prevMatches = byRound.get(prevRound) || []
+    const slotA = m.slot * 2 - 1
+    const slotB = m.slot * 2
+    const candidates = prevMatches.filter(pm => pm.slot === slotA || pm.slot === slotB)
+    const names: string[] = []
+    for (const pm of candidates) {
+      if (pm.status === 'FINISHED' && pm.winner_team_id) {
+        const w = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
+        if (w && w !== 'TBD') names.push(w.split('/').map((p: string) => p.replace(/\(.*\)/, '').trim()).join('/'))
+      } else {
+        if (pm.team_a_name && pm.team_a_name !== 'TBD')
+          names.push(pm.team_a_name.split('/').map((p: string) => p.replace(/\(.*\)/, '').trim()).join('/'))
+        if (pm.team_b_name && pm.team_b_name !== 'TBD')
+          names.push(pm.team_b_name.split('/').map((p: string) => p.replace(/\(.*\)/, '').trim()).join('/'))
+      }
+    }
+    return names
+  }
 
   return (
     <div
@@ -197,6 +227,7 @@ function MatchCard({ m }: { m: BracketMatch }) {
             won={aWon}
             muted={bWon && done}
             tbd={!m.team_a_name || m.team_a_name === 'TBD'}
+            candidates={getTbdCandidates(m.team_a_name)}
           />
         </div>
         <div className="flex-shrink-0 flex items-center gap-0.5 ml-1 pt-0.5">
@@ -222,6 +253,7 @@ function MatchCard({ m }: { m: BracketMatch }) {
                 won={bWon}
                 muted={aWon && done}
                 tbd={!m.team_b_name || m.team_b_name === 'TBD'}
+                candidates={getTbdCandidates(m.team_b_name)}
               />
           }
         </div>
@@ -250,8 +282,19 @@ function MatchCard({ m }: { m: BracketMatch }) {
 }
 
 // 선수명 우선 — 이름은 절대 안잘림, 클럽명만 ellipsis
-function TeamRow({ raw, won, muted, tbd }: { raw?: string; won?: boolean; muted?: boolean; tbd?: boolean }) {
+function TeamRow({ raw, won, muted, tbd, candidates }: { raw?: string; won?: boolean; muted?: boolean; tbd?: boolean; candidates?: string[] }) {
   if (tbd || !raw) {
+    if (candidates && candidates.length > 0) {
+      return (
+        <div className="flex items-start gap-1 min-w-0 flex-wrap">
+          {candidates.map((name: string, i: number) => (
+            <span key={i} className="text-[10px] text-stone-400 leading-tight whitespace-nowrap">
+              {i > 0 && <span className="text-stone-200 mx-0.5">/</span>}{name}
+            </span>
+          ))}
+        </div>
+      )
+    }
     return <span className="text-stone-300 italic text-xs">TBD</span>
   }
   const players = parsePlayers(raw)

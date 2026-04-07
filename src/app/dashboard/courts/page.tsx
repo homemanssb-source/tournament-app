@@ -831,6 +831,7 @@ export default function CourtsPage() {
                       <MatchChip key={m.id} m={m} order={m.court_order||allIdx+1} badge={badge}
                         isCurrentSlot={m.status==='PENDING'&&allIdx===currentIdx}
                         divColor={divColors[m.division_id]}
+                        allMatches={matches}
                         onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
                         onClickStart={canStart?()=>startMatch(m.id):undefined}
                         onClickUnassign={() => unassignItem(m.id)}
@@ -949,14 +950,48 @@ function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }:
 }
 
 // ── MatchChip 컴포넌트
-function MatchChip({ m, order, badge, divColor, isCurrentSlot, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
+function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
   m: MatchSlim; order?: number; badge?: string; divColor?: string; isCurrentSlot?: boolean
+  allMatches?: MatchSlim[]
   onDragStart: (id: string) => void; onClickScore: () => void
   onClickStart?: () => void; onClickUnassign?: () => void
   onMoveUp?: () => void; onMoveDown?: () => void
   onTouchStart?: () => void; onTouchMove?: (e: React.TouchEvent) => void; onTouchEnd?: () => void
 }) {
   const done = m.status==='FINISHED'; const live = m.status==='IN_PROGRESS'; const isTeam = m.is_team_tie
+
+  // TBD 예상 후보: slot 기반으로 이전 라운드에서 올라올 팀 계산
+  function getTbdCandidates(teamName: string | null): string[] {
+    if (teamName && teamName !== 'TBD') return []
+    if (!allMatches || !m.slot || isTeam) return []
+    // 이전 라운드 순서: ROUND_ORDER 역방향
+    const PREV: Record<string,string> = { '결승':'4강','4강':'8강','8강':'16강','16강':'32강','32강':'64강','64강':'128강' }
+    const prevRound = PREV[m.round]
+    if (!prevRound) return []
+    // 같은 부서 이전 라운드 경기들 중 slot이 연결된 것 (slot 2개 → 1개 진출)
+    // A팀 slot: (m.slot * 2 - 1), B팀 slot: (m.slot * 2)
+    const slotA = m.slot * 2 - 1
+    const slotB = m.slot * 2
+    const prevMatches = allMatches.filter(pm =>
+      pm.division_id === m.division_id &&
+      pm.round === prevRound &&
+      pm.slot !== null && pm.slot !== undefined &&
+      (pm.slot === slotA || pm.slot === slotB)
+    )
+    const names: string[] = []
+    for (const pm of prevMatches) {
+      // 이미 승자 확정된 경우
+      if (pm.status === 'FINISHED' && pm.winner_team_id) {
+        const winner = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
+        if (winner && winner !== 'TBD') names.push(winner.split('/').map(p => p.replace(/\(.*\)/,'').trim()).join('/'))
+      } else {
+        // 아직 진행 중 — 양쪽 후보 다 표시
+        if (pm.team_a_name && pm.team_a_name !== 'TBD') names.push(pm.team_a_name.split('/').map(p => p.replace(/\(.*\)/,'').trim()).join('/'))
+        if (pm.team_b_name && pm.team_b_name !== 'TBD') names.push(pm.team_b_name.split('/').map(p => p.replace(/\(.*\)/,'').trim()).join('/'))
+      }
+    }
+    return names
+  }
   return (
     <div draggable onDragStart={() => onDragStart(m.id)}
       onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
@@ -965,27 +1000,17 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, onDragStart, onCl
           ? (live?'bg-blue-50 border-blue-300':done?'bg-blue-50 border-blue-200':'bg-white border-blue-200 hover:border-blue-400')
           : live?'bg-red-50 border-red-200':done?'bg-tennis-50 border-tennis-200':isCurrentSlot?'bg-amber-50 border-amber-300':'bg-white border-stone-200 hover:border-stone-300'
       }`}>
-      {/* 윗줄: order + badge + 색점/단체 + 부서·라운드 + 버튼 */}
-      <div className="flex items-center gap-1 mb-1 min-w-0">
+      {/* 1줄: order + badge + 색점/단체 + 버튼들 */}
+      <div className="flex items-center gap-1 min-w-0">
         {order && <span className="text-stone-400 font-bold flex-shrink-0 text-[10px]">#{order}</span>}
         {badge && <span className="text-[10px] flex-shrink-0">{badge}</span>}
         {isTeam
           ? <span className="text-[10px] bg-blue-600 text-white px-1 rounded flex-shrink-0">단체</span>
           : <span style={{ display:'inline-block',width:6,height:6,borderRadius:'50%',background:divColor||'#999',flexShrink:0 }} />
         }
-        {/* 부서명 (짧게) */}
-        {!isTeam && (() => {
-          const { round: rLabel, div: dShort } = getRoundBadge(m.round, m.group_label, m.division_name)
-          return (
-            <div className="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
-              <span className="text-[10px] text-stone-500 flex-shrink-0 whitespace-nowrap">{dShort}</span>
-              {/* 라운드: 항상 보이게 flex-shrink-0 */}
-              <span className="text-[10px] font-bold text-stone-700 flex-shrink-0 whitespace-nowrap bg-stone-100 px-1 rounded">{rLabel}</span>
-            </div>
-          )
-        })()}
         {isTeam && <span className="text-stone-400 text-[10px] flex-1 min-w-0 truncate">{m.match_num}</span>}
-        <div className="flex items-center gap-0.5 flex-shrink-0 ml-auto">
+        {!isTeam && <span className="flex-1" />}
+        <div className="flex items-center gap-0.5 flex-shrink-0">
           {onMoveUp    && <button onClick={e=>{e.stopPropagation();onMoveUp()}}    className="text-stone-300 hover:text-stone-600 px-0.5">▲</button>}
           {onMoveDown  && <button onClick={e=>{e.stopPropagation();onMoveDown()}}  className="text-stone-300 hover:text-stone-600 px-0.5">▼</button>}
           {onClickStart && <button onClick={e=>{e.stopPropagation();onClickStart()}} className="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded hover:bg-red-600">▶</button>}
@@ -998,10 +1023,24 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, onDragStart, onCl
           {onClickUnassign && <button onClick={e=>{e.stopPropagation();onClickUnassign()}} className="text-stone-300 hover:text-red-400">✕</button>}
         </div>
       </div>
+      {/* 2줄: 부서명(truncate) + 라운드뱃지(항상 보임) */}
+      {!isTeam && (() => {
+        const { round: rLabel } = getRoundBadge(m.round, m.group_label, m.division_name)
+        return (
+          <div className="flex items-center gap-1 mt-0.5 mb-1 min-w-0">
+            <span className="text-[10px] text-stone-400 truncate flex-1 min-w-0">{m.division_name}</span>
+            <span className={`text-[10px] font-bold flex-shrink-0 whitespace-nowrap px-1.5 py-0.5 rounded ${
+              rLabel === '예선' || rLabel.includes('조')
+                ? 'bg-stone-100 text-stone-600'
+                : 'bg-amber-100 text-amber-800'
+            }`}>{rLabel}</span>
+          </div>
+        )
+      })()}
       <div className={done ? 'opacity-50' : ''}>
-        <MatchTeamRow raw={m.team_a_name} done={done} />
+        <MatchTeamRow raw={m.team_a_name} done={done} candidates={getTbdCandidates(m.team_a_name)} />
         <div className="text-stone-300 text-[10px] leading-none my-0.5">vs</div>
-        <MatchTeamRow raw={m.team_b_name} done={done} />
+        <MatchTeamRow raw={m.team_b_name} done={done} candidates={getTbdCandidates(m.team_b_name)} />
       </div>
       {m.score && (
         <div className={`mt-0.5 font-bold ${isTeam?'text-blue-600':done?'text-stone-400':'text-tennis-600'}`}>{m.score}</div>
@@ -1011,8 +1050,28 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, onDragStart, onCl
 }
 
 // ── 선수명 표시: 이름 굵게(안잘림) + 클럽명 작게(ellipsis)
-function MatchTeamRow({ raw, done }: { raw: string; done?: boolean }) {
+// candidates: TBD일 때 예상 후보 이름 목록
+function MatchTeamRow({ raw, done, candidates }: { raw: string; done?: boolean; candidates?: string[] }) {
+  const isTbd = !raw || raw === 'TBD'
   const players = parsePlayers(raw)
+
+  // TBD — 후보 있으면 이름만 작게, 없으면 TBD 표시
+  if (isTbd) {
+    if (candidates && candidates.length > 0) {
+      return (
+        <div className="flex items-start gap-1 min-w-0 flex-wrap">
+          {candidates.map((name, i) => (
+            <React.Fragment key={i}>
+              {i > 0 && <span className="text-stone-200 text-[9px] self-center">/</span>}
+              <span className="text-[10px] text-stone-400 leading-tight whitespace-nowrap">{name}</span>
+            </React.Fragment>
+          ))}
+        </div>
+      )
+    }
+    return <span className="text-[10px] text-stone-300 italic">TBD</span>
+  }
+
   if (players.length === 0) {
     return <span className={`text-xs font-bold ${done ? 'text-stone-400' : 'text-stone-800'}`}>{raw || 'TBD'}</span>
   }
