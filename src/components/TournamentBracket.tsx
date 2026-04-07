@@ -189,16 +189,17 @@ function MatchCard({ m, byRound, roundIdx, rounds }: {
     const candB = prevMatches[myLocalIdx * 2 + 1]
     const candidates = [candA, candB].filter(Boolean)
 
+    const strip = (raw: string) => raw.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/')
     const names: string[] = []
     for (const pm of candidates) {
       if (pm.status === 'FINISHED' && pm.winner_team_id) {
         const w = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
-        if (w && w !== 'TBD') names.push(w.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/'))
-      } else {
-        if (pm.team_a_name && pm.team_a_name !== 'TBD')
-          names.push(pm.team_a_name.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/'))
-        if (pm.team_b_name && pm.team_b_name !== 'TBD')
-          names.push(pm.team_b_name.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/'))
+        if (w && w !== 'TBD') names.push(strip(w))
+      } else if (pm.team_a_name && pm.team_a_name !== 'TBD' && pm.team_b_name && pm.team_b_name !== 'TBD') {
+        names.push(strip(pm.team_a_name))
+        names.push(strip(pm.team_b_name))
+      } else if (pm.team_a_name && pm.team_a_name !== 'TBD' && !pm.team_b_name) {
+        names.push(strip(pm.team_a_name))
       }
     }
     return names

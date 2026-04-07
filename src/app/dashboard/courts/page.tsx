@@ -976,28 +976,48 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
     const prevRoundMatches = allMatches
       .filter(pm => pm.division_id === m.division_id && pm.round === prevRound && pm.stage === 'FINALS')
       .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
-    if (prevRoundMatches.length === 0) return []
+
+    // stage 없으면 stage 조건 제거하고 재시도
+    const prevRoundMatchesFallback = prevRoundMatches.length > 0 ? prevRoundMatches :
+      allMatches
+        .filter(pm => pm.division_id === m.division_id && pm.round === prevRound)
+        .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+    if (prevRoundMatchesFallback.length === 0) return []
 
     // 같은 부서 현재 라운드 경기들 slot 순 정렬 후 내 로컬 인덱스 파악
     const curRoundMatches = allMatches
       .filter(pm => pm.division_id === m.division_id && pm.round === m.round && pm.stage === 'FINALS')
       .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
-    const myLocalIdx = curRoundMatches.findIndex(pm => pm.id === m.id)
+
+    // stage 없으면 stage 조건 제거하고 재시도
+    const curRoundMatchesFallback = curRoundMatches.length > 0 ? curRoundMatches :
+      allMatches
+        .filter(pm => pm.division_id === m.division_id && pm.round === m.round)
+        .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+
+    const myLocalIdx = curRoundMatchesFallback.findIndex(pm => pm.id === m.id)
     if (myLocalIdx < 0) return []
+    const prevFinal = prevRoundMatchesFallback
 
     // 직전 라운드는 2배수 경기 → 로컬 인덱스 기준 2개 추출
-    const candA = prevRoundMatches[myLocalIdx * 2]
-    const candB = prevRoundMatches[myLocalIdx * 2 + 1]
+    const candA = prevFinal[myLocalIdx * 2]
+    const candB = prevFinal[myLocalIdx * 2 + 1]
     const candidates = [candA, candB].filter(Boolean)
 
+    const stripClub = (raw: string) => raw.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/')
     const names: string[] = []
     for (const pm of candidates) {
       if (pm.status === 'FINISHED' && pm.winner_team_id) {
+        // 완료 경기: 승자만
         const winner = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
-        if (winner && winner !== 'TBD') names.push(winner.split('/').map((p: string) => p.replace(/\(.*?\)/g,'').trim()).join('/'))
-      } else {
-        if (pm.team_a_name && pm.team_a_name !== 'TBD') names.push(pm.team_a_name.split('/').map((p: string) => p.replace(/\(.*?\)/g,'').trim()).join('/'))
-        if (pm.team_b_name && pm.team_b_name !== 'TBD') names.push(pm.team_b_name.split('/').map((p: string) => p.replace(/\(.*?\)/g,'').trim()).join('/'))
+        if (winner && winner !== 'TBD') names.push(stripClub(winner))
+      } else if (pm.team_a_name && pm.team_a_name !== 'TBD' && pm.team_b_name && pm.team_b_name !== 'TBD') {
+        // 양쪽 모두 확정된 경기만 후보 표시 (한쪽 NULL이면 표시 안 함)
+        names.push(stripClub(pm.team_a_name))
+        names.push(stripClub(pm.team_b_name))
+      } else if (pm.team_a_name && pm.team_a_name !== 'TBD' && !pm.team_b_name) {
+        // team_b가 null/TBD인 경우 → team_a만
+        names.push(stripClub(pm.team_a_name))
       }
     }
     return names
