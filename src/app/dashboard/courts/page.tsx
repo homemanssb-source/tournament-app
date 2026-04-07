@@ -962,7 +962,7 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
 
   // TBD 예상 후보: slot 오프셋 기반으로 직전 라운드 정확한 2경기 추출
   // slot은 전체 통합 번호 → 각 라운드 최솟값(minSlot) 기준 로컬 인덱스로 변환
-  function getTbdCandidates(teamName: string | null): string[] {
+  function getTbdCandidates(teamName: string | null, slot: 'A' | 'B' = 'A'): string[] {
     if (teamName && teamName !== 'TBD') return []
     if (!allMatches || isTeam) return []
     const PREV: Record<string,string> = {
@@ -1000,9 +1000,12 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
     const prevFinal = prevRoundMatchesFallback
 
     // 직전 라운드는 2배수 경기 → 로컬 인덱스 기준 2개 추출
+    // A슬롯 → 직전 라운드 첫번째 경기, B슬롯 → 직전 라운드 두번째 경기
     const candA = prevFinal[myLocalIdx * 2]
     const candB = prevFinal[myLocalIdx * 2 + 1]
-    const candidates = [candA, candB].filter(Boolean)
+    const candidates = slot === 'A'
+      ? [candA].filter(Boolean)
+      : [candB].filter(Boolean)
 
     const stripClub = (raw: string) => raw.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/')
     const names: string[] = []
@@ -1068,9 +1071,9 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
         )
       })()}
       <div className={done ? 'opacity-50' : ''}>
-        <MatchTeamRow raw={m.team_a_name} done={done} candidates={getTbdCandidates(m.team_a_name)} />
+        <MatchTeamRow raw={m.team_a_name} done={done} candidates={getTbdCandidates(m.team_a_name, 'A')} />
         <div className="text-stone-300 text-[10px] leading-none my-0.5">vs</div>
-        <MatchTeamRow raw={m.team_b_name} done={done} candidates={getTbdCandidates(m.team_b_name)} />
+        <MatchTeamRow raw={m.team_b_name} done={done} candidates={getTbdCandidates(m.team_b_name, 'B')} />
       </div>
       {m.score && (
         <div className={`mt-0.5 font-bold ${isTeam?'text-blue-600':done?'text-stone-400':'text-tennis-600'}`}>{m.score}</div>

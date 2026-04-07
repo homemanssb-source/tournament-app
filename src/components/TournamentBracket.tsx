@@ -172,7 +172,7 @@ function MatchCard({ m, byRound, roundIdx, rounds }: {
   const bWon       = !!(m.winner_team_id && m.winner_team_id === m.team_b_id)
 
   // TBD 예상 후보: 같은 라운드 내 로컬 인덱스 기반으로 직전 라운드 정확한 2경기 추출
-  function getTbdCandidates(teamName?: string): string[] {
+  function getTbdCandidates(teamName?: string, slot: 'A' | 'B' = 'A'): string[] {
     if (teamName && teamName !== 'TBD') return []
     if (!byRound || roundIdx === undefined || !rounds || roundIdx === 0) return []
     const prevRound = rounds[roundIdx - 1]
@@ -187,7 +187,7 @@ function MatchCard({ m, byRound, roundIdx, rounds }: {
     const prevMatches = (byRound.get(prevRound) || []).slice().sort((a, b) => (a.slot || 0) - (b.slot || 0))
     const candA = prevMatches[myLocalIdx * 2]
     const candB = prevMatches[myLocalIdx * 2 + 1]
-    const candidates = [candA, candB].filter(Boolean)
+    const candidates = slot === 'A' ? [candA].filter(Boolean) : [candB].filter(Boolean)
 
     const strip = (raw: string) => raw.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/')
     const names: string[] = []
@@ -236,7 +236,7 @@ function MatchCard({ m, byRound, roundIdx, rounds }: {
             won={aWon}
             muted={bWon && done}
             tbd={!m.team_a_name || m.team_a_name === 'TBD'}
-            candidates={getTbdCandidates(m.team_a_name)}
+            candidates={getTbdCandidates(m.team_a_name, 'A')}
           />
         </div>
         <div className="flex-shrink-0 flex items-center gap-0.5 ml-1 pt-0.5">
@@ -262,7 +262,7 @@ function MatchCard({ m, byRound, roundIdx, rounds }: {
                 won={bWon}
                 muted={aWon && done}
                 tbd={!m.team_b_name || m.team_b_name === 'TBD'}
-                candidates={getTbdCandidates(m.team_b_name)}
+                candidates={getTbdCandidates(m.team_b_name, 'B')}
               />
           }
         </div>
