@@ -831,7 +831,7 @@ export default function CourtsPage() {
                       <MatchChip key={m.id} m={m} order={m.court_order||allIdx+1} badge={badge}
                         isCurrentSlot={m.status==='PENDING'&&allIdx===currentIdx}
                         divColor={divColors[m.division_id]}
-                        allMatches={allItems}
+                        allMatches={matches}
                         onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
                         onClickStart={canStart?()=>startMatch(m.id):undefined}
                         onClickUnassign={() => unassignItem(m.id)}
@@ -970,38 +970,38 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
       'F':'SF','SF':'QF','QF':'R16','R16':'R32','R32':'R64','R64':'R128'
     }
     const prevRound = PREV[m.round]
-    console.log('[TBD]', m.match_num, 'round:', m.round, 'prevRound:', prevRound, 'divId:', m.division_id?.slice(0,8), 'stage:', m.stage, 'slot:', m.slot)
     if (!prevRound) return []
 
+    // 같은 부서 직전 라운드 경기들 slot 순 정렬
     const prevRoundMatches = allMatches
       .filter(pm => pm.division_id === m.division_id && pm.round === prevRound && pm.stage === 'FINALS')
       .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
 
+    // stage 없으면 stage 조건 제거하고 재시도
     const prevRoundMatchesFallback = prevRoundMatches.length > 0 ? prevRoundMatches :
       allMatches
         .filter(pm => pm.division_id === m.division_id && pm.round === prevRound)
         .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
-
-    console.log('[TBD] prevMatches count:', prevRoundMatchesFallback.length, 'slots:', prevRoundMatchesFallback.slice(0,4).map(p=>p.slot))
     if (prevRoundMatchesFallback.length === 0) return []
 
+    // 같은 부서 현재 라운드 경기들 slot 순 정렬 후 내 로컬 인덱스 파악
     const curRoundMatches = allMatches
       .filter(pm => pm.division_id === m.division_id && pm.round === m.round && pm.stage === 'FINALS')
       .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
 
+    // stage 없으면 stage 조건 제거하고 재시도
     const curRoundMatchesFallback = curRoundMatches.length > 0 ? curRoundMatches :
       allMatches
         .filter(pm => pm.division_id === m.division_id && pm.round === m.round)
         .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
 
     const myLocalIdx = curRoundMatchesFallback.findIndex(pm => pm.id === m.id)
-    console.log('[TBD] curMatches count:', curRoundMatchesFallback.length, 'myLocalIdx:', myLocalIdx)
     if (myLocalIdx < 0) return []
     const prevFinal = prevRoundMatchesFallback
 
+    // 직전 라운드는 2배수 경기 → 로컬 인덱스 기준 2개 추출
     const candA = prevFinal[myLocalIdx * 2]
     const candB = prevFinal[myLocalIdx * 2 + 1]
-    console.log('[TBD] candA:', candA?.team_a_name?.slice(0,10), 'candB:', candB?.team_a_name?.slice(0,10))
     const candidates = [candA, candB].filter(Boolean)
 
     const stripClub = (raw: string) => raw.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/')
