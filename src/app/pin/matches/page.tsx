@@ -12,7 +12,14 @@ interface PinMatch {
   team_a_name: string; team_b_name: string
   team_a_id: string; team_b_id: string
   my_side: 'A' | 'B'; division_name: string; division_id: string; group_label: string | null
-  match_date?: string | null
+  match_date?: string | null; slot?: number | null
+}
+
+interface FinalsMatch {
+  id: string; round: string; slot: number | null
+  division_id: string; team_a_name: string | null; team_b_name: string | null
+  team_a_id: string | null; team_b_id: string | null
+  winner_team_id: string | null; status: string
 }
 
 interface CourtQueueMatch {
@@ -41,6 +48,7 @@ export default function PinMatchesPage() {
   const [loading, setLoading]     = useState(true)
   const [msg, setMsg]             = useState('')
 
+  const [finalsMatches, setFinalsMatches] = useState<FinalsMatch[]>([])
   const [winners, setWinners]       = useState<Record<string, 'A'|'B'|null>>({})
   const [loserScores, setLoserScores] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState<string | null>(null)
@@ -220,6 +228,26 @@ export default function PinMatchesPage() {
     }
 
     setCourtQueues(queueMap)
+
+    // TBD 예상 후보용: matches 테이블 직접 조회
+    const eventId = s.event_id
+    if (eventId) {
+      const [{ data: rawFinals }, { data: teamsData }] = await Promise.all([
+        supabase.from('matches')
+          .select('id, round, slot, division_id, team_a_id, team_b_id, winner_team_id, status')
+          .eq('event_id', eventId).eq('stage', 'FINALS')
+          .order('slot', { ascending: true, nullsFirst: true }),
+        supabase.from('teams').select('id, name').eq('event_id', eventId),
+      ])
+      const tMap: Record<string, string> = {}
+      ;(teamsData || []).forEach((t: any) => { if (t.id) tMap[t.id] = t.name })
+      setFinalsMatches((rawFinals || []).map((m: any) => ({
+        ...m,
+        team_a_name: m.team_a_id ? (tMap[m.team_a_id] || null) : null,
+        team_b_name: m.team_b_id ? (tMap[m.team_b_id] || null) : null,
+      })) as FinalsMatch[])
+    }
+
     setLoading(false)
   }, [notifAllowed, showInAppNotif])
 
@@ -402,8 +430,8 @@ export default function PinMatchesPage() {
 
                           <div className="flex items-center justify-center gap-3 mb-4">
                             <div className={`text-center flex-1 ${m.my_side === 'A' ? 'font-bold' : ''}`}>
-                              <div className={`text-sm ${m.my_side === 'A' ? 'text-[#2d5016]' : 'text-stone-700'}`}>{m.team_a_name}</div>
-                              {m.my_side === 'A' && <span className="text-xs text-[#2d5016]/70 font-medium">내 팀 ▲</span>}
+                              <PinTeamName name={m.team_a_name} isMy={m.my_side === 'A'}
+                                finalsMatches={finalsMatches} matchId={m.id} abSlot="A" />
                             </div>
                             <div className="px-2 text-center">
                               {isDone && m.score ? (
@@ -415,8 +443,8 @@ export default function PinMatchesPage() {
                               )}
                             </div>
                             <div className={`text-center flex-1 ${m.my_side === 'B' ? 'font-bold' : ''}`}>
-                              <div className={`text-sm ${m.my_side === 'B' ? 'text-[#2d5016]' : 'text-stone-700'}`}>{m.team_b_name}</div>
-                              {m.my_side === 'B' && <span className="text-xs text-[#2d5016]/70 font-medium">내 팀 ▲</span>}
+                              <PinTeamName name={m.team_b_name} isMy={m.my_side === 'B'}
+                                finalsMatches={finalsMatches} matchId={m.id} abSlot="B" />
                             </div>
                           </div>
 
@@ -502,6 +530,67 @@ export default function PinMatchesPage() {
           </div>
         )}
       </main>
+    </div>
+  )
+}
+
+// TBD 예상 후보 계산
+function getTbdCandidates(finalsMatches: FinalsMatch[], matchId: string, abSlot: 'A' | 'B'): string[] {
+  const PREV: Record<string, string> = {
+    '결승':'4강','4강':'8강','8강':'16강','16강':'32강','32강':'64강','64강':'128강',
+    'F':'SF','SF':'QF','QF':'R16','R16':'R32','R32':'R64','R64':'R128',
+  }
+  const cur = finalsMatches.find(m => m.id === matchId)
+  if (!cur) return []
+  const prevRound = PREV[cur.round]
+  if (!prevRound) return []
+  const curList = finalsMatches
+    .filter(m => m.division_id === cur.division_id && m.round === cur.round)
+    .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+  const myLocalIdx = curList.findIndex(m => m.id === matchId)
+  if (myLocalIdx < 0) return []
+  const prevList = finalsMatches
+    .filter(m => m.division_id === cur.division_id && m.round === prevRound)
+    .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+  const pm = abSlot === 'A' ? prevList[myLocalIdx * 2] : prevList[myLocalIdx * 2 + 1]
+  if (!pm) return []
+  const strip = (raw: string) => raw.split('/').map(p => p.replace(/\(.*?\)/g, '').trim()).join('/')
+  if (pm.status === 'FINISHED' && pm.winner_team_id) {
+    const w = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
+    return w && w !== 'TBD' ? [strip(w)] : []
+  }
+  const names: string[] = []
+  if (pm.team_a_name && pm.team_a_name !== 'TBD') names.push(strip(pm.team_a_name))
+  if (pm.team_b_name && pm.team_b_name !== 'TBD') names.push(strip(pm.team_b_name))
+  return names
+}
+
+// 팀 이름 표시: TBD면 예상 후보 작게 표시
+function PinTeamName({ name, isMy, finalsMatches, matchId, abSlot }: {
+  name: string; isMy: boolean
+  finalsMatches: FinalsMatch[]; matchId: string; abSlot: 'A' | 'B'
+}) {
+  const isTbd = !name || name === 'TBD'
+  if (isTbd) {
+    const candidates = getTbdCandidates(finalsMatches, matchId, abSlot)
+    return (
+      <div>
+        {candidates.length > 0 ? (
+          <div className="text-xs text-stone-400 leading-tight">
+            {candidates.map((c, i) => (
+              <span key={i}>{i > 0 && <span className="text-stone-200"> / </span>}{c}</span>
+            ))}
+          </div>
+        ) : (
+          <div className="text-sm text-stone-300 italic">TBD</div>
+        )}
+      </div>
+    )
+  }
+  return (
+    <div>
+      <div className={`text-sm ${isMy ? 'text-[#2d5016]' : 'text-stone-700'}`}>{name}</div>
+      {isMy && <span className="text-xs text-[#2d5016]/70 font-medium">내 팀 ▲</span>}
     </div>
   )
 }
