@@ -591,13 +591,8 @@ function MatchResultRow({ m }: { m: any }) {
   const leftWon   = !!(m.winner_team_id)  // 왼쪽은 항상 승자 (winner 있을 때)
   const rightWon  = false
 
-  // 점수 방향 조정: 승자 점수가 앞으로
-  let displayScore = m.score
-  if (m.score && bWon) {
-    // B가 이겼으면 원래 score가 "패자:승자" → 뒤집기
-    const parts = m.score.split(':')
-    if (parts.length === 2) displayScore = `${parts[1]}:${parts[0]}`
-  }
+  // 점수는 DB 저장값 그대로 표시 (team_a:team_b 고정)
+  const displayScore = m.score
 
   // winner_team_id 없으면 그냥 원래 순서
   const noWinner = !m.winner_team_id
