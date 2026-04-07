@@ -280,6 +280,30 @@ export default function CourtsPage() {
     return pool.reduce((best, c) => (courtOrderRef.current[c] || 0) < (courtOrderRef.current[best] || 0) ? c : best, pool[0])
   }
 
+  // ✅ 스마트 코트 선택: 1순위 빈코트, 2순위 대기 적은 코트
+  function getSmartCourt(pool: string[], matchList: MatchSlim[]): string {
+    const pendingCount: Record<string, number> = {}
+    for (const c of pool) pendingCount[c] = 0
+    for (const m of matchList) {
+      if (m.court && pool.includes(m.court) && m.status === 'PENDING' && m.score !== 'BYE') {
+        pendingCount[m.court] = (pendingCount[m.court] || 0) + 1
+      }
+    }
+    const hasLive: Record<string, boolean> = {}
+    for (const m of matchList) {
+      if (m.court && pool.includes(m.court) && m.status === 'IN_PROGRESS') {
+        hasLive[m.court] = true
+      }
+    }
+    // 1순위: 완전 빈 코트 (live 없고 pending 0)
+    const empty = pool.filter(c => !hasLive[c] && pendingCount[c] === 0)
+    if (empty.length > 0) return empty[0]
+    // 2순위: pending 가장 적은 코트
+    return pool.reduce((best, c) =>
+      (pendingCount[c] ?? 999) < (pendingCount[best] ?? 999) ? c : best
+    , pool[0])
+  }
+
   async function autoAssignByDivision() {
     if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
     if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
@@ -331,14 +355,22 @@ export default function CourtsPage() {
 
   async function assignFinals(round: string) {
     const stageVal = ROUND_TO_STAGE[round] || 'FINALS'
-    const targets  = matches.filter(m => m.division_id === autoDiv && m.stage === stageVal && m.round === round && !m.court && m.status !== 'FINISHED').sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true }))
-    if (targets.length === 0) { setMsg(`배정할 ${STAGE_LABEL[round] || round} 경기가 없습니다.`); return }
+    const raw = matches.filter(m => m.division_id === autoDiv && m.stage === stageVal && m.round === round && !m.court && m.status !== 'FINISHED')
+    if (raw.length === 0) { setMsg(`배정할 ${STAGE_LABEL[round] || round} 경기가 없습니다.`); return }
+    // ✅ 양쪽 확정 경기 먼저, TBD 나중에
+    const targets = [
+      ...raw.filter(m => m.team_a_id && m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
+      ...raw.filter(m => !m.team_a_id || !m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
+    ]
     const pool = getCourtPool(autoDiv, round)
+    const currentMatches = [...matchesRef.current]
     const updates: { id: string; court: string; court_order: number }[] = []
     for (const m of targets) {
-      const court = getLeastLoaded(pool)
+      const court = getSmartCourt(pool, currentMatches)
       const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
       updates.push({ id:m.id, court, court_order:nextOrder })
+      // 스냅샷에 반영해서 다음 경기 배정 시 코트 상태 반영
+      currentMatches.push({ ...m, court, court_order:nextOrder, status:'PENDING' })
     }
     for (const u of updates) await supabase.from('matches').update({ court:u.court, court_order:u.court_order }).eq('id', u.id)
     const divName = divisions.find(d => d.id === autoDiv)?.name || ''
@@ -347,14 +379,23 @@ export default function CourtsPage() {
 
   async function assignAllFinals() {
     const divName = divisions.find(d => d.id === autoDiv)?.name || ''; let total = 0
+    const currentMatches = [...matchesRef.current]
     for (const round of ['128강','64강','32강','16강','8강','4강','결승']) {
-      const pool    = getCourtPool(autoDiv, round)
-      const targets = matches.filter(m => m.division_id === autoDiv && m.stage === (ROUND_TO_STAGE[round]||'FINALS') && m.round === round && !m.court && m.status !== 'FINISHED').sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true }))
-      if (targets.length === 0) continue
+      const pool = getCourtPool(autoDiv, round)
+      const raw  = matches.filter(m => m.division_id === autoDiv && m.stage === (ROUND_TO_STAGE[round]||'FINALS') && m.round === round && !m.court && m.status !== 'FINISHED')
+      if (raw.length === 0) continue
+      // ✅ 양쪽 확정 경기 먼저, TBD 나중에
+      const targets = [
+        ...raw.filter(m => m.team_a_id && m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
+        ...raw.filter(m => !m.team_a_id || !m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
+      ]
       for (const m of targets) {
-        const court = getLeastLoaded(pool)
+        const court = getSmartCourt(pool, currentMatches)
         const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
-        await supabase.from('matches').update({ court, court_order:nextOrder }).eq('id', m.id); total++
+        await supabase.from('matches').update({ court, court_order:nextOrder }).eq('id', m.id)
+        // 스냅샷에 반영해서 다음 경기 배정 시 코트 상태 반영
+        currentMatches.push({ ...m, court, court_order:nextOrder, status:'PENDING' })
+        total++
       }
     }
     if (total === 0) { setMsg(`[${divName}] 배정할 본선 경기가 없습니다.`); return }
