@@ -4,8 +4,6 @@
 // ✅ [FIX-①⑨] 단체전 court명: '코트 N' → venues 기반 short_name-N 통일
 // ✅ [FIX-⑤⑨] 단체전 court_order: 100+tie_order → DB 실제값 사용
 // ✅ [FIX-⑨]  allCourts 정렬: 숫자+접두어 혼재 안전 처리
-// ✅ [FIX-클럽명] PlayerPairInline 클럽명 최대 5자 + ... 축약 표시
-// ✅ [FIX-검색] allTeams → 선수 이름 단위 추출, 매칭도 이름 기반
 // ============================================================
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -45,7 +43,7 @@ function shortClub(club: string, maxLen = 5): string {
   return club.length > maxLen ? club.slice(0, maxLen) + '…' : club
 }
 
-// ✅ 전체 팀 문자열에서 선수 이름만 추출 (검색용)
+// ✅ 팀 문자열에서 선수 이름만 추출 (검색 자동완성용)
 function extractPlayerNames(raw: string): string[] {
   if (!raw || raw === 'TBD' || raw === 'BYE') return []
   return raw.split('/').map(p => {
@@ -203,8 +201,9 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
       if (suggRef.current?.contains(e.target as Node)) return
       setShowSugg(false)
     }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
+    // ✅ pointerdown: 모바일 터치 + PC 마우스 모두 대응
+    document.addEventListener('pointerdown', handleClick)
+    return () => document.removeEventListener('pointerdown', handleClick)
   }, [])
 
   // 날짜 필터 적용
@@ -239,7 +238,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
   const allVenues = [...new Set(allCourts.map(getVenueName))].sort()
   const courts = venueFilter === 'ALL' ? allCourts : allCourts.filter(c => getVenueName(c) === venueFilter)
 
-  // ✅ [FIX-검색] 팀 전체 문자열 대신 선수 이름 단위로 자동완성 목록 구성
+  // ✅ 선수 이름만 추출해서 자동완성 목록 구성 (클럽명 제외)
   const allPlayerNames = React.useMemo(() => {
     const nameSet = new Set<string>()
     for (const m of matches) {
@@ -256,21 +255,24 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     setSugg(filtered.slice(0, 6)); setShowSugg(filtered.length > 0)
   }
 
-  // ✅ [FIX-검색] team_a_name / team_b_name 내 선수 이름 포함 여부로 매칭
   function doSearch(name?: string) {
     const target = (name ?? query).trim()
     setQuery(target); setSugg([]); setShowSugg(false)
     if (!target) return
+    // ✅ 선수 이름 파싱 기반으로 매칭
     for (const [court, cms] of byCourt) {
       const sorted = [...cms].sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
       const idx = sorted.findIndex(m => {
-        const namesA = extractPlayerNames(m.team_a_name)
-        const namesB = extractPlayerNames(m.team_b_name)
-        return [...namesA, ...namesB].some(n => n.toLowerCase().includes(target.toLowerCase()))
+        const names = [
+          ...extractPlayerNames(m.team_a_name),
+          ...extractPlayerNames(m.team_b_name),
+        ]
+        return names.some(n => n.toLowerCase().includes(target.toLowerCase()))
       })
       if (idx >= 0) { setResult({ name: target, court, idx }); return }
     }
     setResult({ name: target, court: '', idx: -1 })
+  }
   }
 
   const searchInfo = searchResult?.court ? (() => {
@@ -369,12 +371,12 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
               onChange={e => handleQuery(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && doSearch()}
               onFocus={() => query && suggestions.length > 0 && setShowSugg(true)}
-              placeholder="선수 이름으로 검색"
+              placeholder="팀/선수 이름으로 검색"
               className="w-full border rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-tennis-400" />
             {showSugg && suggestions.length > 0 && (
               <div ref={suggRef} className="absolute top-full left-0 right-0 mt-1 bg-white border rounded-xl shadow-lg z-10 overflow-hidden">
                 {suggestions.map(s => (
-                  <button key={s} onClick={() => doSearch(s)}
+                  <button key={s} onPointerDown={e => { e.preventDefault(); doSearch(s) }}
                     className="w-full text-left px-4 py-2.5 text-sm hover:bg-stone-50 border-b last:border-b-0 transition-colors">
                     {s}
                   </button>
@@ -420,8 +422,8 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
         )}
       </div>
 
-      {/* 코트 카드 */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {/* 코트 카드 — 1열 */}
+      <div className="grid grid-cols-1 gap-4">
         {courts.map(court => {
           const cms = (byCourt.get(court) || []).sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
           const liveIdx  = cms.findIndex(m => m.status === 'IN_PROGRESS')
@@ -430,6 +432,12 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
           const isLive   = liveIdx >= 0
           const finished = cms.filter(m => m.status === 'FINISHED').length
           const isHighlight = searchResult?.court === court
+
+          // ✅ 완료 경기 묶음 처리
+          const doneMatches    = cms.filter(m => m.status === 'FINISHED')
+          const nonDoneMatches = cms.filter(m => m.status !== 'FINISHED')
+          // 완료가 여러 개면 접힘 행 1개로, 1개면 한 줄 요약
+          const doneCount = doneMatches.length
 
           return (
             <div key={court} className={`bg-white rounded-xl border overflow-hidden transition-all ${isHighlight ? 'ring-2 ring-blue-400 shadow-lg' : 'shadow-sm'}`}>
@@ -440,18 +448,39 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
                 </div>
                 <span className="text-xs text-white/60">{finished}/{cms.length}</span>
               </div>
-              <div className="p-2 space-y-1.5 max-h-[50vh] overflow-y-auto">
-                {cms.map((m, idx) => {
-                  const isDone    = m.status === 'FINISHED'
+              <div className="p-2 space-y-1.5">
+                {/* ✅ 완료 경기 접힘 표시 */}
+                {doneCount === 1 && (
+                  <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-stone-50 border border-stone-100">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-[10px] text-stone-400 flex-shrink-0">✓ 완료</span>
+                      <span className="text-[10px] text-stone-400 truncate">
+                        {extractPlayerNames(doneMatches[0].team_a_name).join('/')} vs {extractPlayerNames(doneMatches[0].team_b_name).join('/')}
+                      </span>
+                    </div>
+                    {doneMatches[0].score && (
+                      <span className="text-[10px] text-stone-400 font-medium flex-shrink-0 ml-2">{doneMatches[0].score}</span>
+                    )}
+                  </div>
+                )}
+                {doneCount >= 2 && (
+                  <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-stone-50 border border-stone-100">
+                    <span className="text-[10px] text-stone-400">✓ 완료 {doneCount}경기</span>
+                    <span className="text-[10px] text-stone-400">접힘</span>
+                  </div>
+                )}
+
+                {/* ✅ 진행중/대기 경기만 표시 */}
+                {nonDoneMatches.map((m) => {
+                  const origIdx = cms.indexOf(m)
                   const isLiveMat = m.status === 'IN_PROGRESS'
-                  const isCurrent = idx === curIdx
-                  const isNext    = idx === curIdx + 1
-                  const isSearch  = searchResult?.court === court && searchResult.idx === idx
+                  const isCurrent = origIdx === curIdx
+                  const isNext    = origIdx === curIdx + 1
+                  const isSearch  = searchResult?.court === court && searchResult.idx === origIdx
 
                   return (
                     <div key={m.id} className={`rounded-lg px-3 py-2 text-xs transition-all border ${
                       isSearch    ? 'bg-blue-50 border-blue-300 ring-1 ring-blue-300'
-                      : isDone    ? 'bg-stone-50 border-stone-100 opacity-50'
                       : isLiveMat ? 'bg-red-50 border-red-200'
                       : isCurrent ? 'bg-amber-50 border-amber-200'
                       : isNext    ? 'bg-yellow-50/50 border-stone-100'
@@ -460,17 +489,17 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
                     }`}>
                       <div className="flex items-center justify-between gap-1 mb-0.5">
                         <div className="flex items-center gap-1">
-                          <span className="text-stone-400 font-mono">#{idx + 1}</span>
+                          <span className="text-stone-400 font-mono">#{origIdx + 1}</span>
                           {m.is_team_tie && (
                             <span className="text-[9px] bg-blue-600 text-white px-1 rounded">단체</span>
                           )}
                           {isLiveMat && <span className="text-red-500 animate-pulse text-[10px]">● LIVE</span>}
                           {!isLiveMat && isCurrent && <span className="text-amber-600 text-[10px] font-bold">▶ 현재</span>}
-                          {!isLiveMat && isNext   && <span className="text-yellow-600 text-[10px]">다음</span>}
+                          {!isLiveMat && isNext    && <span className="text-yellow-600 text-[10px]">다음</span>}
                         </div>
                         <span className="text-stone-400">{m.division_name}</span>
                       </div>
-                      <div className={isDone ? 'opacity-50' : ''}>
+                      <div>
                         {m.is_team_tie ? (
                           <span className="font-medium text-xs">{m.team_a_name} vs {m.team_b_name}</span>
                         ) : (
@@ -481,7 +510,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
                           </div>
                         )}
                       </div>
-                      {m.score && <div className={`mt-0.5 font-bold ${isDone ? 'text-stone-500' : 'text-tennis-700'}`}>{m.score}</div>}
+                      {m.score && <div className="mt-0.5 font-bold text-tennis-700">{m.score}</div>}
                     </div>
                   )
                 })}
@@ -529,7 +558,7 @@ function getTbdCandidates(finalsMatches: FinalsMatch[], matchId: string, slot: '
   return names
 }
 
-// ✅ [FIX-클럽명] 선수 쌍 인라인 렌더링: 이름 굵게, 클럽명 최대 5자로 축약
+// 선수 쌍 인라인 렌더링: 이름 굵게, 클럽명 아래 작게 / TBD면 예상 후보 표시
 function PlayerPairInline({ raw, finalsMatches, matchId, slot }: {
   raw: string
   finalsMatches?: FinalsMatch[]
@@ -556,19 +585,13 @@ function PlayerPairInline({ raw, finalsMatches, matchId, slot }: {
   const players = parsePlayers(raw)
   if (players.length === 0) return <span className="font-bold text-stone-800 text-xs">{raw || 'TBD'}</span>
   return (
-    <div className="flex items-start gap-0.5 min-w-0 flex-1">
+    <div className="flex items-start gap-1 min-w-0 flex-1">
       {players.map((p, i) => (
         <React.Fragment key={i}>
           {i > 0 && <span className="text-stone-300 text-[10px] flex-shrink-0 pt-px">/</span>}
           <div className="min-w-0 flex-1">
-            {/* 선수 이름: 절대 안 잘림 */}
             <div className="font-bold text-stone-800 text-xs leading-tight whitespace-nowrap">{p.name}</div>
-            {/* 클럽명: 최대 5자로 축약 */}
-            {p.club && (
-              <div className="text-[9px] text-stone-400 leading-tight whitespace-nowrap" title={p.club}>
-                {shortClub(p.club, 5)}
-              </div>
-            )}
+            {p.club && <div className="text-[9px] text-stone-400 leading-tight whitespace-nowrap" title={p.club}>{shortClub(p.club, 5)}</div>}
           </div>
         </React.Fragment>
       ))}
