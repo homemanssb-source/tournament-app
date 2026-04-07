@@ -28,15 +28,34 @@ export default function TeamsPage() {
   const [editP1, setEditP1] = useState('')
   const [editP2, setEditP2] = useState('')
 
+  // ✅ 검색
+  const [searchQuery, setSearchQuery] = useState('')
+
   const fileRef = useRef<HTMLInputElement>(null)
 
   const selectedDiv = divisions.find(d => d.id === selected)
+
+  // ✅ 검색 필터링된 팀 목록
+  const filteredTeams = searchQuery.trim()
+    ? teams.filter(t => {
+        const q = searchQuery.trim().toLowerCase()
+        return (
+          t.player1_name.toLowerCase().includes(q) ||
+          t.player2_name.toLowerCase().includes(q) ||
+          t.team_name.toLowerCase().includes(q) ||
+          (t.club_name || '').toLowerCase().includes(q)
+        )
+      })
+    : teams
 
   useEffect(() => {
     if (eventId) loadDivDates(eventId)
   }, [eventId])
 
   useEffect(() => { if (eventId && selected) loadTeams() }, [eventId, selected])
+
+  // ✅ 부서 변경 시 검색어 초기화
+  useEffect(() => { setSearchQuery('') }, [selected])
 
   // ✅ 부서별 날짜 로드
   async function loadDivDates(eid: string) {
@@ -247,62 +266,120 @@ export default function TeamsPage() {
         <p className="text-stone-400 py-6 text-center">등록된 팀이 없습니다.</p>
       ) : (
         <>
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-sm text-stone-500">총 {teams.length}팀</span>
-            <button onClick={copyPinList} className="text-xs text-tennis-600 hover:underline">📋 PIN 목록 복사</button>
+          <div className="flex justify-between items-center mb-2 gap-2">
+            {/* ✅ 검색 인풋 */}
+            <div className="relative flex-1 max-w-xs">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">🔍</span>
+              <input
+                type="text"
+                placeholder="선수 이름 검색..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full border border-stone-300 rounded-lg pl-8 pr-8 py-1.5 text-sm focus:outline-none focus:border-tennis-500"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-stone-300 hover:text-stone-500 text-lg leading-none"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-3 flex-shrink-0">
+              <span className="text-sm text-stone-500">
+                {searchQuery.trim() ? `${filteredTeams.length} / ${teams.length}팀` : `총 ${teams.length}팀`}
+              </span>
+              <button onClick={copyPinList} className="text-xs text-tennis-600 hover:underline">📋 PIN 목록 복사</button>
+            </div>
           </div>
-          <div className="bg-white rounded-xl border overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-stone-50 text-stone-500">
-                <tr>
-                  <th className="text-left px-4 py-2 w-20">#</th>
-                  <th className="text-left px-4 py-2">선수1</th>
-                  <th className="text-left px-4 py-2">선수2</th>
-                  <th className="text-left px-4 py-2 w-20">클럽</th>
-                  <th className="text-left px-4 py-2 w-28">PIN</th>
-                  <th className="text-right px-4 py-2 w-24">작업</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-stone-100">
-                {teams.map(t => (
-                  <tr key={t.id} className="hover:bg-stone-50">
-                    <td className="px-4 py-2 text-stone-400 text-xs">{t.team_num}</td>
-                    <td className="px-4 py-2">
-                      {editId === t.id ? (
-                        <input type="text" value={editP1} onChange={e => setEditP1(e.target.value)}
-                          className="border rounded px-2 py-1 text-sm w-full" autoFocus />
-                      ) : (
-                        <span className="font-medium">{t.player1_name}{t.p1_grade && <span className="text-xs text-blue-500 ml-1">{t.p1_grade}</span>}</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2">
-                      {editId === t.id ? (
-                        <div className="flex gap-1">
-                          <input type="text" value={editP2} onChange={e => setEditP2(e.target.value)}
-                            onKeyDown={e => e.key === 'Enter' && saveEdit(t.id)}
-                            className="border rounded px-2 py-1 text-sm flex-1" />
-                          <button onClick={() => saveEdit(t.id)} className="text-tennis-600 text-xs">저장</button>
-                          <button onClick={() => setEditId(null)} className="text-stone-400 text-xs">취소</button>
-                        </div>
-                      ) : (
-                        <span className="font-medium">{t.player2_name}{t.p2_grade && <span className="text-xs text-blue-500 ml-1">{t.p2_grade}</span>}</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2 text-xs text-stone-500">{t.club_name || '-'}</td>
-                    <td className="px-4 py-2 font-mono text-xs text-stone-500">{t.pin_plain}</td>
-                    <td className="px-4 py-2 text-right">
-                      <button onClick={() => { setEditId(t.id); setEditP1(t.player1_name); setEditP2(t.player2_name) }}
-                        className="text-xs text-stone-400 hover:text-stone-600 mr-2">✏️</button>
-                      <button onClick={() => deleteTeam(t.id, t.team_name)}
-                        className="text-xs text-stone-400 hover:text-red-500">🗑️</button>
-                    </td>
+
+          {filteredTeams.length === 0 ? (
+            <div className="bg-white rounded-xl border py-10 text-center text-stone-400">
+              <p className="text-2xl mb-2">🔍</p>
+              <p className="text-sm">"{searchQuery}"에 해당하는 선수가 없습니다.</p>
+              <button onClick={() => setSearchQuery('')} className="mt-2 text-xs text-tennis-600 hover:underline">
+                검색 초기화
+              </button>
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-stone-50 text-stone-500">
+                  <tr>
+                    <th className="text-left px-4 py-2 w-20">#</th>
+                    <th className="text-left px-4 py-2">선수1</th>
+                    <th className="text-left px-4 py-2">선수2</th>
+                    <th className="text-left px-4 py-2 w-20">클럽</th>
+                    <th className="text-left px-4 py-2 w-28">PIN</th>
+                    <th className="text-right px-4 py-2 w-24">작업</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-stone-100">
+                  {filteredTeams.map(t => (
+                    <tr key={t.id} className="hover:bg-stone-50">
+                      <td className="px-4 py-2 text-stone-400 text-xs">{t.team_num}</td>
+                      <td className="px-4 py-2">
+                        {editId === t.id ? (
+                          <input type="text" value={editP1} onChange={e => setEditP1(e.target.value)}
+                            className="border rounded px-2 py-1 text-sm w-full" autoFocus />
+                        ) : (
+                          <span className="font-medium">
+                            {searchQuery.trim()
+                              ? highlightMatch(t.player1_name, searchQuery)
+                              : t.player1_name}
+                            {t.p1_grade && <span className="text-xs text-blue-500 ml-1">{t.p1_grade}</span>}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2">
+                        {editId === t.id ? (
+                          <div className="flex gap-1">
+                            <input type="text" value={editP2} onChange={e => setEditP2(e.target.value)}
+                              onKeyDown={e => e.key === 'Enter' && saveEdit(t.id)}
+                              className="border rounded px-2 py-1 text-sm flex-1" />
+                            <button onClick={() => saveEdit(t.id)} className="text-tennis-600 text-xs">저장</button>
+                            <button onClick={() => setEditId(null)} className="text-stone-400 text-xs">취소</button>
+                          </div>
+                        ) : (
+                          <span className="font-medium">
+                            {searchQuery.trim()
+                              ? highlightMatch(t.player2_name, searchQuery)
+                              : t.player2_name}
+                            {t.p2_grade && <span className="text-xs text-blue-500 ml-1">{t.p2_grade}</span>}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-xs text-stone-500">{t.club_name || '-'}</td>
+                      <td className="px-4 py-2 font-mono text-xs text-stone-500">{t.pin_plain}</td>
+                      <td className="px-4 py-2 text-right">
+                        <button onClick={() => { setEditId(t.id); setEditP1(t.player1_name); setEditP2(t.player2_name) }}
+                          className="text-xs text-stone-400 hover:text-stone-600 mr-2">✏️</button>
+                        <button onClick={() => deleteTeam(t.id, t.team_name)}
+                          className="text-xs text-stone-400 hover:text-red-500">🗑️</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
     </div>
+  )
+}
+
+// ✅ 검색어 하이라이트 헬퍼
+function highlightMatch(text: string, query: string): React.ReactNode {
+  if (!query.trim()) return text
+  const idx = text.toLowerCase().indexOf(query.trim().toLowerCase())
+  if (idx === -1) return text
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="bg-yellow-200 text-stone-800 rounded-sm px-0.5">{text.slice(idx, idx + query.trim().length)}</mark>
+      {text.slice(idx + query.trim().length)}
+    </>
   )
 }
