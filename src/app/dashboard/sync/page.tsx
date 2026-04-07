@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
@@ -79,6 +79,20 @@ function SyncDashboardInner() {
       setSyncResult({ type: 'individual', ...(await res.json()) });
       await loadEventData();
     } catch (err: any) { setSyncResult({ type: 'individual', success: false, error: err.message }); }
+    finally { setSyncing(false); }
+  }
+
+  async function handleUpdateClubs() {
+    if (!event?.app_a_event_id) return alert('먼저 대회를 연결하세요.');
+    if (!confirm('기존 팀들의 클럽명을 앱A에서 가져와 업데이트합니다.\n이미 클럽이 있는 팀은 스킵됩니다. 계속하시겠습니까?')) return;
+    setSyncing(true); setSyncResult(null);
+    try {
+      const res = await fetch('/api/sync/update-clubs', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_id: selectedEventId, app_a_event_id: event.app_a_event_id }),
+      });
+      setSyncResult({ type: 'update-clubs', ...(await res.json()) });
+    } catch (err: any) { setSyncResult({ type: 'update-clubs', success: false, error: err.message }); }
     finally { setSyncing(false); }
   }
 
