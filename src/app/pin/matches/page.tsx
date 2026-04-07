@@ -229,18 +229,25 @@ export default function PinMatchesPage() {
 
     setCourtQueues(queueMap)
 
-    // TBD 예상 후보용: matches 테이블 직접 조회
+    // TBD 예상 후보용: matches + v_matches_with_teams로 이름 매핑
     const eventId = s.event_id
     if (eventId) {
-      const [{ data: rawFinals }, { data: teamsData }] = await Promise.all([
+      const [{ data: rawFinals }, { data: viewData }] = await Promise.all([
         supabase.from('matches')
           .select('id, round, slot, division_id, team_a_id, team_b_id, winner_team_id, status')
           .eq('event_id', eventId).eq('stage', 'FINALS')
           .order('slot', { ascending: true, nullsFirst: true }),
-        supabase.from('teams').select('id, name').eq('event_id', eventId),
+        supabase.from('v_matches_with_teams')
+          .select('team_a_id, team_b_id, team_a_name, team_b_name')
+          .eq('event_id', eventId).eq('stage', 'FINALS')
+          .not('team_a_name', 'is', null),
       ])
+      // team_id → name 매핑
       const tMap: Record<string, string> = {}
-      ;(teamsData || []).forEach((t: any) => { if (t.id) tMap[t.id] = t.name })
+      ;(viewData || []).forEach((m: any) => {
+        if (m.team_a_id && m.team_a_name) tMap[m.team_a_id] = m.team_a_name
+        if (m.team_b_id && m.team_b_name) tMap[m.team_b_id] = m.team_b_name
+      })
       setFinalsMatches((rawFinals || []).map((m: any) => ({
         ...m,
         team_a_name: m.team_a_id ? (tMap[m.team_a_id] || null) : null,
@@ -540,9 +547,7 @@ function getTbdCandidates(finalsMatches: FinalsMatch[], matchId: string, abSlot:
     '결승':'4강','4강':'8강','8강':'16강','16강':'32강','32강':'64강','64강':'128강',
     'F':'SF','SF':'QF','QF':'R16','R16':'R32','R32':'R64','R64':'R128',
   }
-  console.log('[PIN TBD] matchId:', matchId, 'finalsCount:', finalsMatches.length, 'slot:', abSlot)
   const cur = finalsMatches.find(m => m.id === matchId)
-  console.log('[PIN TBD] cur found:', !!cur, cur?.round, cur?.division_id?.slice(0,8))
   if (!cur) return []
   const prevRound = PREV[cur.round]
   if (!prevRound) return []
@@ -554,8 +559,6 @@ function getTbdCandidates(finalsMatches: FinalsMatch[], matchId: string, abSlot:
   const prevList = finalsMatches
     .filter(m => m.division_id === cur.division_id && m.round === prevRound)
     .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
-  const pm = abSlot === 'A' ? prevList[myLocalIdx * 2] : prevList[myLocalIdx * 2 + 1]
-  if (!pm) return []
   const strip = (raw: string) => raw.split('/').map(p => p.replace(/\(.*?\)/g, '').trim()).join('/')
   if (pm.status === 'FINISHED' && pm.winner_team_id) {
     const w = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
