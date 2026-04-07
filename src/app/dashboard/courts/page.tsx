@@ -34,6 +34,20 @@ const ROUND_TO_STAGE: Record<string, string> = { R32:'FINALS', R16:'FINALS', QF:
 const ZONE_FINALS = new Set(['R16','QF','SF','F','16강','8강','4강','결승','128강','64강','32강'])
 const STAGE_LABEL: Record<string, string> = { GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', ALL_FINALS:'전체본선', '128강':'128강', '64강':'64강', '32강':'32강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
 
+// round 값 → 짧은 표시 라벨
+function getRoundBadge(round: string, groupLabel: string | null, divisionName: string): { round: string; div: string } {
+  const roundMap: Record<string, string> = {
+    'GROUP': '예선', 'R32': '32강', 'R16': '16강', 'QF': '8강', 'SF': '4강', 'F': '결승',
+    '128강': '128강', '64강': '64강', '32강': '32강', '16강': '16강', '8강': '8강', '4강': '4강', '결승': '결승',
+    'group': '예선', 'full_league': '리그',
+  }
+  const roundLabel = roundMap[round] || round
+  const label = groupLabel ? `${roundLabel} ${groupLabel}` : roundLabel
+  // 부서명 짧게: '베테랑부' → '베테', '챌린저부' → '챌린', '루키부' → '루키'
+  const divShort = divisionName.length <= 3 ? divisionName : divisionName.slice(0, 3)
+  return { round: label, div: divShort }
+}
+
 // "전태홍(제주하나)/강기호(행복배틀)" → [{ name, club }]
 function parsePlayers(raw: string): { name: string; club: string }[] {
   if (!raw || raw === 'TBD' || raw === 'BYE') return []
@@ -951,17 +965,27 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, onDragStart, onCl
           ? (live?'bg-blue-50 border-blue-300':done?'bg-blue-50 border-blue-200':'bg-white border-blue-200 hover:border-blue-400')
           : live?'bg-red-50 border-red-200':done?'bg-tennis-50 border-tennis-200':isCurrentSlot?'bg-amber-50 border-amber-300':'bg-white border-stone-200 hover:border-stone-300'
       }`}>
-      <div className="flex items-center gap-1 mb-1">
-        {order && <span className="text-stone-400 font-bold flex-shrink-0">#{order}</span>}
+      {/* 윗줄: order + badge + 색점/단체 + 부서·라운드 + 버튼 */}
+      <div className="flex items-center gap-1 mb-1 min-w-0">
+        {order && <span className="text-stone-400 font-bold flex-shrink-0 text-[10px]">#{order}</span>}
         {badge && <span className="text-[10px] flex-shrink-0">{badge}</span>}
         {isTeam
           ? <span className="text-[10px] bg-blue-600 text-white px-1 rounded flex-shrink-0">단체</span>
           : <span style={{ display:'inline-block',width:6,height:6,borderRadius:'50%',background:divColor||'#999',flexShrink:0 }} />
         }
-        <span className="text-stone-400 truncate flex-1 min-w-0">
-          {isTeam ? m.match_num : `${m.division_name} · ${m.round}${m.group_label?` · ${m.group_label}`:''}`}
-        </span>
-        <div className="flex items-center gap-0.5 flex-shrink-0">
+        {/* 부서명 (짧게) */}
+        {!isTeam && (() => {
+          const { round: rLabel, div: dShort } = getRoundBadge(m.round, m.group_label, m.division_name)
+          return (
+            <div className="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
+              <span className="text-[10px] text-stone-500 flex-shrink-0 whitespace-nowrap">{dShort}</span>
+              {/* 라운드: 항상 보이게 flex-shrink-0 */}
+              <span className="text-[10px] font-bold text-stone-700 flex-shrink-0 whitespace-nowrap bg-stone-100 px-1 rounded">{rLabel}</span>
+            </div>
+          )
+        })()}
+        {isTeam && <span className="text-stone-400 text-[10px] flex-1 min-w-0 truncate">{m.match_num}</span>}
+        <div className="flex items-center gap-0.5 flex-shrink-0 ml-auto">
           {onMoveUp    && <button onClick={e=>{e.stopPropagation();onMoveUp()}}    className="text-stone-300 hover:text-stone-600 px-0.5">▲</button>}
           {onMoveDown  && <button onClick={e=>{e.stopPropagation();onMoveDown()}}  className="text-stone-300 hover:text-stone-600 px-0.5">▼</button>}
           {onClickStart && <button onClick={e=>{e.stopPropagation();onClickStart()}} className="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded hover:bg-red-600">▶</button>}
