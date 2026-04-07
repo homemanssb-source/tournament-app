@@ -14,7 +14,14 @@ interface CourtMatch {
   division_name: string; division_id: string
   team_a_name: string; team_b_name: string
   team_a_id: string; team_b_id: string
-  winner_team_id: string | null; is_team_tie?: boolean
+  winner_team_id: string | null; is_team_tie?: boolean; slot?: number | null
+}
+
+interface FinalsMatch {
+  id: string; round: string; slot: number | null; stage: string
+  division_id: string; team_a_name: string | null; team_b_name: string | null
+  team_a_id: string | null; team_b_id: string | null
+  winner_team_id: string | null; status: string
 }
 
 interface Venue {
@@ -50,10 +57,11 @@ function courtNumToName(courtNumber: number, venues: Venue[]): string {
 }
 
 export default function CourtBoard({ eventId }: { eventId: string }) {
-  const [matches, setMatches]       = useState<CourtMatch[]>([])
-  const [venues, setVenues]         = useState<Venue[]>([])
-  const [loading, setLoading]       = useState(true)
-  const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
+  const [matches, setMatches]             = useState<CourtMatch[]>([])
+  const [venues, setVenues]               = useState<Venue[]>([])
+  const [finalsMatches, setFinalsMatches] = useState<FinalsMatch[]>([])
+  const [loading, setLoading]             = useState(true)
+  const [lastUpdate, setLastUpdate]       = useState<Date>(new Date())
 
   const [query, setQuery]           = useState('')
   const [suggestions, setSugg]      = useState<string[]>([])
@@ -113,6 +121,15 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     }))
 
     setMatches([...indivMatches, ...tieMatches])
+
+    // TBD 예상 후보용: 전체 FINALS 경기 (코트 미배정 포함)
+    const { data: finalsData } = await supabase
+      .from('v_matches_with_teams')
+      .select('id, round, slot, stage, division_id, team_a_name, team_b_name, team_a_id, team_b_id, winner_team_id, status')
+      .eq('event_id', eventId)
+      .eq('stage', 'FINALS')
+    setFinalsMatches((finalsData || []) as FinalsMatch[])
+
     setLoading(false)
     setLastUpdate(new Date())
   }, [eventId, venues])
@@ -413,9 +430,9 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
                           <span className="font-medium text-xs">{m.team_a_name} vs {m.team_b_name}</span>
                         ) : (
                           <div className="flex items-start gap-1 min-w-0">
-                            <div className="flex-1 min-w-0"><PlayerPairInline raw={m.team_a_name} /></div>
+                            <div className="flex-1 min-w-0"><PlayerPairInline raw={m.team_a_name} finalsMatches={finalsMatches} matchId={m.id} slot="A" /></div>
                             <span className="text-stone-300 text-[10px] flex-shrink-0 self-center">vs</span>
-                            <div className="flex-1 min-w-0"><PlayerPairInline raw={m.team_b_name} /></div>
+                            <div className="flex-1 min-w-0"><PlayerPairInline raw={m.team_b_name} finalsMatches={finalsMatches} matchId={m.id} slot="B" /></div>
                           </div>
                         )}
                       </div>
@@ -432,8 +449,65 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
   )
 }
 
-// 선수 쌍 인라인 렌더링: 이름 굵게, 클럽명 아래 작게 (각자)
-function PlayerPairInline({ raw }: { raw: string }) {
+// TBD 예상 후보 계산: 같은 부서 직전 라운드 로컬 인덱스 기반
+function getTbdCandidates(finalsMatches: FinalsMatch[], matchId: string, slot: 'A' | 'B'): string[] {
+  const PREV: Record<string, string> = {
+    '결승': '4강', '4강': '8강', '8강': '16강', '16강': '32강', '32강': '64강', '64강': '128강',
+    'F': 'SF', 'SF': 'QF', 'QF': 'R16', 'R16': 'R32', 'R32': 'R64', 'R64': 'R128',
+  }
+  const cur = finalsMatches.find(m => m.id === matchId)
+  if (!cur) return []
+  const prevRound = PREV[cur.round]
+  if (!prevRound) return []
+
+  const curList = finalsMatches
+    .filter(m => m.division_id === cur.division_id && m.round === cur.round)
+    .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+  const myLocalIdx = curList.findIndex(m => m.id === matchId)
+  if (myLocalIdx < 0) return []
+
+  const prevList = finalsMatches
+    .filter(m => m.division_id === cur.division_id && m.round === prevRound)
+    .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+
+  const pm = slot === 'A' ? prevList[myLocalIdx * 2] : prevList[myLocalIdx * 2 + 1]
+  if (!pm) return []
+
+  const strip = (raw: string) => raw.split('/').map(p => p.replace(/\(.*?\)/g, '').trim()).join('/')
+  if (pm.status === 'FINISHED' && pm.winner_team_id) {
+    const w = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
+    return w && w !== 'TBD' ? [strip(w)] : []
+  }
+  const names: string[] = []
+  if (pm.team_a_name && pm.team_a_name !== 'TBD') names.push(strip(pm.team_a_name))
+  if (pm.team_b_name && pm.team_b_name !== 'TBD') names.push(strip(pm.team_b_name))
+  return names
+}
+
+// 선수 쌍 인라인 렌더링: 이름 굵게, 클럽명 아래 작게 / TBD면 예상 후보 표시
+function PlayerPairInline({ raw, finalsMatches, matchId, slot }: {
+  raw: string
+  finalsMatches?: FinalsMatch[]
+  matchId?: string
+  slot?: 'A' | 'B'
+}) {
+  const isTbd = !raw || raw === 'TBD'
+
+  // TBD 자리 → 예상 후보 이름만 작게
+  if (isTbd && finalsMatches && matchId && slot) {
+    const candidates = getTbdCandidates(finalsMatches, matchId, slot)
+    if (candidates.length > 0) {
+      return (
+        <div className="flex items-start gap-1 min-w-0 flex-wrap">
+          {candidates.map((name, i) => (
+            <span key={i} className="text-[10px] text-stone-400 leading-tight whitespace-nowrap">{name}</span>
+          ))}
+        </div>
+      )
+    }
+    return <span className="text-[10px] text-stone-300 italic">TBD</span>
+  }
+
   const players = parsePlayers(raw)
   if (players.length === 0) return <span className="font-bold text-stone-800 text-xs">{raw || 'TBD'}</span>
   return (
@@ -442,9 +516,7 @@ function PlayerPairInline({ raw }: { raw: string }) {
         <React.Fragment key={i}>
           {i > 0 && <span className="text-stone-300 text-[10px] flex-shrink-0 pt-px">/</span>}
           <div className="min-w-0 flex-1">
-            {/* 이름: 절대 안잘림 */}
             <div className="font-bold text-stone-800 text-xs leading-tight whitespace-nowrap">{p.name}</div>
-            {/* 클럽명: 공간 부족하면 ellipsis */}
             {p.club && <div className="text-[10px] text-stone-400 leading-tight truncate">{p.club}</div>}
           </div>
         </React.Fragment>
