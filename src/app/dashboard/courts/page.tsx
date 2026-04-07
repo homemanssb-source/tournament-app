@@ -10,7 +10,7 @@ interface MatchSlim {
   court: string | null; court_order: number | null
   status: string; score: string | null; winner_team_id: string | null
   division_name: string; division_id: string; locked_by_participant: boolean
-  group_label: string | null; is_team_tie?: boolean
+  group_label: string | null; is_team_tie?: boolean; slot?: number | null
 }
 interface Venue {
   id: string; name: string; short_name: string
