@@ -17,23 +17,22 @@ interface Venue {
   court_count: number; courts: string[]; pin_plain: string
 }
 type CourtZones = Record<string, { group: string[]; finals: string[] }>
-type StageKey = 'GROUP' | 'R32' | 'R16' | 'QF' | 'SF' | 'F' | 'ALL_FINALS' | '본선128강' | '본선64강' | '본선32강' | '본선16강' | '16강' | '8강' | '4강' | '결승'
+type StageKey = 'GROUP' | 'R32' | 'R16' | 'QF' | 'SF' | 'F' | 'ALL_FINALS' | '128강' | '64강' | '32강' | '16강' | '8강' | '4강' | '결승'
 
 const STAGE_TABS: { key: StageKey; label: string }[] = [
   { key: 'GROUP',      label: '예선' },
-  { key: '본선128강',  label: '128강' },
-  { key: '본선64강',   label: '64강' },
-  { key: '본선32강',   label: '32강' },
-  { key: '본선16강',   label: '본선16강' },
+  { key: '128강',      label: '128강' },
+  { key: '64강',       label: '64강' },
+  { key: '32강',       label: '32강' },
   { key: '16강',       label: '16강' },
   { key: '8강',        label: '8강' },
   { key: '4강',        label: '4강' },
   { key: '결승',       label: '결승' },
   { key: 'ALL_FINALS', label: '전체본선' },
 ]
-const ROUND_TO_STAGE: Record<string, string> = { R32:'FINALS', R16:'FINALS', QF:'FINALS', SF:'FINALS', F:'FINALS', '본선128강':'FINALS', '본선64강':'FINALS', '본선32강':'FINALS', '본선16강':'FINALS', '16강':'FINALS', '8강':'FINALS', '4강':'FINALS', '결승':'FINALS' }
-const ZONE_FINALS = new Set(['R16','QF','SF','F','16강','8강','4강','결승','본선128강','본선64강','본선32강','본선16강'])
-const STAGE_LABEL: Record<string, string> = { GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', ALL_FINALS:'전체본선', '본선128강':'128강', '본선64강':'64강', '본선32강':'32강', '본선16강':'16강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
+const ROUND_TO_STAGE: Record<string, string> = { R32:'FINALS', R16:'FINALS', QF:'FINALS', SF:'FINALS', F:'FINALS', '128강':'FINALS', '64강':'FINALS', '32강':'FINALS', '16강':'FINALS', '8강':'FINALS', '4강':'FINALS', '결승':'FINALS' }
+const ZONE_FINALS = new Set(['R16','QF','SF','F','16강','8강','4강','결승','128강','64강','32강'])
+const STAGE_LABEL: Record<string, string> = { GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', ALL_FINALS:'전체본선', '128강':'128강', '64강':'64강', '32강':'32강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
 
 function makeCourtNames(shortName: string, count: number): string[] {
   const prefix = shortName?.trim() || '코트'
@@ -348,7 +347,7 @@ export default function CourtsPage() {
 
   async function assignAllFinals() {
     const divName = divisions.find(d => d.id === autoDiv)?.name || ''; let total = 0
-    for (const round of ['본선128강','본선64강','본선32강','본선16강','16강','8강','4강','결승']) {
+    for (const round of ['128강','64강','32강','16강','8강','4강','결승']) {
       const pool    = getCourtPool(autoDiv, round)
       const targets = matches.filter(m => m.division_id === autoDiv && m.stage === (ROUND_TO_STAGE[round]||'FINALS') && m.round === round && !m.court && m.status !== 'FINISHED').sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true }))
       if (targets.length === 0) continue
