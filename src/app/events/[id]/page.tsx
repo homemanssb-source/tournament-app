@@ -29,23 +29,32 @@ function parsePlayers(raw: string): { name: string; club: string }[] {
   })
 }
 
-// 선수 쌍: 이름 굵게, 클럽명 아래 작게 각자 표시
+// 클럽명 최대 6자 축약
+function shortClub(club: string, max = 6): string {
+  return club.length > max ? club.slice(0, max) + '…' : club
+}
+
+// 선수 쌍: 이름 굵게, 클럽명 최대 6자 축약
 function PlayerPair({ raw, winner, trophy, align = 'left' }: { raw: string; winner?: boolean; trophy?: boolean; align?: 'left' | 'right' }) {
   const players = parsePlayers(raw)
   if (players.length === 0) {
     return <span className={`font-bold text-sm ${winner ? 'text-[#2d5016]' : 'text-stone-500'}`}>{raw || 'TBD'}</span>
   }
   return (
-    <div className={`flex items-start gap-1 min-w-0 ${align === 'right' ? 'flex-row-reverse' : 'flex-row'}`}>
+    <div className={`flex items-start gap-0.5 min-w-0 ${align === 'right' ? 'flex-row-reverse' : 'flex-row'}`}>
       {trophy && <span className="text-xs flex-shrink-0 self-start pt-0.5">🏆</span>}
       {players.map((p, i) => (
         <React.Fragment key={i}>
           {i > 0 && <span className="text-stone-300 self-start pt-0.5 text-xs flex-shrink-0">/</span>}
           <div className={`min-w-0 flex-1 ${align === 'right' ? 'text-right' : ''}`}>
-            {/* 이름: 절대 안잘림 */}
+            {/* 이름: 잘리지 않음 */}
             <div className={`text-sm font-bold leading-tight whitespace-nowrap ${winner ? 'text-[#2d5016]' : 'text-stone-700'}`}>{p.name}</div>
-            {/* 클럽명: 공간 부족하면 ellipsis */}
-            {p.club && <div className="text-[11px] text-stone-400 truncate leading-tight">{p.club}</div>}
+            {/* 클럽명: 최대 6자 + … */}
+            {p.club && (
+              <div className={`text-[10px] text-stone-400 leading-tight whitespace-nowrap ${align === 'right' ? 'text-right' : ''}`} title={p.club}>
+                {shortClub(p.club)}
+              </div>
+            )}
           </div>
         </React.Fragment>
       ))}
@@ -125,7 +134,7 @@ export default function EventDetailPage() {
     ])
     setTeamConfig(cfg)
     setClubs(clubList)
-    const filteredTies = divId ? tieList.filter(t => (t as any).division_id === divId) : tieList
+    const filteredTies = divId ? tieList.filter((t: any) => (t as any).division_id === divId) : tieList
     setTies(filteredTies)
 
     const map: Record<string, StandingWithClub[]> = {}
@@ -348,7 +357,7 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
     setLoading(true)
     supabase.from('v_group_board').select('*').eq('event_id', eventId).eq('division_id', divisionId)
       .order('group_num').order('team_num')
-      .then(({ data: rows }) => {
+      .then(({ data: rows }: { data: any[] | null }) => {
         const map = new Map<string, { label: string; num: number; teams: any[] }>()
         for (const r of (rows || [])) {
           if (!map.has(r.group_id)) map.set(r.group_id, { label: r.group_label, num: r.group_num, teams: [] })
@@ -388,7 +397,7 @@ function TournamentView({ eventId, divisionId }: { eventId: string; divisionId: 
     supabase.from('v_matches_with_teams').select('*')
       .eq('event_id', eventId).eq('division_id', divisionId).eq('stage', 'FINALS')
       .order('slot')
-      .then(({ data }) => {
+      .then(({ data }: { data: any[] | null }) => {
         // TournamentBracket이 기대하는 match_id 필드로 매핑
         const mapped = (data || []).map((m: any) => ({
           ...m,
@@ -576,6 +585,23 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
 function MatchResultRow({ m }: { m: any }) {
   const aWon = m.winner_team_id === m.team_a_id
   const bWon = m.winner_team_id === m.team_b_id
+
+  // ✅ 승자를 항상 왼쪽으로 (점수도 승자:패자 순으로 조정)
+  const leftName  = aWon ? m.team_a_name : m.team_b_name
+  const rightName = aWon ? m.team_b_name : m.team_a_name
+  const leftWon   = !!(m.winner_team_id)  // 왼쪽은 항상 승자 (winner 있을 때)
+  const rightWon  = false
+
+  // 점수 방향 조정: 승자 점수가 앞으로
+  let displayScore = m.score
+  if (m.score && bWon) {
+    // B가 이겼으면 원래 score가 "패자:승자" → 뒤집기
+    const parts = m.score.split(':')
+    if (parts.length === 2) displayScore = `${parts[1]}:${parts[0]}`
+  }
+
+  // winner_team_id 없으면 그냥 원래 순서
+  const noWinner = !m.winner_team_id
   return (
     <div className="bg-white rounded-xl border p-3">
       <div className="flex items-center justify-between text-xs text-stone-400 mb-2">
@@ -584,11 +610,20 @@ function MatchResultRow({ m }: { m: any }) {
       </div>
       <div className="flex items-center gap-2">
         <div className="flex-1 min-w-0">
-          <PlayerPair raw={m.team_a_name} winner={aWon} trophy={aWon} />
+          <PlayerPair
+            raw={noWinner ? m.team_a_name : leftName}
+            winner={noWinner ? aWon : leftWon}
+            trophy={noWinner ? aWon : leftWon}
+          />
         </div>
-        <span className="text-lg font-black mx-1 text-stone-800 flex-shrink-0">{m.score}</span>
+        <span className="text-lg font-black mx-1 text-stone-800 flex-shrink-0">{displayScore}</span>
         <div className="flex-1 min-w-0">
-          <PlayerPair raw={m.team_b_name} winner={bWon} trophy={bWon} align="right" />
+          <PlayerPair
+            raw={noWinner ? m.team_b_name : rightName}
+            winner={noWinner ? bWon : rightWon}
+            trophy={false}
+            align="right"
+          />
         </div>
       </div>
     </div>
