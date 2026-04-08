@@ -150,7 +150,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     // court 없는 본선 경기를 CourtMatch 형태로 변환 (TBD 후보 계산용)
     setAllFinalsMatches((rawMatches || []).map((m: any) => ({
       id: m.id, match_num: m.match_num || '',
-      court: m.court || null, court_order: m.court_order || 0,
+      court: m.court || '', court_order: m.court_order || 0,
       stage: m.stage || 'FINALS', round: m.round || '',
       status: m.status || 'PENDING', score: m.score || null,
       division_name: '', division_id: m.division_id || '',
@@ -170,9 +170,13 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     return () => clearInterval(i)
   }, [loadData])
 
+  // ✅ 날짜 자동 선택: 오늘 날짜 우선, 없으면 첫 번째 날짜
   useEffect(() => {
     const dates = [...new Set(Object.values(divMatchDates))].sort()
-    if (dates.length > 1 && dateFilter === 'ALL') setDateFilter(dates[0])
+    if (dates.length > 1 && dateFilter === 'ALL') {
+      const today = new Date().toISOString().slice(0, 10)
+      setDateFilter(dates.find(d => d === today) ?? dates[0])
+    }
   }, [divMatchDates])
 
   useEffect(() => {
@@ -306,7 +310,11 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
   })() : null
 
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
-  if (!courts.length) return <p className="text-center py-10 text-stone-400">아직 코트 배정이 없습니다.</p>
+
+  // ✅ 날짜가 2개 이상일 때는 날짜 탭을 먼저 보여줘야 함 (early return 금지)
+  const hasMultipleDates = [...new Set(Object.values(divMatchDates))].length > 1
+
+  if (!courts.length && !hasMultipleDates) return <p className="text-center py-10 text-stone-400">아직 코트 배정이 없습니다.</p>
 
   return (
     <div className="space-y-4">
@@ -343,8 +351,13 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
         )
       })()}
 
-      {/* 장소 탭 */}
-      {allVenues.length > 1 && (
+      {/* 코트 배정 없을 때 (날짜 탭은 위에 표시된 상태) */}
+      {!courts.length && (
+        <p className="text-center py-10 text-stone-400">아직 코트 배정이 없습니다.</p>
+      )}
+
+      {/* 장소 탭 — 코트 있을 때만 */}
+      {courts.length > 0 && allVenues.length > 1 && (
         <div className="bg-white rounded-xl border p-3">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-stone-500 font-medium whitespace-nowrap">📍 장소:</span>
@@ -362,8 +375,8 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
         </div>
       )}
 
-      {/* 검색창 */}
-      <div className="relative">
+      {/* 검색창 + 코트카드 — 코트 있을 때만 */}
+      {courts.length > 0 && <div className="relative">
         <div className="flex gap-2">
           <div className="relative flex-1">
             <input
@@ -551,6 +564,8 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
           )
         })}
       </div>
+      </div>}
+
     </div>
   )
 }
