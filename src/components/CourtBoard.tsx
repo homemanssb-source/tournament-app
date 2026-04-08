@@ -309,10 +309,10 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     }
   })() : null
 
-  if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
-
   // ✅ 날짜가 2개 이상일 때는 날짜 탭을 먼저 보여줘야 함 (early return 금지)
   const hasMultipleDates = [...new Set(Object.values(divMatchDates))].length > 1
+
+  if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
 
   if (!courts.length && !hasMultipleDates) return <p className="text-center py-10 text-stone-400">아직 코트 배정이 없습니다.</p>
 
