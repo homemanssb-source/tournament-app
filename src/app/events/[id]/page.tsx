@@ -45,7 +45,7 @@ function PlayerPair({ raw, winner, trophy, align = 'left' }: { raw: string; winn
       {trophy && <span className="text-xs flex-shrink-0 self-start pt-0.5">🏆</span>}
       {players.map((p, i) => (
         <React.Fragment key={i}>
-          {i > 0 && <span className="text-stone-300 self-start pt-0.5 text-xs flex-shrink-0">/</span>}
+          {i > 0 && <span className="text-stone-300 self-start text-sm flex-shrink-0">/</span>}
           <div className={`min-w-0 flex-1 ${align === 'right' ? 'text-right' : ''}`}>
             {/* 이름: 잘리지 않음 */}
             <div className={`text-sm font-bold leading-tight whitespace-nowrap ${winner ? 'text-[#2d5016]' : 'text-stone-700'}`}>{p.name}</div>
