@@ -41,23 +41,26 @@ function PlayerPair({ raw, winner, trophy, align = 'left' }: { raw: string; winn
     return <span className={`font-bold text-sm ${winner ? 'text-[#2d5016]' : 'text-stone-500'}`}>{raw || 'TBD'}</span>
   }
   return (
-    <div className={`flex items-start gap-0.5 min-w-0 ${align === 'right' ? 'flex-row-reverse' : 'flex-row'}`}>
-      {trophy && <span className="text-xs flex-shrink-0 self-start pt-0.5">🏆</span>}
-      {players.map((p, i) => (
-        <React.Fragment key={i}>
-          {i > 0 && <span className="text-stone-300 self-start text-sm flex-shrink-0">/</span>}
-          <div className={`min-w-0 flex-1 ${align === 'right' ? 'text-right' : ''}`}>
-            {/* 이름: 잘리지 않음 */}
-            <div className={`text-sm font-bold leading-tight whitespace-nowrap ${winner ? 'text-[#2d5016]' : 'text-stone-700'}`}>{p.name}</div>
-            {/* 클럽명: 최대 6자 + … */}
-            {p.club && (
-              <div className={`text-[10px] text-stone-400 leading-tight whitespace-nowrap ${align === 'right' ? 'text-right' : ''}`} title={p.club}>
-                {shortClub(p.club)}
-              </div>
-            )}
-          </div>
-        </React.Fragment>
-      ))}
+    <div className={`min-w-0 ${align === 'right' ? 'text-right' : ''}`}>
+      {/* 이름 줄: 슬러쉬를 이름과 같은 줄 인라인으로 */}
+      <div className={`text-sm font-bold leading-tight whitespace-nowrap ${winner ? 'text-[#2d5016]' : 'text-stone-700'}`}>
+        {trophy && <span className="mr-0.5">🏆</span>}
+        {players.map((p, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span className="text-stone-300 font-normal mx-0.5">/</span>}
+            {p.name}
+          </React.Fragment>
+        ))}
+      </div>
+      {/* 클럽명 줄 */}
+      <div className={`text-[10px] text-stone-400 leading-tight whitespace-nowrap ${align === 'right' ? 'text-right' : ''}`}>
+        {players.map((p, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <span className="mx-0.5">/</span>}
+            {p.club && <span title={p.club}>{shortClub(p.club)}</span>}
+          </React.Fragment>
+        ))}
+      </div>
     </div>
   )
 }
