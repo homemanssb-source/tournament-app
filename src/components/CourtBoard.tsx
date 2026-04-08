@@ -170,12 +170,12 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     return () => clearInterval(i)
   }, [loadData])
 
-  // ✅ 날짜 자동 선택: 오늘 날짜 우선, 없으면 첫 번째 날짜
   useEffect(() => {
     const dates = [...new Set(Object.values(divMatchDates))].sort()
     if (dates.length > 1 && dateFilter === 'ALL') {
       const today = new Date().toISOString().slice(0, 10)
-      setDateFilter(dates.find(d => d === today) ?? dates[0])
+      const found = dates.find(d => d === today)
+      setDateFilter(found !== undefined ? found : dates[0])
     }
   }, [divMatchDates])
 
@@ -286,29 +286,26 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     setResult({ name: target, court: '', idx: -1 })
   }
 
-  // ✅ searchInfo: IIFE 제거 → SWC 파서 오류 방지
-  const _siCms     = searchResult?.court ? (byCourt.get(searchResult.court) || []).slice().sort((a, b) => (a.court_order || 0) - (b.court_order || 0)) : []
-  const _siLiveIdx = _siCms.findIndex(m => m.status === 'IN_PROGRESS')
-  const _siPendIdx = _siCms.findIndex(m => m.status === 'PENDING')
-  const _siCurIdx  = _siLiveIdx >= 0 ? _siLiveIdx : _siPendIdx
-  const _siIdx     = searchResult?.idx ?? -1
-  const _siIsLive  = _siIdx === _siLiveIdx && _siLiveIdx >= 0
-  const _siHasLive = _siLiveIdx >= 0
-  const _siWait    = _siIdx > _siCurIdx ? _siIdx - _siCurIdx : 0
-  const _siLabel   = _siIsLive ? '현재 경기 중'
-    : (_siIdx === _siCurIdx && !_siHasLive) ? '지금 내 차례'
-    : (_siIdx === _siCurIdx && _siHasLive)  ? '다음 대기'
-    : _siWait === 1 ? '다음 대기'
-    : `${_siWait}번째 대기`
-  const _siUrgency = (_siIsLive || (_siIdx === _siCurIdx && !_siHasLive)) ? 2
-    : (_siIdx === _siCurIdx || _siWait === 1) ? 1 : 0
-  const searchInfo = searchResult?.court ? {
-    urgency: _siUrgency,
-    posLabel: _siLabel,
-    wait:  _siWait - 1 < 0 ? 0 : _siWait - 1,
-    total: _siCms.length,
-    done:  _siCms.filter(m => m.status === 'FINISHED').length,
-  } : null
+  function calcSearchInfo() {
+    if (!searchResult?.court) return null
+    const cms = (byCourt.get(searchResult.court) || []).slice().sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
+    const liveIdx = cms.findIndex(m => m.status === 'IN_PROGRESS')
+    const pendIdx = cms.findIndex(m => m.status === 'PENDING')
+    const curIdx  = liveIdx >= 0 ? liveIdx : pendIdx
+    const idx     = searchResult.idx
+    const isLive  = idx === liveIdx && liveIdx >= 0
+    const hasLive = liveIdx >= 0
+    const waitNum = idx > curIdx ? idx - curIdx : 0
+    let posLabel = ''
+    let urgency  = 0
+    if (isLive) { posLabel = '현재 경기 중'; urgency = 2 }
+    else if (idx === curIdx && !hasLive) { posLabel = '지금 내 차례'; urgency = 2 }
+    else if (idx === curIdx &&  hasLive) { posLabel = '다음 대기';    urgency = 1 }
+    else if (waitNum === 1)              { posLabel = '다음 대기';    urgency = 1 }
+    else { posLabel = waitNum + '번째 대기'; urgency = 0 }
+    return { urgency, posLabel, wait: waitNum - 1 < 0 ? 0 : waitNum - 1, total: cms.length, done: cms.filter(m => m.status === 'FINISHED').length }
+  }
+  const searchInfo = calcSearchInfo()
 
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
 
@@ -347,7 +344,6 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
         )
       })()}
 
-      {/* 코트 배정 없을 때 메시지 */}
       {!courts.length && (
         <p className="text-center py-10 text-stone-400">아직 코트 배정이 없습니다.</p>
       )}
@@ -371,8 +367,8 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
         </div>
       )}
 
-      {/* 검색창 + 코트카드 — 코트 있을 때만 */}
-      {courts.length > 0 && <div className="relative">
+      {/* 검색창 */}
+      <div className="relative">
         <div className="flex gap-2">
           <div className="relative flex-1">
             <input
@@ -560,8 +556,6 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
           )
         })}
       </div>
-      </div>}
-
     </div>
   )
 }
