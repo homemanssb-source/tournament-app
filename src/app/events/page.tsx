@@ -20,7 +20,6 @@ interface EventWithDivs {
   divisions: DivSlim[]
 }
 
-// 목록에 표시할 카드 단위 (날짜별로 분리됨)
 interface EventCardItem {
   event: EventWithDivs
   date: string | null
@@ -33,28 +32,17 @@ function fmtDate(d: string) {
   return `${dt.getMonth() + 1}월 ${dt.getDate()}일`
 }
 
-// 이벤트 → 날짜별 카드 목록으로 분리
 function splitEventToCards(e: EventWithDivs): EventCardItem[] {
   const dated = e.divisions.filter(d => d.match_date)
   const uniqueDates = [...new Set(dated.map(d => d.match_date!))].sort()
-
-  // 2일 이상 → 날짜별 카드 분리
   if (uniqueDates.length > 1) {
     return uniqueDates.map(date => ({
-      event: e,
-      date,
+      event: e, date,
       divisions: dated.filter(d => d.match_date === date),
       isMultiDay: true,
     }))
   }
-
-  // 1일 또는 날짜 미지정 → 카드 1개
-  return [{
-    event: e,
-    date: uniqueDates[0] || null,
-    divisions: e.divisions,
-    isMultiDay: false,
-  }]
+  return [{ event: e, date: uniqueDates[0] || null, divisions: e.divisions, isMultiDay: false }]
 }
 
 export default function EventsPage() {
@@ -76,18 +64,18 @@ export default function EventsPage() {
       })
   }, [])
 
-  // 2일 대회는 날짜별 카드 2개로 분리
   const cards: EventCardItem[] = events.flatMap(e => splitEventToCards(e))
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-stone-50">
       <header className="bg-white border-b sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link href="/" className="text-stone-400 hover:text-stone-600">←</Link>
           <h1 className="text-lg font-bold">🎾 대회 목록</h1>
         </div>
       </header>
-      <main className="max-w-2xl mx-auto px-4 py-6">
+
+      <main className="max-w-2xl mx-auto px-4 py-5">
         {loading ? (
           <p className="text-center py-20 text-stone-400">불러오는 중...</p>
         ) : cards.length === 0 ? (
@@ -97,66 +85,94 @@ export default function EventsPage() {
             {cards.map((item, idx) => {
               const e = item.event
               const isPreparing = e.status === 'preparing'
+              const isActive = e.status === 'active'
+              const isCompleted = e.status === 'completed'
               const detailHref = item.date
                 ? `/events/${e.id}?date=${item.date}`
                 : `/events/${e.id}`
 
+              // 표시할 날짜
+              const displayDate = item.isMultiDay && item.date
+                ? fmtDate(item.date)
+                : e.date
+
+              // 상태 뱃지
+              const statusBadge = isPreparing
+                ? <span className="text-xs px-2.5 py-1 rounded-full bg-stone-100 text-stone-400 font-medium">🔒 준비중</span>
+                : isActive
+                  ? <span className="text-xs px-2.5 py-1 rounded-full bg-green-100 text-green-700 font-medium">진행중</span>
+                  : isCompleted
+                    ? <span className="text-xs px-2.5 py-1 rounded-full bg-stone-100 text-stone-500 font-medium">완료</span>
+                    : <span className="text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 font-medium">준비중</span>
+
+              // 종목 뱃지 색
+              const typeBadgeClass = isPreparing
+                ? 'bg-stone-100 text-stone-400'
+                : e.event_type === 'both' ? 'bg-purple-100 text-purple-700'
+                : e.event_type === 'team' ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-sky-100 text-sky-700'
+
+              const typeLabel = e.event_type === 'both' ? '개인+단체'
+                : e.event_type === 'team' ? '단체전'
+                : e.event_type === 'individual' ? '개인전'
+                : null
+
               const cardInner = (
-                <div>
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h2 className={`font-bold text-lg ${isPreparing ? 'text-stone-400' : ''}`}>
-                          {e.name}
-                        </h2>
-                        {e.event_type && (
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${
-                            isPreparing ? 'bg-stone-100 text-stone-400' :
-                            e.event_type === 'both' ? 'bg-purple-100 text-purple-700' :
-                            e.event_type === 'team' ? 'bg-green-100 text-green-700' :
-                            'bg-blue-100 text-blue-700'
+                <div className="flex items-center gap-3">
+                  {/* 왼쪽: 상태 컬러 바 */}
+                  <div className={`w-1 self-stretch rounded-full flex-shrink-0 ${
+                    isPreparing ? 'bg-stone-200' :
+                    isActive ? 'bg-green-400' :
+                    isCompleted ? 'bg-stone-300' : 'bg-amber-300'
+                  }`} />
+
+                  {/* 본문 */}
+                  <div className="flex-1 min-w-0 py-0.5">
+                    {/* 대회명 + 종목뱃지 한 줄 */}
+                    <div className="flex items-center gap-2 min-w-0">
+                      <h2 className={`font-bold text-base leading-snug truncate ${isPreparing ? 'text-stone-400' : 'text-stone-800'}`}>
+                        {e.name}
+                      </h2>
+                      {typeLabel && (
+                        <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap flex-shrink-0 ${typeBadgeClass}`}>
+                          {typeLabel}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 날짜 · 장소 */}
+                    <p className={`text-xs mt-0.5 ${isPreparing ? 'text-stone-300' : 'text-stone-400'}`}>
+                      {displayDate}{e.location ? ` · ${e.location}` : ''}
+                    </p>
+
+                    {/* 부서 태그 */}
+                    {item.divisions.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {item.divisions.map(d => (
+                          <span key={d.id} className={`text-[11px] px-2 py-0.5 rounded-full ${
+                            isPreparing ? 'bg-stone-100 text-stone-300' : 'bg-blue-50 text-blue-600'
                           }`}>
-                            {e.event_type === 'both' ? '개인+단체' : e.event_type === 'team' ? '단체전' : '개인전'}
+                            {d.name}
                           </span>
-                        )}
+                        ))}
                       </div>
-                      {/* 날짜 표시: 2일 대회면 해당 날짜, 아니면 event.date */}
-                      <p className={`text-sm mt-1 ${isPreparing ? 'text-stone-400' : 'text-stone-500'}`}>
-                        {item.isMultiDay && item.date ? fmtDate(item.date) : e.date} · {e.location}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2 ml-3 shrink-0">
-                      <span className={`text-xs px-2 py-1 rounded-full ${
-                        isPreparing ? 'bg-amber-100 text-amber-700' :
-                        e.status === 'active' ? 'bg-green-100 text-green-700' :
-                        e.status === 'completed' ? 'bg-stone-100 text-stone-500' :
-                        'bg-amber-100 text-amber-700'
-                      }`}>
-                        {isPreparing ? '🔒 준비중' : e.status === 'active' ? '진행중' : e.status === 'completed' ? '완료' : '준비중'}
-                      </span>
-                      {!isPreparing && <span className="text-stone-400">→</span>}
-                    </div>
+                    )}
                   </div>
 
-                  {/* 부서 태그 */}
-                  {item.divisions.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {item.divisions.map(d => (
-                        <span key={d.id} className={`text-xs px-2 py-0.5 rounded-full ${
-                          isPreparing ? 'bg-stone-100 text-stone-400' : 'bg-blue-50 text-blue-700'
-                        }`}>
-                          {d.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                  {/* 오른쪽: 상태뱃지 + 화살표 */}
+                  <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                    {statusBadge}
+                    {!isPreparing && (
+                      <span className="text-stone-300 text-sm">→</span>
+                    )}
+                  </div>
                 </div>
               )
 
               if (isPreparing) {
                 return (
                   <div key={`${e.id}-${item.date || idx}`}
-                    className="block bg-stone-50 rounded-xl border border-stone-200 p-4 opacity-60 cursor-not-allowed">
+                    className="bg-white rounded-2xl border border-stone-100 px-4 py-3 opacity-60 cursor-not-allowed">
                     {cardInner}
                   </div>
                 )
@@ -164,7 +180,7 @@ export default function EventsPage() {
 
               return (
                 <Link key={`${e.id}-${item.date || idx}`} href={detailHref}
-                  className="block bg-white rounded-xl border p-4 hover:border-stone-400 transition-all">
+                  className="block bg-white rounded-2xl border border-stone-200 px-4 py-3 hover:border-[#2d5016] hover:shadow-sm transition-all active:scale-[0.99]">
                   {cardInner}
                 </Link>
               )
