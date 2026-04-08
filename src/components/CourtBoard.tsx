@@ -323,11 +323,6 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
         </div>
       </div>
 
-      {/* 날짜 없고 코트도 없으면 메시지만 */}
-      {Object.values(divMatchDates).length === 0 && !courts.length && (
-        <p className="text-center py-10 text-stone-400">아직 코트 배정이 없습니다.</p>
-      )}
-
       {/* 날짜 탭 */}
       {(() => {
         const uniqueDates = [...new Set(Object.values(divMatchDates))].sort()
@@ -351,12 +346,12 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
         )
       })()}
 
-      {/* 코트 배정 없을 때 — 날짜탭은 위에 보임, 단순 날짜없는 경우는 이미 처리됨 */}
-      {!courts.length && Object.values(divMatchDates).length > 0 && (
+      {/* 코트 배정 없을 때 메시지 */}
+      {!courts.length && (
         <p className="text-center py-10 text-stone-400">아직 코트 배정이 없습니다.</p>
       )}
 
-      {/* 장소 탭 — 코트 있을 때만 */}
+      {/* 장소 탭 */}
       {courts.length > 0 && allVenues.length > 1 && (
         <div className="bg-white rounded-xl border p-3">
           <div className="flex items-center gap-2 flex-wrap">
