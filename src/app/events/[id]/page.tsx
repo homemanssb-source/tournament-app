@@ -7,7 +7,7 @@
 'use client'
 import React from 'react'
 import { useEffect, useState, useCallback } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase, Division, Match } from '@/lib/supabase'
 import TournamentBracket from '@/components/TournamentBracket'
@@ -69,6 +69,8 @@ async function logAccess(eventId: string, page: string, tab?: string) {
 
 export default function EventDetailPage() {
   const { id } = useParams()
+  const searchParams = useSearchParams()
+  const dateFilter = searchParams.get('date') // 대회목록에서 넘어온 날짜 (예: "2025-05-10")
   const eventId = id as string
   const [event, setEvent] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -99,14 +101,20 @@ export default function EventDetailPage() {
       if (ev?.event_type === 'team') setMode('team')
       else setMode('individual')
 
-      setDivisions(divs || [])
-      if (divs?.length) setActiveDivision(divs[0].id)
-      setTeamDivisions(divs || [])
-      if (divs?.length) setSelectedTeamDiv(divs[0].id)
+      const allDivs = divs || []
+      setDivisions(allDivs)
+      setTeamDivisions(allDivs)
+
+      // ✅ dateFilter(쿼리스트링)가 있으면 해당 날짜 부서만, 없으면 전체
+      const filtered = dateFilter
+        ? allDivs.filter((d: any) => d.match_date === dateFilter)
+        : allDivs
+      const firstDiv = filtered[0] || allDivs[0]
+      if (firstDiv) { setActiveDivision(firstDiv.id); setSelectedTeamDiv(firstDiv.id) }
 
       // ✅ 개인전이면 팀 데이터 로드 스킵
       if (ev?.event_type === 'team' || ev?.event_type === 'both') {
-        await loadTeamData(divs?.[0]?.id)
+        await loadTeamData(firstDiv?.id)
       }
       setLoading(false)
       logAccess(eventId, 'event_detail')
@@ -231,41 +239,44 @@ export default function EventDetailPage() {
           </div>
         )}
 
-        {mode === 'individual' && divisions.length > 1 && iTab !== 'courts' && (
-          <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
-            {divisions.map(d => (
-              <button key={d.id} onClick={() => setActiveDivision(d.id)}
-                className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                  activeDivision === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
-                }`}>
-                {d.name}
-                {(d as any).match_date && (
-                  <span className="ml-1 text-[10px] opacity-80">
-                    {new Date((d as any).match_date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
+        {mode === 'individual' && iTab !== 'courts' && (() => {
+          // dateFilter 있으면 해당 날짜 부서만, 없으면 전체
+          const visibleDivs = dateFilter
+            ? divisions.filter((d: any) => d.match_date === dateFilter)
+            : divisions
+          if (visibleDivs.length <= 1) return null
+          return (
+            <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
+              {visibleDivs.map(d => (
+                <button key={d.id} onClick={() => setActiveDivision(d.id)}
+                  className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                    activeDivision === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
+                  }`}>
+                  {d.name}
+                </button>
+              ))}
+            </div>
+          )
+        })()}
 
-        {mode === 'team' && teamDivisions.length > 1 && tTab !== 'courts' && (
-          <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
-            {teamDivisions.map(d => (
-              <button key={d.id} onClick={() => handleTeamDivChange(d.id)}
-                className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                  selectedTeamDiv === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
-                }`}>
-                {d.name}
-                {(d as any).match_date && (
-                  <span className="ml-1 text-[10px] opacity-80">
-                    {new Date((d as any).match_date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
+        {mode === 'team' && tTab !== 'courts' && (() => {
+          const visibleDivs = dateFilter
+            ? teamDivisions.filter((d: any) => d.match_date === dateFilter)
+            : teamDivisions
+          if (visibleDivs.length <= 1) return null
+          return (
+            <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
+              {visibleDivs.map(d => (
+                <button key={d.id} onClick={() => handleTeamDivChange(d.id)}
+                  className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                    selectedTeamDiv === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
+                  }`}>
+                  {d.name}
+                </button>
+              ))}
+            </div>
+          )
+        })()}
 
         <div className="max-w-5xl mx-auto px-4 flex border-t border-white/10">
           {mode === 'individual' ? (
