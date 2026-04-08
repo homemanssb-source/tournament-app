@@ -309,12 +309,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     }
   })() : null
 
-  // ✅ 날짜가 2개 이상일 때는 날짜 탭을 먼저 보여줘야 함 (early return 금지)
-  const hasMultipleDates = [...new Set(Object.values(divMatchDates))].length > 1
-
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
-
-  if (!courts.length && !hasMultipleDates) return <p className="text-center py-10 text-stone-400">아직 코트 배정이 없습니다.</p>
 
   return (
     <div className="space-y-4">
@@ -327,6 +322,11 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
           <button onClick={() => loadData()} className="text-xs px-2 py-1 bg-stone-100 rounded-lg hover:bg-stone-200">새로고침</button>
         </div>
       </div>
+
+      {/* 날짜 없고 코트도 없으면 메시지만 */}
+      {Object.values(divMatchDates).length === 0 && !courts.length && (
+        <p className="text-center py-10 text-stone-400">아직 코트 배정이 없습니다.</p>
+      )}
 
       {/* 날짜 탭 */}
       {(() => {
@@ -351,8 +351,8 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
         )
       })()}
 
-      {/* 코트 배정 없을 때 (날짜 탭은 위에 표시된 상태) */}
-      {!courts.length && (
+      {/* 코트 배정 없을 때 — 날짜탭은 위에 보임, 단순 날짜없는 경우는 이미 처리됨 */}
+      {!courts.length && Object.values(divMatchDates).length > 0 && (
         <p className="text-center py-10 text-stone-400">아직 코트 배정이 없습니다.</p>
       )}
 
