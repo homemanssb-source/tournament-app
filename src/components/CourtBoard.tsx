@@ -492,7 +492,6 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
                 {doneCount > 0 && isExpanded && doneMs.map(m => (
                   <div key={m.id} className="rounded-lg px-3 py-2 text-xs bg-stone-50 border border-stone-100 opacity-50">
                     <div className="flex items-center justify-between gap-1 mb-0.5">
-                      <span className="text-stone-400 font-mono">#{cms.indexOf(m) + 1}</span>
                       <span className="text-stone-400">{m.division_name}</span>
                     </div>
                     {m.is_team_tie ? (
@@ -527,7 +526,6 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
                     }`}>
                       <div className="flex items-center justify-between gap-1 mb-0.5">
                         <div className="flex items-center gap-1">
-                          <span className="text-stone-400 font-mono">#{origIdx + 1}</span>
                           {m.is_team_tie && <span className="text-[9px] bg-blue-600 text-white px-1 rounded">단체</span>}
                           {isLiveMat   && <span className="text-red-500 animate-pulse text-[10px]">● LIVE</span>}
                           {!isLiveMat && isCurrent && <span className="text-amber-600 text-[10px] font-bold">▶ 현재</span>}
