@@ -25,13 +25,15 @@ function shortenClub(club: string | null | undefined): string {
 }
 
 // "홍길동(제주하나)/홍길금(제주아라)" 형식 생성
-// p1Name이 비어있으면 클럽 괄호 없이 처리
 function buildTeamName(p1Name: string, p1Club: string | null, p2Name: string, p2Club: string | null): string {
   const p1 = p1Name ? (p1Club ? `${p1Name}(${p1Club})` : p1Name) : '';
   const p2 = p2Name ? (p2Club ? `${p2Name}(${p2Club})` : p2Name) : '';
   if (p1 && p2) return `${p1}/${p2}`;
   return p1 || p2;
 }
+
+// 삭제/취소로 간주할 team.status 값 목록 (클라이언트 필터)
+const EXCLUDED_TEAM_STATUSES = ['deleted', 'cancelled', 'canceled', '삭제', '취소', 'withdrawn'];
 
 export async function POST(request: NextRequest) {
   try {
@@ -69,20 +71,28 @@ export async function POST(request: NextRequest) {
       if (matched) divisionMap[aDiv.division_id] = matched.id;
     }
 
-    // 4. 앱A event_entries + teams 가져오기 (삭제/취소 제외: pending, confirmed 만)
-    const { data: entries, error: entErr } = await appA
+    // 4. 앱A event_entries + teams 전체 가져오기 (status 컬럼 없으므로 필터 없이 조회)
+    const { data: allEntries, error: entErr } = await appA
       .from('event_entries')
       .select('*, team:teams(*)')
-      .eq('event_id', app_a_event_id)
-      .in('status', ['pending', 'confirmed']);
+      .eq('event_id', app_a_event_id);
     if (entErr) {
       return NextResponse.json({ success: false, error: 'appA entries 조회 실패: ' + entErr.message }, { status: 500 });
     }
-    if (!entries || entries.length === 0) {
+    if (!allEntries || allEntries.length === 0) {
       return NextResponse.json({ success: true, message: '동기화할 데이터 없음', synced: 0, total: 0 });
     }
 
-    // 5. 필요한 member_id 목록 수집 → 한 번에 조회
+    // 5. 삭제/취소 팀 클라이언트 필터링 (team.status 기준)
+    const entries = allEntries.filter((entry: any) => {
+      const teamStatus = entry.team?.status;
+      if (!teamStatus) return true; // status 컬럼 없으면 포함
+      return !EXCLUDED_TEAM_STATUSES.includes(String(teamStatus).toLowerCase());
+    });
+
+    const excludedCount = allEntries.length - entries.length;
+
+    // 6. 필요한 member_id 목록 수집 → 한 번에 조회
     const memberIds = new Set<string>();
     for (const entry of entries) {
       if (entry.team?.member1_id) memberIds.add(entry.team.member1_id);
@@ -191,7 +201,8 @@ export async function POST(request: NextRequest) {
       success:   true,
       synced:    syncedCount,
       skipped:   skippedCount,
-      total:     entries.length,
+      excluded:  excludedCount,
+      total:     allEntries.length,
       unmatched: unmatched.length > 0 ? unmatched : undefined,
       errors:    errors.length > 0 ? errors : undefined,
     });
