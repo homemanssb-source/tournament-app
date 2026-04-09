@@ -142,6 +142,7 @@ export default function CourtsPage() {
 
   const [dragMatch, setDragMatch]     = useState<string | null>(null)
   const [touchDragId, setTouchDragId] = useState<string | null>(null)
+  const touchDragIdRef = useRef<string | null>(null)
   const [touchOver, setTouchOver]     = useState<string | null>(null)
   const courtOrderRef = useRef<Record<string, number>>({})
 
@@ -558,22 +559,31 @@ export default function CourtsPage() {
   function handleDragOver(e: React.DragEvent) { e.preventDefault() }
   function handleDropOnCourt(court: string) { if (!dragMatch) return; assignItemToCourt(dragMatch, court); setDragMatch(null) }
   function handleDropOnUnassigned() { if (!dragMatch) return; unassignItem(dragMatch); setDragMatch(null) }
-  function handleTouchStart(id: string) { setTouchDragId(id) }
+  function handleTouchStart(id: string) { touchDragIdRef.current = id; setTouchDragId(id) }
+  const touchOverRef = useRef<string | null>(null)
   function handleTouchMove(e: React.TouchEvent) {
+    // 드래그 중이 아니면 즉시 리턴 — 일반 스크롤 시 리렌더 방지
+    if (!touchDragIdRef.current) return
     e.preventDefault()
     const touch = e.touches[0]
     const el = document.elementFromPoint(touch.clientX, touch.clientY)
     const courtEl      = el?.closest('[data-court]') as HTMLElement | null
     const unassignedEl = el?.closest('[data-unassigned]') as HTMLElement | null
-    if (courtEl) setTouchOver('court:' + courtEl.dataset.court)
-    else if (unassignedEl) setTouchOver('unassigned')
-    else setTouchOver(null)
+    const next = courtEl ? 'court:' + courtEl.dataset.court : unassignedEl ? 'unassigned' : null
+    // 값이 바뀔 때만 state 업데이트 — 불필요한 리렌더 제거
+    if (next !== touchOverRef.current) {
+      touchOverRef.current = next
+      setTouchOver(next)
+    }
   }
   function handleTouchEnd() {
-    if (!touchDragId || !touchOver) { setTouchDragId(null); setTouchOver(null); return }
-    if (touchOver === 'unassigned') unassignItem(touchDragId)
-    else if (touchOver.startsWith('court:')) assignItemToCourt(touchDragId, touchOver.slice(6))
+    const dragId = touchDragIdRef.current
+    const over   = touchOverRef.current
+    touchDragIdRef.current = null; touchOverRef.current = null
     setTouchDragId(null); setTouchOver(null)
+    if (!dragId || !over) return
+    if (over === 'unassigned') unassignItem(dragId)
+    else if (over.startsWith('court:')) assignItemToCourt(dragId, over.slice(6))
   }
 
   // ✅ [FIX-①②⑤] tiesToMatchSlim: 글로벌 court_number → courtName, DB 실제 court_order 사용
