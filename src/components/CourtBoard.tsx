@@ -91,6 +91,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
   // ✅ 핵심: query와 matches를 ref로 유지 → 모바일 blur로 state 소실되어도 검색 동작
   const queryRef   = useRef('')
   const matchesRef = useRef<CourtMatch[]>([])
+  const dateFilteredRef = useRef<CourtMatch[]>([])
   useEffect(() => { matchesRef.current = matches }, [matches])
 
   const loadVenues = useCallback(async () => {
@@ -209,6 +210,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     if (divIds.length === 0) return []
     return matches.filter(m => m.is_team_tie || divIds.includes(m.division_id))
   }, [matches, dateFilter, divMatchDates])
+  useEffect(() => { dateFilteredRef.current = dateFilteredMatches }, [dateFilteredMatches])
 
   // ✅ 전체 경기 = court 있는 경기 + court 없는 본선 경기 → TBD 후보 계산에 사용
   const allMatches = React.useMemo(() => {
@@ -261,7 +263,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     setShowSugg(filtered.length > 0)
   }
 
-  // ✅ matchesRef 사용 → 모바일 blur 후 state 소실되어도 최신 matches로 검색
+  // ✅ dateFilteredRef 사용 → 날짜 필터 적용된 경기만 검색 (calcSearchInfo와 동일 기준)
   function doSearch(name?: string) {
     const target = (name !== undefined ? name : queryRef.current).trim()
     queryRef.current = target
@@ -271,7 +273,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     if (!target) return
 
     const grouped = new Map<string, CourtMatch[]>()
-    for (const m of matchesRef.current) {
+    for (const m of dateFilteredRef.current) {
       if (!m.court) continue
       if (!grouped.has(m.court)) grouped.set(m.court, [])
       grouped.get(m.court)!.push(m)
@@ -492,6 +494,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
                 {doneCount > 0 && isExpanded && doneMs.map(m => (
                   <div key={m.id} className="rounded-lg px-3 py-2 text-xs bg-stone-50 border border-stone-100 opacity-50">
                     <div className="flex items-center justify-between gap-1 mb-0.5">
+                      <span className="text-stone-400 font-mono">#{cms.indexOf(m) + 1}</span>
                       <span className="text-stone-400">{m.division_name}</span>
                     </div>
                     {m.is_team_tie ? (
@@ -526,6 +529,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
                     }`}>
                       <div className="flex items-center justify-between gap-1 mb-0.5">
                         <div className="flex items-center gap-1">
+                          <span className="text-stone-400 font-mono">#{origIdx + 1}</span>
                           {m.is_team_tie && <span className="text-[9px] bg-blue-600 text-white px-1 rounded">단체</span>}
                           {isLiveMat   && <span className="text-red-500 animate-pulse text-[10px]">● LIVE</span>}
                           {!isLiveMat && isCurrent && <span className="text-amber-600 text-[10px] font-bold">▶ 현재</span>}
