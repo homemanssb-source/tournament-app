@@ -495,7 +495,7 @@ export default function PinMatchesPage() {
                             </div>
                             {m.court ? (
                               <span className="text-xs px-2.5 py-0.5 rounded-full bg-[#2d5016]/10 text-[#2d5016] font-bold">
-                                🎾 {m.court} #{m.court_order}
+                                🎾 {m.court}
                               </span>
                             ) : (
                               <span className="text-xs text-stone-400">코트 미배정</span>
@@ -686,7 +686,6 @@ function FinishedQueue({ items }: { items: CourtQueueMatch[] }) {
           {items.map(q => (
             <div key={q.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-stone-300">
               <span className="w-4">✓</span>
-              <span className="w-5 font-mono">#{q.court_order}</span>
               <span className="flex-1 truncate line-through">{q.team_a_name} vs {q.team_b_name}</span>
             </div>
           ))}
@@ -753,7 +752,6 @@ function CourtQueue({ queue, myMatchId, court }: {
                          'text-stone-500'
               }`}>
                 <span className="w-4">{badge}</span>
-                <span className="w-5 font-mono text-stone-400">#{q.court_order}</span>
                 <span className="flex-1 truncate">{q.team_a_name} vs {q.team_b_name}</span>
                 {isMe && <span className="text-blue-500 flex-shrink-0 font-bold">← 내 경기</span>}
               </div>
