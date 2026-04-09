@@ -162,43 +162,31 @@ export default function PinMatchesPage() {
     if (courts.length > 0) {
       const myDivIds = [...new Set(myMatches.map(m => m.division_id).filter(Boolean))]
 
-      const [divResult, matchResult] = await Promise.all([
-        myDivIds.length > 0
-          ? supabase.from('divisions').select('id, match_date').in('id', myDivIds)
-          : Promise.resolve({ data: [] }),
-        supabase
-          .from('v_matches_with_teams')
-          .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
-          .eq('event_id', s.event_id)
-          .in('court', courts)
-          .order('court').order('court_order'),
-      ])
+      // 내 부서의 날짜 조회
+      const { data: divRows } = myDivIds.length > 0
+        ? await supabase.from('divisions').select('id, match_date').in('id', myDivIds)
+        : { data: [] }
 
       const myDates = [...new Set(
-        (divResult.data || []).map((d: any) => d.match_date).filter(Boolean)
+        (divRows || []).map((d: any) => d.match_date).filter(Boolean)
       )] as string[]
 
-      // 내 날짜에 해당하는 전체 부서 ID 조회
-      let allowedDivIds: Set<string> | null = null
+      // v_matches_with_teams에서 코트 경기 조회 — match_date를 DB에서 직접 필터
+      let matchQuery = supabase
+        .from('v_matches_with_teams')
+        .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
+        .eq('event_id', s.event_id)
+        .in('court', courts)
+        .order('court').order('court_order')
+
+      // 날짜가 있으면 DB 쿼리 레벨에서 필터
       if (myDates.length > 0) {
-        const { data: sameDateDivs } = await supabase
-          .from('divisions')
-          .select('id')
-          .eq('event_id', s.event_id)
-          .in('match_date', myDates)
-        if (sameDateDivs && sameDateDivs.length > 0) {
-          allowedDivIds = new Set(sameDateDivs.map((d: any) => d.id))
-        }
+        matchQuery = matchQuery.in('match_date', myDates)
       }
 
-      const rawMatches = matchResult.data
+      const { data: rawMatches } = await matchQuery
 
-      const allMatches = (rawMatches || []).filter((m: any) => {
-        if (m.score === 'BYE') return false
-        // 날짜 필터: 허용된 부서 ID에 속하는 경기만
-        if (allowedDivIds && !allowedDivIds.has(m.division_id)) return false
-        return true
-      })
+      const allMatches = (rawMatches || []).filter((m: any) => m.score !== 'BYE')
 
       for (const court of courts) {
         const q = allMatches
