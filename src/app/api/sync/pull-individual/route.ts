@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
       if (matched) divisionMap[aDiv.division_id] = matched.id;
     }
 
-    // 4. 앱A event_entries + teams 전체 가져오기 (status 컬럼 없으므로 필터 없이 조회)
+    // 4. 앱A event_entries + teams 전체 가져오기
     const { data: allEntries, error: entErr } = await appA
       .from('event_entries')
       .select('*, team:teams(*)')
@@ -86,10 +86,9 @@ export async function POST(request: NextRequest) {
     // 5. 삭제/취소 팀 클라이언트 필터링 (team.status 기준)
     const entries = allEntries.filter((entry: any) => {
       const teamStatus = entry.team?.status;
-      if (!teamStatus) return true; // status 컬럼 없으면 포함
+      if (!teamStatus) return true;
       return !EXCLUDED_TEAM_STATUSES.includes(String(teamStatus).toLowerCase());
     });
-
     const excludedCount = allEntries.length - entries.length;
 
     // 6. 필요한 member_id 목록 수집 → 한 번에 조회
@@ -109,23 +108,37 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // 7. 앱B 기존 sync_log 한 번에 로드 → Set으로 빠른 중복 체크
+    const { data: existingLogs } = await appB
+      .from('sync_log')
+      .select('app_a_record_id')
+      .eq('event_id', event_id)
+      .eq('sync_type', 'individual');
+    const syncedIds = new Set((existingLogs || []).map((l: any) => l.app_a_record_id));
+
+    // 8. 앱B 기존 teams 한 번에 로드 → player1+player2+division 기준 중복 체크
+    const { data: existingTeams } = await appB
+      .from('teams')
+      .select('player1_name, player2_name, division_id')
+      .eq('event_id', event_id);
+    const existingTeamKeys = new Set(
+      (existingTeams || []).map((t: any) =>
+        `${t.division_id}|${t.player1_name}|${t.player2_name}`
+      )
+    );
+
     let syncedCount = 0;
     let skippedCount = 0;
+    let duplicateCount = 0;
     const errors: string[] = [];
     const unmatched: string[] = [];
 
     for (const entry of entries) {
       try {
-        // 중복 확인
         const recordId = entry.entry_id || entry.id || entry.team?.team_id;
-        const { data: existingLog } = await appB
-          .from('sync_log')
-          .select('id')
-          .eq('event_id', event_id)
-          .eq('app_a_record_id', recordId)
-          .eq('sync_type', 'individual')
-          .limit(1);
-        if (existingLog && existingLog.length > 0) { skippedCount++; continue; }
+
+        // sync_log 기반 중복 체크
+        if (syncedIds.has(recordId)) { skippedCount++; continue; }
 
         const team = entry.team;
         if (!team) { skippedCount++; continue; }
@@ -140,7 +153,7 @@ export async function POST(request: NextRequest) {
 
         const divisionName = appBDivisions.find(d => d.id === appBDivisionId)?.name || '';
 
-        // 선수 정보: members 테이블에서 가져오기
+        // 선수 정보
         const member1 = team.member1_id ? memberMap[team.member1_id] : null;
         const member2 = team.member2_id ? memberMap[team.member2_id] : null;
 
@@ -148,13 +161,26 @@ export async function POST(request: NextRequest) {
         const p2Name  = member2?.name || '';
         const p1Club  = shortenClub(member1?.club) || null;
         const p2Club  = shortenClub(member2?.club) || null;
-        // team_name: "홍길동(제주하나)/홍길금(제주아라)" 형식
         const teamName = buildTeamName(p1Name, p1Club, p2Name, p2Club);
-        // PIN: member1의 pin_code 사용, 없으면 랜덤 생성
         const pinPlain = member1?.pin_code ? String(member1.pin_code) : generatePin();
-        // 등급
         const p1Grade = member1?.grade || null;
         const p2Grade = member2?.grade || null;
+
+        // teams 테이블 기반 중복 체크 (player1+player2+division)
+        const teamKey = `${appBDivisionId}|${p1Name}|${p2Name}`;
+        if (existingTeamKeys.has(teamKey)) {
+          duplicateCount++;
+          // sync_log에는 기록해서 다음 sync 때 skip되도록
+          await appB.from('sync_log').insert({
+            event_id:        event_id,
+            sync_type:       'individual',
+            app_a_record_id: recordId,
+            app_b_record_id: null,
+            app_b_table:     'teams',
+            status:          'duplicate',
+          });
+          continue;
+        }
 
         // 앱B teams insert
         const { data: newTeam, error: teamErr } = await appB
@@ -191,20 +217,24 @@ export async function POST(request: NextRequest) {
           status:          'synced',
         });
 
+        // 캐시에 추가 (같은 sync 내 중복 방지)
+        existingTeamKeys.add(teamKey);
         syncedCount++;
+
       } catch (e: any) {
         errors.push(e.message);
       }
     }
 
     return NextResponse.json({
-      success:   true,
-      synced:    syncedCount,
-      skipped:   skippedCount,
-      excluded:  excludedCount,
-      total:     allEntries.length,
-      unmatched: unmatched.length > 0 ? unmatched : undefined,
-      errors:    errors.length > 0 ? errors : undefined,
+      success:    true,
+      synced:     syncedCount,
+      skipped:    skippedCount,
+      duplicate:  duplicateCount,
+      excluded:   excludedCount,
+      total:      allEntries.length,
+      unmatched:  unmatched.length > 0 ? unmatched : undefined,
+      errors:     errors.length > 0 ? errors : undefined,
     });
 
   } catch (err: any) {
