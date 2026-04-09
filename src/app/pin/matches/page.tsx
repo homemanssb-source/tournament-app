@@ -160,44 +160,45 @@ export default function PinMatchesPage() {
     const queueMap = new Map<string, CourtQueueMatch[]>()
 
     if (courts.length > 0) {
-      const myDivIds = [...new Set(myMatches.map(m => m.division_id).filter(Boolean))]
-
-      // match_date를 v_matches_with_teams에서 직접 추출 (divisions RLS 우회)
-      // 내 경기 중 하나에서 match_date를 가져옴
-      const { data: myDateRows } = myDivIds.length > 0
+      // 내 경기 ID로 match_date 조회 (RPC가 match_date를 반환 안 하므로)
+      const myMatchIds = myMatches.map(m => m.id).filter(Boolean)
+      const { data: myMatchDates } = myMatchIds.length > 0
         ? await supabase
             .from('v_matches_with_teams')
-            .select('match_date')
-            .eq('event_id', s.event_id)
-            .in('division_id', myDivIds)
-            .not('match_date', 'is', null)
-            .limit(1)
+            .select('id, court, match_date')
+            .in('id', myMatchIds)
         : { data: [] }
 
-      const myDate: string | null = myDateRows?.[0]?.match_date || null
-
-      // 내 날짜 기준으로 코트 경기 조회
-      let matchQuery = supabase
-        .from('v_matches_with_teams')
-        .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
-        .eq('event_id', s.event_id)
-        .in('court', courts)
-        .order('court').order('court_order')
-
-      if (myDate) {
-        matchQuery = matchQuery.eq('match_date', myDate)
+      // 코트별로 내 경기의 match_date 매핑
+      const courtDateMap: Record<string, string> = {}
+      for (const m of (myMatchDates || [])) {
+        if (m.court && m.match_date) courtDateMap[m.court] = m.match_date
       }
 
-      const { data: rawMatches } = await matchQuery
-      const allMatches = (rawMatches || []).filter((m: any) => m.score !== 'BYE')
+      // 코트별로 해당 날짜 경기만 조회
+      const queueResults = await Promise.all(
+        courts.map(async (court) => {
+          const myCourtDate = courtDateMap[court]
+          let q = supabase
+            .from('v_matches_with_teams')
+            .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
+            .eq('event_id', s.event_id)
+            .eq('court', court)
+            .order('court_order')
+          if (myCourtDate) q = q.eq('match_date', myCourtDate)
+          const { data } = await q
+          return { court, matches: (data || []).filter((m: any) => m.score !== 'BYE') }
+        })
+      )
+
+      const allMatches: any[] = []
+      for (const { court, matches } of queueResults) {
+        const sorted = [...matches].sort((a: any, b: any) => (a.court_order || 0) - (b.court_order || 0))
+        queueMap.set(court, sorted as CourtQueueMatch[])
+        allMatches.push(...matches)
+      }
 
       for (const court of courts) {
-        const q = allMatches
-          .filter((m: any) => m.court === court)
-          .sort((a: any, b: any) => (a.court_order || 0) - (b.court_order || 0))
-        queueMap.set(court, q as CourtQueueMatch[])
-      }
-
       for (const m of myMatches) {
         if (!m.court) continue
         const queue   = queueMap.get(m.court) || []
