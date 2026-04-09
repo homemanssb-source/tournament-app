@@ -162,16 +162,21 @@ export default function PinMatchesPage() {
     if (courts.length > 0) {
       const myDivIds = [...new Set(myMatches.map(m => m.division_id).filter(Boolean))]
 
-      // 내 부서의 날짜 조회
-      const { data: divRows } = myDivIds.length > 0
-        ? await supabase.from('divisions').select('id, match_date').in('id', myDivIds)
+      // match_date를 v_matches_with_teams에서 직접 추출 (divisions RLS 우회)
+      // 내 경기 중 하나에서 match_date를 가져옴
+      const { data: myDateRows } = myDivIds.length > 0
+        ? await supabase
+            .from('v_matches_with_teams')
+            .select('match_date')
+            .eq('event_id', s.event_id)
+            .in('division_id', myDivIds)
+            .not('match_date', 'is', null)
+            .limit(1)
         : { data: [] }
 
-      const myDates = [...new Set(
-        (divRows || []).map((d: any) => d.match_date).filter(Boolean)
-      )] as string[]
+      const myDate: string | null = myDateRows?.[0]?.match_date || null
 
-      // v_matches_with_teams에서 코트 경기 조회 — match_date를 DB에서 직접 필터
+      // 내 날짜 기준으로 코트 경기 조회
       let matchQuery = supabase
         .from('v_matches_with_teams')
         .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
@@ -179,13 +184,11 @@ export default function PinMatchesPage() {
         .in('court', courts)
         .order('court').order('court_order')
 
-      // 날짜가 있으면 DB 쿼리 레벨에서 필터
-      if (myDates.length > 0) {
-        matchQuery = matchQuery.in('match_date', myDates)
+      if (myDate) {
+        matchQuery = matchQuery.eq('match_date', myDate)
       }
 
       const { data: rawMatches } = await matchQuery
-
       const allMatches = (rawMatches || []).filter((m: any) => m.score !== 'BYE')
 
       for (const court of courts) {
