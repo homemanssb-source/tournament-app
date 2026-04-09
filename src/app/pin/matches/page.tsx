@@ -198,7 +198,6 @@ export default function PinMatchesPage() {
         allMatches.push(...matches)
       }
 
-      for (const court of courts) {
       for (const m of myMatches) {
         if (!m.court) continue
         const queue   = queueMap.get(m.court) || []
