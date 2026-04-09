@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
@@ -79,20 +79,6 @@ function SyncDashboardInner() {
       setSyncResult({ type: 'individual', ...(await res.json()) });
       await loadEventData();
     } catch (err: any) { setSyncResult({ type: 'individual', success: false, error: err.message }); }
-    finally { setSyncing(false); }
-  }
-
-  async function handleUpdateClubs() {
-    if (!event?.app_a_event_id) return alert('먼저 대회를 연결하세요.');
-    if (!confirm('기존 팀들의 클럽명을 앱A에서 가져와 업데이트합니다.\n이미 클럽이 있는 팀은 스킵됩니다. 계속하시겠습니까?')) return;
-    setSyncing(true); setSyncResult(null);
-    try {
-      const res = await fetch('/api/sync/update-clubs', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ event_id: selectedEventId, app_a_event_id: event.app_a_event_id }),
-      });
-      setSyncResult({ type: 'update-clubs', ...(await res.json()) });
-    } catch (err: any) { setSyncResult({ type: 'update-clubs', success: false, error: err.message }); }
     finally { setSyncing(false); }
   }
 
@@ -186,10 +172,6 @@ function SyncDashboardInner() {
                 <div className="bg-white rounded-lg border p-6 space-y-3">
                   <h3 className="font-semibold">개인전 참가자</h3>
                   <p className="text-sm text-gray-600">동기화: {individualLogs.length}팀</p>
-                  <button onClick={handleUpdateClubs} disabled={syncing}
-                    className="w-full bg-amber-500 text-white py-3 rounded-lg hover:bg-amber-600 disabled:opacity-50">
-                    {syncing ? '업데이트 중...' : '🏷️ 기존 팀 클럽명 업데이트'}
-                  </button>
                   <button onClick={handlePullIndividual} disabled={syncing}
                     className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50">
                     {syncing ? '동기화중...' : '개인전 가져오기'}
@@ -224,19 +206,23 @@ function SyncDashboardInner() {
               <div className="text-sm mt-2 space-y-1">
                 {syncResult.success ? (
                   <>
-                    <p className="text-green-700">성공: {syncResult.synced}건</p>
-                    {syncResult.updated > 0 && <p className="text-blue-600">업데이트: {syncResult.updated}건</p>}
-                    {syncResult.skipped > 0 && <p className="text-gray-600">스킵: {syncResult.skipped}건</p>}
-                    <p className="text-gray-600">전체: {syncResult.total}건</p>
+                    <p className="text-green-700">✅ 신규 등록: {syncResult.synced ?? 0}팀</p>
+                    {(syncResult.skipped ?? 0) > 0 && <p className="text-gray-500">⏭ 이미 동기화됨: {syncResult.skipped}팀</p>}
+                    {(syncResult.duplicate ?? 0) > 0 && <p className="text-orange-600">⚠️ 중복 제외: {syncResult.duplicate}팀</p>}
+                    {(syncResult.excluded ?? 0) > 0 && <p className="text-gray-400">🗑 삭제/취소 제외: {syncResult.excluded}팀</p>}
+                    {(syncResult.updated ?? 0) > 0 && <p className="text-blue-600">🔄 업데이트: {syncResult.updated}건</p>}
+                    <p className="text-gray-600 border-t border-green-200 pt-1 mt-1">
+                      앱A 전체: {syncResult.total ?? 0}팀
+                    </p>
                   </>
                 ) : (
                   <p className="text-red-700">실패: {syncResult.error}</p>
                 )}
                 {syncResult.unmatched?.map((u: string, i: number) => (
-                  <p key={`u${i}`} className="text-orange-600 text-xs">매칭실패: {u}</p>
+                  <p key={`u${i}`} className="text-orange-600 text-xs">⚠️ 부서매핑 실패: {u}</p>
                 ))}
                 {syncResult.errors?.map((e: string, i: number) => (
-                  <p key={i} className="text-red-600 text-xs">{e}</p>
+                  <p key={i} className="text-red-600 text-xs">❌ {e}</p>
                 ))}
               </div>
             </div>
