@@ -409,6 +409,25 @@ export default function PinMatchesPage() {
   }, {})
   const sortedRounds = Object.keys(byRound).sort((a, b) => (ROUND_ORDER[a] ?? 9) - (ROUND_ORDER[b] ?? 9))
 
+  // 상단 헤더: 본인 이름 + 부서별 파트너 추출
+  // team_name 형식: "신승배/홍길동" — '/' 앞이 본인(player1), 뒤가 파트너
+  const divPartners: { division: string; partner: string }[] = []
+  const seenDivs = new Set<string>()
+  let myName = session?.team_name || ''
+  for (const m of matches) {
+    const teamName = m.my_side === 'A' ? m.team_a_name : m.team_b_name
+    if (!teamName || seenDivs.has(m.division_id)) continue
+    seenDivs.add(m.division_id)
+    const parts = teamName.split('/')
+    if (parts.length >= 2) {
+      myName = parts[0].trim()           // 첫 번째 경기 기준 본인 이름 확정
+      const partner = parts.slice(1).join('/').trim()
+      divPartners.push({ division: m.division_name, partner })
+    } else {
+      divPartners.push({ division: m.division_name, partner: '' })
+    }
+  }
+
   return (
     <div className="min-h-screen bg-stone-50">
       {/* 인앱 알림 배너 */}
@@ -435,8 +454,19 @@ export default function PinMatchesPage() {
       <header className="bg-[#2d5016] text-white sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
           <div>
-            <div className="font-bold text-base">{session?.team_name}</div>
-            <div className="text-xs text-white/60">{session?.division} · 내 경기</div>
+            <div className="font-bold text-base">{myName || session?.team_name}</div>
+            {divPartners.length > 0 ? (
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
+                {divPartners.map(({ division, partner }) => (
+                  <span key={division} className="text-xs text-white/70">
+                    <span className="text-white/50">{division}</span>
+                    {partner ? <span className="text-white/90"> · /{partner}</span> : null}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-white/60">{session?.division} · 내 경기</div>
+            )}
           </div>
           <div className="flex items-center gap-3">
             <NotifButton />
@@ -495,7 +525,7 @@ export default function PinMatchesPage() {
                             </div>
                             {m.court ? (
                               <span className="text-xs px-2.5 py-0.5 rounded-full bg-[#2d5016]/10 text-[#2d5016] font-bold">
-                                🎾 {m.court}
+                                🎾 {m.court} #{m.court_order}
                               </span>
                             ) : (
                               <span className="text-xs text-stone-400">코트 미배정</span>
@@ -686,6 +716,7 @@ function FinishedQueue({ items }: { items: CourtQueueMatch[] }) {
           {items.map(q => (
             <div key={q.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-stone-300">
               <span className="w-4">✓</span>
+              <span className="w-5 font-mono">#{q.court_order}</span>
               <span className="flex-1 truncate line-through">{q.team_a_name} vs {q.team_b_name}</span>
             </div>
           ))}
@@ -752,6 +783,7 @@ function CourtQueue({ queue, myMatchId, court }: {
                          'text-stone-500'
               }`}>
                 <span className="w-4">{badge}</span>
+                <span className="w-5 font-mono text-stone-400">#{q.court_order}</span>
                 <span className="flex-1 truncate">{q.team_a_name} vs {q.team_b_name}</span>
                 {isMe && <span className="text-blue-500 flex-shrink-0 font-bold">← 내 경기</span>}
               </div>
