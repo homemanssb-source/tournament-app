@@ -302,7 +302,7 @@ export default function EventDetailPage() {
           {iTab === 'groups'     && <GroupsView eventId={eventId} divisionId={activeDivision} />}
           {iTab === 'tournament' && <TournamentView eventId={eventId} divisionId={activeDivision} />}
           {iTab === 'results'    && <ResultsView eventId={eventId} divisionId={activeDivision} />}
-          {iTab === 'courts'     && <CourtBoard eventId={eventId} />}
+          {iTab === 'courts'     && <CourtBoard eventId={eventId} initialDate={dateFilter ?? undefined} />}
         </>)}
 
         {mode === 'team' && (<>
@@ -342,7 +342,7 @@ export default function EventDetailPage() {
           {tTab === 'standings' && <TeamStandingsView standingsMap={standingsMap} groups={groups} />}
           {tTab === 'matches'   && <TeamMatchesView ties={ties} />}
           {tTab === 'bracket'   && <TeamBracketView ties={ties} />}
-          {tTab === 'courts'    && <CourtBoard eventId={eventId} />}
+          {tTab === 'courts'    && <CourtBoard eventId={eventId} initialDate={dateFilter ?? undefined} />}
 
           <div className="text-center mt-6">
             <button onClick={() => loadTeamData()} className="text-sm text-gray-400 hover:text-gray-600">

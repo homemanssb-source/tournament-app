@@ -59,7 +59,7 @@ function courtNumToName(courtNumber: number, venues: Venue[]): string {
   return `${last.short_name || last.name}-${courtNumber}`
 }
 
-export default function CourtBoard({ eventId }: { eventId: string }) {
+export default function CourtBoard({ eventId, initialDate }: { eventId: string; initialDate?: string }) {
   const [matches, setMatches]             = useState<CourtMatch[]>([])
   const [venues, setVenues]               = useState<Venue[]>([])
   // court 없는 본선 경기 (TBD 후보 계산용)
@@ -71,7 +71,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
   const [suggestions, setSugg]        = useState<string[]>([])
   const [showSugg, setShowSugg]       = useState(false)
   const [searchResult, setResult]     = useState<{ name: string; court: string; idx: number } | null>(null)
-  const [dateFilter, setDateFilter]   = useState<string>('ALL')
+  const [dateFilter, setDateFilter]   = useState<string>(initialDate || 'ALL')
   const [venueFilter, setVenueFilter] = useState<string>('ALL')
   const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({})
 
@@ -171,6 +171,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
   }, [loadData])
 
   useEffect(() => {
+    if (initialDate) return  // 외부에서 날짜 지정된 경우 스킵
     const dates = [...new Set(Object.values(divMatchDates))].sort()
     if (dates.length > 1 && dateFilter === 'ALL') {
       const today = new Date().toISOString().slice(0, 10)
@@ -321,8 +322,8 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
         </div>
       </div>
 
-      {/* 날짜 탭 */}
-      {(() => {
+      {/* 날짜 탭 - 외부 날짜 지정 없을 때만 표시 */}
+      {!initialDate && (() => {
         const uniqueDates = [...new Set(Object.values(divMatchDates))].sort()
         if (uniqueDates.length < 2) return null
         return (
