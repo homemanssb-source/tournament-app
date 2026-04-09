@@ -164,7 +164,7 @@ export default function PinMatchesPage() {
 
       const [divResult, matchResult] = await Promise.all([
         myDivIds.length > 0
-          ? supabase.from('divisions').select('match_date').in('id', myDivIds)
+          ? supabase.from('divisions').select('id, match_date').in('id', myDivIds)
           : Promise.resolve({ data: [] }),
         supabase
           .from('v_matches_with_teams')
@@ -177,11 +177,19 @@ export default function PinMatchesPage() {
       const myDates = [...new Set(
         (divResult.data || []).map((d: any) => d.match_date).filter(Boolean)
       )] as string[]
+
+      // division_id → match_date 매핑 (내 부서들)
+      const divDateMap: Record<string, string> = {}
+      ;(divResult.data || []).forEach((d: any) => { if (d.id && d.match_date) divDateMap[d.id] = d.match_date })
+
       const rawMatches = matchResult.data
 
       const allMatches = (rawMatches || []).filter((m: any) => {
         if (m.score === 'BYE') return false
-        if (myDates.length > 0 && m.match_date && !myDates.includes(m.match_date)) return false
+        if (myDates.length === 0) return true
+        // match_date 있으면 그 날짜로 판단
+        const mDate = m.match_date || divDateMap[m.division_id]
+        if (mDate && !myDates.includes(mDate)) return false
         return true
       })
 
