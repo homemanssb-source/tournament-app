@@ -305,8 +305,8 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     else if (idx === curIdx && !hasLive) { posLabel = '지금 내 차례'; urgency = 2 }
     else if (idx === curIdx &&  hasLive) { posLabel = '다음 대기';    urgency = 1 }
     else if (waitNum === 1)              { posLabel = '다음 대기';    urgency = 1 }
-    else { posLabel = waitNum + '번째 대기'; urgency = 0 }
-    return { urgency, posLabel, wait: waitNum - 1 < 0 ? 0 : waitNum - 1, total: cms.length, done: cms.filter(m => m.status === 'FINISHED').length }
+    else { posLabel = `앞에 ${waitNum}경기 남음`; urgency = 0 }
+    return { urgency, posLabel, wait: waitNum, total: cms.length, done: cms.filter(m => m.status === 'FINISHED').length }
   }
   const searchInfo = calcSearchInfo()
 
@@ -429,8 +429,8 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
                     : searchInfo?.urgency === 1 ? 'text-amber-600'
                     : 'text-stone-600'
                   }`}>{searchInfo?.posLabel}</p>
-                  {(searchInfo?.urgency ?? 0) < 2 && (
-                    <p className="text-xs text-stone-400">{searchInfo?.wait}경기 남음</p>
+                  {searchInfo?.urgency === 1 && (
+                    <p className="text-xs text-stone-400">앞에 {searchInfo?.wait}경기 남음</p>
                   )}
                 </div>
               </div>
