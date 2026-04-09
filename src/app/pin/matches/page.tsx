@@ -24,7 +24,7 @@ interface FinalsMatch {
 
 interface CourtQueueMatch {
   id: string; court_order: number; status: string
-  team_a_name: string; team_b_name: string; division_name: string
+  team_a_name: string; team_b_name: string; division_name: string; division_id: string
 }
 
 interface InAppNotif {
