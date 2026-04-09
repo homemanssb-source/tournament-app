@@ -250,7 +250,17 @@ export default function CourtsPage() {
         supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)')
           .eq('event_id', eventId).order('court_order', { ascending:true, nullsFirst:false }),
       ])
-      const matchList = (matchRes.data || []).filter((m: any) => m.score !== 'BYE') as MatchSlim[]
+      const matchList = (matchRes.data || [])
+        .filter((m: any) => m.score !== 'BYE')
+        .sort((a: any, b: any) => {
+          // court 없는 것은 뒤로
+          if ((a.court ?? '') !== (b.court ?? '')) return (a.court ?? '').localeCompare(b.court ?? '')
+          // court_order 오름차순, null → 9999
+          const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)
+          if (od !== 0) return od
+          // 동점 시 match_num으로 안정 정렬 (모바일 매 폴링 순서 고정)
+          return (a.match_num || '').localeCompare(b.match_num || '')
+        }) as MatchSlim[]
       const tieList   = (tieRes.data  || []) as TieWithClubs[]
       setMatches(matchList); matchesRef.current = matchList
       setTies(tieList);      tiesRef.current    = tieList
@@ -285,7 +295,14 @@ export default function CourtsPage() {
     if (!eventId) return
     const { data } = await supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
       .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true })
-    const list = (data || []).filter((m: any) => m.score !== 'BYE') as MatchSlim[]
+    const list = (data || [])
+      .filter((m: any) => m.score !== 'BYE')
+      .sort((a: any, b: any) => {
+        if ((a.court ?? '') !== (b.court ?? '')) return (a.court ?? '').localeCompare(b.court ?? '')
+        const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)
+        if (od !== 0) return od
+        return (a.match_num || '').localeCompare(b.match_num || '')
+      }) as MatchSlim[]
     setMatches(list); matchesRef.current = list
     syncCourtOrderRef(list, tiesRef.current)
   }
@@ -615,7 +632,9 @@ export default function CourtsPage() {
   for (const m of dateFilteredItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
 
   const filteredAll = viewFilter==='ALL' ? dateFilteredItems : viewFilter==='TEAM' ? dateFilteredItems.filter(m=>m.is_team_tie) : dateFilteredItems.filter(m=>m.division_id===viewFilter)
-  const unassigned  = filteredAll.filter(m => !m.court && m.status !== 'FINISHED')
+  const unassigned  = filteredAll
+    .filter(m => !m.court && m.status !== 'FINISHED')
+    .sort((a,b) => (a.match_num || '').localeCompare(b.match_num || ''))
 
   return (
     <div>
@@ -802,7 +821,11 @@ export default function CourtsPage() {
         {/* 코트 그리드 */}
         <div className="lg:col-span-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
           {filteredCourtNames.map(court => {
-            const courtItems = (byCourt.get(court)||[]).sort((a,b)=>(a.court_order||0)-(b.court_order||0))
+            const courtItems = (byCourt.get(court)||[]).sort((a,b)=> {
+              const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)
+              if (od !== 0) return od
+              return (a.match_num || '').localeCompare(b.match_num || '')
+            })
             const finished   = courtItems.filter(m=>m.status==='FINISHED').length
             const activeIdx  = courtItems.findIndex(m=>m.status==='IN_PROGRESS')
             const pendingIdx = courtItems.findIndex(m=>m.status==='PENDING')
