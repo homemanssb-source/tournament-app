@@ -27,17 +27,23 @@ interface CourtQueueMatch {
   team_a_name: string; team_b_name: string; division_name: string
 }
 
-// 인앱 알림 배너 타입
 interface InAppNotif {
   id: number
   title: string
   body: string
 }
 
-const ROUND_ORDER: Record<string, number> = { group:0, GROUP:0, R32:1, R16:2, QF:3, SF:4, F:5, '본선32강':1, '본선16강':1, '16강':2, '8강':3, '4강':4, '결승':5 }
-const ROUND_LABEL: Record<string, string> = { group:'예선', GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', '본선32강':'32강', '본선16강':'16강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
+const ROUND_ORDER: Record<string, number> = {
+  group: 0, GROUP: 0,
+  R32: 1, R16: 2, QF: 3, SF: 4, F: 5,
+  '본선32강': 1, '본선16강': 1, '16강': 2, '8강': 3, '4강': 4, '결승': 5,
+}
+const ROUND_LABEL: Record<string, string> = {
+  group: '예선', GROUP: '예선',
+  R32: '32강', R16: '16강', QF: '8강', SF: '4강', F: '결승',
+  '본선32강': '32강', '본선16강': '16강', '16강': '16강', '8강': '8강', '4강': '4강', '결승': '결승',
+}
 
-// 연속 오류 허용 횟수 (이 이상 실패하면 재로그인)
 const MAX_ERRORS = 3
 
 export default function PinMatchesPage() {
@@ -56,39 +62,32 @@ export default function PinMatchesPage() {
   const [notifAllowed, setNotifAllowed]     = useState(false)
   const [notifRequested, setNotifRequested] = useState(false)
   const prevWaitRef = useRef<Map<string, number>>(new Map())
-  // ✅ 연속 오류 카운터 — 일시적 네트워크 오류로 튕기지 않도록
   const errorCountRef = useRef(0)
 
-  // ✅ 인앱 알림 배너 상태
   const [inAppNotifs, setInAppNotifs] = useState<InAppNotif[]>([])
   const notifIdRef = useRef(0)
 
   const { autoResubscribe, subscribeWithPin } = usePushSubscription()
 
-  // ✅ 인앱 알림 표시 함수
   const showInAppNotif = useCallback((title: string, body: string) => {
     const id = ++notifIdRef.current
     setInAppNotifs(prev => [...prev, { id, title, body }])
-    // 진동 (모바일)
     if ('vibrate' in navigator) navigator.vibrate([200, 100, 200])
-    // 5초 후 자동 제거
     setTimeout(() => {
       setInAppNotifs(prev => prev.filter(n => n.id !== id))
     }, 5000)
   }, [])
 
   useEffect(() => {
-    // ✅ sessionStorage 우선, 없으면 localStorage에서 복구 (다른 페이지 갔다와도 유지)
     let raw = sessionStorage.getItem('pin_session')
     if (!raw) {
       const lsRaw = localStorage.getItem('pin_session')
       if (lsRaw) {
         try {
           const parsed = JSON.parse(lsRaw)
-          // 만료 확인 (12시간)
           if (parsed._savedAt && Date.now() - parsed._savedAt < 12 * 60 * 60 * 1000) {
             raw = lsRaw
-            sessionStorage.setItem('pin_session', lsRaw) // sessionStorage 복구
+            sessionStorage.setItem('pin_session', lsRaw)
           } else {
             localStorage.removeItem('pin_session')
           }
@@ -109,16 +108,13 @@ export default function PinMatchesPage() {
     autoResubscribe()
   }, [])
 
-  // ✅ SW 메시지 수신 → 포그라운드 인앱 알림 표시
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return
-
     const handler = (event: MessageEvent) => {
       if (event.data?.type === 'PUSH_NOTIFICATION') {
         showInAppNotif(event.data.title, event.data.body)
       }
     }
-
     navigator.serviceWorker.addEventListener('message', handler)
     return () => navigator.serviceWorker.removeEventListener('message', handler)
   }, [showInAppNotif])
@@ -133,8 +129,6 @@ export default function PinMatchesPage() {
     const { data, error } = await supabase.rpc('rpc_pin_list_matches', { p_token: s.token })
 
     if (error) {
-      // ✅ 튕김 방지: 인증 오류(코드 확인)가 아닌 이상 바로 튕기지 않음
-      // Supabase RPC 에러 코드 PGRST301 = JWT 만료, 42501 = 권한 없음
       const isAuthError =
         error.code === 'PGRST301' ||
         error.code === '42501' ||
@@ -142,26 +136,21 @@ export default function PinMatchesPage() {
         error.message?.includes('invalid token')
 
       if (isAuthError) {
-        // 진짜 인증 오류 → 즉시 재로그인
         sessionStorage.removeItem('pin_session')
         router.replace('/pin')
         return
       }
 
-      // 일시적 오류 — 카운터 증가
       errorCountRef.current += 1
       console.warn(`[PIN] loadData error (${errorCountRef.current}/${MAX_ERRORS}):`, error.message)
 
       if (errorCountRef.current >= MAX_ERRORS) {
-        // 반복 실패 → 재로그인 유도 (세션은 유지하여 PIN 재입력 없이 복귀 가능)
         sessionStorage.removeItem('pin_session')
         router.replace('/pin')
       }
-      // setLoading(false) 하지 않음 → 기존 데이터 유지
       return
     }
 
-    // 성공 → 오류 카운터 리셋
     errorCountRef.current = 0
 
     const myMatches: PinMatch[] = data.matches || []
@@ -173,7 +162,6 @@ export default function PinMatchesPage() {
     if (courts.length > 0) {
       const myDivIds = [...new Set(myMatches.map(m => m.division_id).filter(Boolean))]
 
-      // ✅ divisions + v_matches_with_teams 병렬 로드
       const [divResult, matchResult] = await Promise.all([
         myDivIds.length > 0
           ? supabase.from('divisions').select('match_date').in('id', myDivIds)
@@ -213,13 +201,10 @@ export default function PinMatchesPage() {
         const myIdx   = queue.findIndex(q => q.id === m.id)
         const remaining = curIdx >= 0 && myIdx >= 0 ? Math.max(0, myIdx - curIdx) : 0
 
-        // ✅ 폴링 기반 인앱 알림 (포그라운드에서 직접 감지)
         if (notifAllowed && remaining === 1) {
           const prev = prevWaitRef.current.get(m.court) ?? 99
           if (prev > 1) {
-            // SW Push 알림 외에 폴링으로도 인앱 알림 표시
-            showInAppNotif('🎾 곧 내 차례!', `${m.court}에서 다음 경기로 이동해주세요.`)
-            // 기존 sendBrowserNotif도 함께 (백그라운드 대비)
+            showInAppNotif('🎾 준비하세요!', `${m.court}에서 다음 경기로 이동해주세요.`)
             sendBrowserNotif(m.court)
           }
         }
@@ -229,7 +214,6 @@ export default function PinMatchesPage() {
 
     setCourtQueues(queueMap)
 
-    // TBD 예상 후보용: matches + v_matches_with_teams로 이름 매핑
     const eventId = s.event_id
     if (eventId) {
       const [{ data: rawFinals }, { data: viewData }] = await Promise.all([
@@ -242,7 +226,6 @@ export default function PinMatchesPage() {
           .eq('event_id', eventId).eq('stage', 'FINALS')
           .not('team_a_name', 'is', null),
       ])
-      // team_id → name 매핑
       const tMap: Record<string, string> = {}
       ;(viewData || []).forEach((m: any) => {
         if (m.team_a_id && m.team_a_name) tMap[m.team_a_id] = m.team_a_name
@@ -260,7 +243,11 @@ export default function PinMatchesPage() {
 
   function sendBrowserNotif(court: string) {
     if (!('Notification' in window) || Notification.permission !== 'granted') return
-    new Notification('🎾 곧 내 차례!', { body: `${court}에서 다음 경기로 이동해주세요.`, icon: '/icon-192x192.png', tag: `court-${court}` })
+    new Notification('🎾 준비하세요!', {
+      body: `${court}에서 다음 경기로 이동해주세요.`,
+      icon: '/icon-192x192.png',
+      tag: `court-${court}`,
+    })
   }
 
   async function requestNotification() {
@@ -270,12 +257,12 @@ export default function PinMatchesPage() {
       const perm = await Notification.requestPermission()
       setNotifAllowed(perm === 'granted')
       if (perm === 'granted') {
-        showInAppNotif('🎾 알림 켜짐', '경기 알림이 활성화되었습니다.')
+        showInAppNotif('🎾 알림 활성화', '경기 알림이 설정되었습니다.')
         const pin = session?.pin || sessionStorage.getItem('venue_pin') || session?.token
         if (pin) await subscribeWithPin(pin)
         else autoResubscribe()
       } else if (perm === 'denied') {
-        alert('알림이 차단되어 있습니다.\n브라우저 설정 → 이 사이트 → 알림 허용으로 변경해주세요.')
+        alert('알림이 차단되어 있습니다.\n브라우저 설정에서 알림 허용으로 변경해주세요.')
       }
     } catch { setNotifAllowed(false) }
   }
@@ -286,20 +273,91 @@ export default function PinMatchesPage() {
     setMsg('')
   }
 
+  // ============================================================
+  // ✅ 점수 제출 후 조별 완료 체크 → rpc_fill_tournament_slots 호출
+  // ============================================================
+  async function tryFillTournamentSlots(match: PinMatch) {
+    // GROUP 경기가 아니면 skip (대소문자 모두 대응)
+    const stageUp = (match.stage || '').toUpperCase()
+    const roundUp = (match.round || '').toUpperCase()
+    if (stageUp !== 'GROUP' && roundUp !== 'GROUP') return
+
+    const eventId = session?.event_id
+    if (!eventId) return
+
+    // 해당 경기의 group_id 조회
+    const { data: matchData } = await supabase
+      .from('matches')
+      .select('group_id, division_id')
+      .eq('id', match.id)
+      .single()
+
+    if (!matchData?.group_id) return
+
+    // 해당 그룹의 남은 경기 수 확인
+    // [3] .neq('status','FINISHED') → 전체 조회 후 클라이언트 필터 (NULL status 포함)
+    const { data: groupMatches } = await supabase
+      .from('matches')
+      .select('id, status')
+      .eq('event_id', eventId)
+      .eq('group_id', matchData.group_id)
+      .eq('stage', 'GROUP')
+
+    // 방금 제출한 경기 포함해서 미완료 경기 수 계산
+    // (rpc_pin_submit_score 완료 후 호출이므로 해당 경기는 이미 FINISHED)
+    const unfinished = (groupMatches || []).filter(m => m.status !== 'FINISHED')
+    if (unfinished.length > 0) return // 아직 남은 경기 있음
+
+    // 본선 브래킷에 TBD 슬롯이 있는지 확인
+    // [4] .or() 문법 수정 → 전체 조회 후 클라이언트 필터
+    const { data: finalsMatches } = await supabase
+      .from('matches')
+      .select('id, qualifier_label_a, qualifier_label_b')
+      .eq('event_id', eventId)
+      .eq('division_id', matchData.division_id)
+      .eq('stage', 'FINALS')
+
+    const hasTbd = (finalsMatches || []).some(
+      m => m.qualifier_label_a != null || m.qualifier_label_b != null
+    )
+    if (!hasTbd) return // TBD 슬롯 없음 (브래킷 미생성 or 이미 완료)
+
+    // rpc_fill_tournament_slots 호출
+    console.log('[PIN] 조 완료 감지 → rpc_fill_tournament_slots 호출:', matchData.group_id)
+    const { data: fillResult, error: fillError } = await supabase.rpc('rpc_fill_tournament_slots', {
+      p_event_id: eventId,
+      p_group_id: matchData.group_id,
+    })
+
+    if (fillError) {
+      console.warn('[PIN] fill_tournament_slots 오류:', fillError.message)
+      return
+    }
+
+    if (fillResult?.success && fillResult.filled > 0) {
+      console.log('[PIN] 슬롯 채우기 완료:', fillResult)
+    }
+  }
+
   async function submitScore(matchId: string, match: PinMatch) {
     const winner = winners[matchId]
     const loser  = loserScores[matchId]?.trim()
-    if (!winner) { setMsg('먼저 승리팀을 선택해주세요.'); return }
-    if (!loser)  { setMsg('상대팀 점수를 입력해주세요. (예: 4)'); return }
+    if (!winner) { setMsg('승자를 선택해주세요.'); return }
+    if (!loser)  { setMsg('패자 점수를 입력해주세요. (예: 4)'); return }
     if (!/^\d+$/.test(loser)) { setMsg('숫자만 입력해주세요.'); return }
     const score = winner === 'A' ? `6:${loser}` : `${loser}:6`
     setSubmitting(matchId); setMsg('')
+
     const { error } = await supabase.rpc('rpc_pin_submit_score', {
       p_token: session.token, p_match_id: matchId, p_score: score,
     })
     setSubmitting(null)
     if (error) { setMsg('❌ ' + error.message); return }
-    setMsg('✅ 점수가 제출됐습니다!')
+    setMsg('✅ 점수가 제출되었습니다!')
+
+    // ✅ 본선 TBD 슬롯 자동 채우기 시도 (조별 경기인 경우)
+    await tryFillTournamentSlots(match)
+
     loadData(session)
   }
 
@@ -314,24 +372,31 @@ export default function PinMatchesPage() {
   function NotifButton() {
     if (notifAllowed) {
       return (
-        <button onClick={() => { autoResubscribe(); showInAppNotif('🎾 알림 테스트', '알림이 정상적으로 작동하고 있습니다.') }}
-          className="text-xs text-white/60 hover:text-white/90 flex items-center gap-1" title="알림 켜짐">
-          🔔 알림 켜짐
+        <button
+          onClick={() => { autoResubscribe(); showInAppNotif('🎾 알림 테스트', '알림이 정상적으로 동작하고 있습니다.') }}
+          className="text-xs text-white/60 hover:text-white/90 flex items-center gap-1"
+          title="알림 확인"
+        >
+          🔔 알림 확인
         </button>
       )
     }
     if (notifRequested && !notifAllowed) {
       return (
-        <button onClick={() => alert('알림이 차단되어 있습니다.\n브라우저 설정 → 알림 허용으로 변경해주세요.')}
-          className="text-xs bg-red-500/80 text-white px-2.5 py-1 rounded-full">
+        <button
+          onClick={() => alert('알림이 차단되어 있습니다.\n브라우저 설정 → 알림 허용으로 변경해주세요.')}
+          className="text-xs bg-red-500/80 text-white px-2.5 py-1 rounded-full"
+        >
           🔕 알림 차단됨
         </button>
       )
     }
     return (
-      <button onClick={requestNotification}
-        className="text-xs bg-amber-500 text-white px-2.5 py-1 rounded-full animate-pulse">
-        🔔 알림 켜기
+      <button
+        onClick={requestNotification}
+        className="text-xs bg-amber-500 text-white px-2.5 py-1 rounded-full animate-pulse"
+      >
+        🔔 알림 허용
       </button>
     )
   }
@@ -346,7 +411,7 @@ export default function PinMatchesPage() {
 
   return (
     <div className="min-h-screen bg-stone-50">
-      {/* ✅ 인앱 알림 배너 (화면 켜져 있을 때도 표시) */}
+      {/* 인앱 알림 배너 */}
       <div className="fixed top-0 left-0 right-0 z-50 pointer-events-none">
         <div className="max-w-2xl mx-auto px-4 pt-2 space-y-2">
           {inAppNotifs.map(n => (
@@ -360,7 +425,7 @@ export default function PinMatchesPage() {
               <button
                 onClick={() => setInAppNotifs(prev => prev.filter(x => x.id !== n.id))}
                 className="text-white/60 hover:text-white text-lg leading-none flex-shrink-0">
-                ×
+                ✕
               </button>
             </div>
           ))}
@@ -382,7 +447,9 @@ export default function PinMatchesPage() {
 
       <main className="max-w-2xl mx-auto px-4 py-5">
         {msg && (
-          <div className={`mb-4 px-4 py-2.5 rounded-xl text-sm font-medium ${msg.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+          <div className={`mb-4 px-4 py-2.5 rounded-xl text-sm font-medium ${
+            msg.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+          }`}>
             {msg}
           </div>
         )}
@@ -392,7 +459,7 @@ export default function PinMatchesPage() {
         ) : matches.length === 0 ? (
           <div className="text-center py-16">
             <div className="text-4xl mb-3">🎾</div>
-            <p className="text-stone-500">배정된 경기가 없습니다</p>
+            <p className="text-stone-500">예정된 경기가 없습니다</p>
             <p className="text-stone-400 text-sm mt-1">모든 경기가 완료됐거나 아직 배정 전입니다</p>
           </div>
         ) : (
@@ -428,7 +495,7 @@ export default function PinMatchesPage() {
                             </div>
                             {m.court ? (
                               <span className="text-xs px-2.5 py-0.5 rounded-full bg-[#2d5016]/10 text-[#2d5016] font-bold">
-                                📍 {m.court} #{m.court_order}
+                                🎾 {m.court} #{m.court_order}
                               </span>
                             ) : (
                               <span className="text-xs text-stone-400">코트 미배정</span>
@@ -444,7 +511,7 @@ export default function PinMatchesPage() {
                               {isDone && m.score ? (
                                 <span className="text-lg font-black text-stone-700">{m.score}</span>
                               ) : isLive ? (
-                                <span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded-full">진행중</span>
+                                <span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded-full">진행中</span>
                               ) : (
                                 <span className="text-stone-300 font-bold text-sm">VS</span>
                               )}
@@ -462,13 +529,13 @@ export default function PinMatchesPage() {
                             </div>
                           )}
                           {isDone && !m.locked_by_participant && (
-                            <div className="text-center py-2 text-xs text-stone-400">경기 완료 — 결과: {m.score || '-'}</div>
+                            <div className="text-center py-2 text-xs text-stone-400">경기 완료 · 결과: {m.score || '-'}</div>
                           )}
 
                           {canInput && (
                             <div className="space-y-3 pt-1">
                               <p className="text-xs text-stone-400 text-center">
-                                ① 승리팀 선택 → ② 상대팀 점수 입력 → ③ 제출<br />
+                                ① 승자를 선택 후 ② 패자 점수 입력 후 ③ 제출<br />
                                 <span className="text-amber-600 font-medium">점수 제출 후 수정 불가</span>
                               </p>
                               <div className="grid grid-cols-2 gap-2">
@@ -496,16 +563,20 @@ export default function PinMatchesPage() {
                                       {winner === 'B' ? m.team_a_name : m.team_b_name}
                                     </span>
                                   </div>
-                                  <p className="text-xs text-stone-400 text-center mb-2">패배팀 점수 입력 (승리팀은 항상 6)</p>
+                                  <p className="text-xs text-stone-400 text-center mb-2">패자 점수 입력 (승자는 항상 6)</p>
                                   <div className="flex gap-2">
-                                    <input type="number" inputMode="numeric" min="0" max="5" placeholder="0~5"
+                                    <input
+                                      type="number" inputMode="numeric" min="0" max="5" placeholder="0~5"
                                       value={loser}
                                       onChange={e => setLoserScores(prev => ({ ...prev, [m.id]: e.target.value }))}
                                       onKeyDown={e => e.key === 'Enter' && submitScore(m.id, m)}
-                                      className="flex-1 border-2 border-amber-300 rounded-xl px-4 py-3 text-center text-2xl font-bold focus:outline-none focus:border-amber-500" />
-                                    <button onClick={() => submitScore(m.id, m)}
+                                      className="flex-1 border-2 border-amber-300 rounded-xl px-4 py-3 text-center text-2xl font-bold focus:outline-none focus:border-amber-500"
+                                    />
+                                    <button
+                                      onClick={() => submitScore(m.id, m)}
                                       disabled={submitting === m.id || !loser.trim()}
-                                      className="bg-amber-500 text-white font-bold px-6 py-3 rounded-xl hover:bg-amber-600 disabled:opacity-50 transition-all whitespace-nowrap text-sm">
+                                      className="bg-amber-500 text-white font-bold px-6 py-3 rounded-xl hover:bg-amber-600 disabled:opacity-50 transition-all whitespace-nowrap text-sm"
+                                    >
                                       {submitting === m.id ? '...' : '제출'}
                                     </button>
                                   </div>
@@ -514,7 +585,7 @@ export default function PinMatchesPage() {
                                       최종 점수: <span className="font-bold text-stone-700">
                                         {winner === 'A' ? `6:${loser}` : `${loser}:6`}
                                       </span>
-                                      &nbsp;— {winner === 'A' ? m.team_a_name : m.team_b_name} 승리
+                                      &nbsp;· {winner === 'A' ? m.team_a_name : m.team_b_name} 승리
                                     </div>
                                   )}
                                 </div>
@@ -524,7 +595,7 @@ export default function PinMatchesPage() {
 
                           {!isDone && !isLive && (
                             <div className="text-center py-2 text-xs text-stone-400">
-                              ⏳ 경기 대기중 — 진행중이 되면 점수 입력 가능
+                              ⏳ 경기 대기 중 · 진행中이 되면 점수 입력 가능
                             </div>
                           )}
                         </div>
@@ -541,11 +612,11 @@ export default function PinMatchesPage() {
   )
 }
 
-// TBD 예상 후보 계산
+// TBD 후보 계산 (본선 브래킷용)
 function getTbdCandidates(finalsMatches: FinalsMatch[], matchId: string, abSlot: 'A' | 'B'): string[] {
   const PREV: Record<string, string> = {
-    '결승':'4강','4강':'8강','8강':'16강','16강':'32강','32강':'64강','64강':'128강',
-    'F':'SF','SF':'QF','QF':'R16','R16':'R32','R32':'R64','R64':'R128',
+    '결승': '4강', '4강': '8강', '8강': '16강', '16강': '32강', '32강': '64강', '64강': '128강',
+    'F': 'SF', 'SF': 'QF', 'QF': 'R16', 'R16': 'R32', 'R32': 'R64', 'R64': 'R128',
   }
   const cur = finalsMatches.find(m => m.id === matchId)
   if (!cur) return []
@@ -572,7 +643,6 @@ function getTbdCandidates(finalsMatches: FinalsMatch[], matchId: string, abSlot:
   return names
 }
 
-// 팀 이름 표시: TBD면 예상 후보 작게 표시
 function PinTeamName({ name, isMy, finalsMatches, matchId, abSlot }: {
   name: string; isMy: boolean
   finalsMatches: FinalsMatch[]; matchId: string; abSlot: 'A' | 'B'
@@ -597,7 +667,7 @@ function PinTeamName({ name, isMy, finalsMatches, matchId, abSlot }: {
   return (
     <div>
       <div className={`text-sm ${isMy ? 'text-[#2d5016]' : 'text-stone-700'}`}>{name}</div>
-      {isMy && <span className="text-xs text-[#2d5016]/70 font-medium">내 팀 ▲</span>}
+      {isMy && <span className="text-xs text-[#2d5016]/70 font-medium">← 내 팀</span>}
     </div>
   )
 }
@@ -608,14 +678,14 @@ function FinishedQueue({ items }: { items: CourtQueueMatch[] }) {
     <div className="border-t border-stone-100 pt-1.5 mt-0.5">
       <button onClick={() => setOpen(!open)}
         className="text-xs text-stone-400 hover:text-stone-600 flex items-center gap-1 w-full">
-        <span>{open ? '▼' : '▶'}</span>
+        <span>{open ? '▲' : '▼'}</span>
         <span>완료 {items.length}경기</span>
       </button>
       {open && (
         <div className="space-y-1 mt-1.5">
           {items.map(q => (
             <div key={q.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-stone-300">
-              <span className="w-4">✅</span>
+              <span className="w-4">✓</span>
               <span className="w-5 font-mono">#{q.court_order}</span>
               <span className="flex-1 truncate line-through">{q.team_a_name} vs {q.team_b_name}</span>
             </div>
@@ -625,7 +695,6 @@ function FinishedQueue({ items }: { items: CourtQueueMatch[] }) {
     </div>
   )
 }
-
 
 function CourtQueue({ queue, myMatchId, court }: {
   queue: CourtQueueMatch[]; myMatchId: string; court: string
@@ -640,14 +709,14 @@ function CourtQueue({ queue, myMatchId, court }: {
 
   const iAmLive = liveIdx >= 0 && myIdx === liveIdx
   const cfg =
-    iAmLive         ? { bg:'bg-red-50',    text:'text-red-700',   emoji:'🔴', label:'지금 경기 중!' } :
+    iAmLive         ? { bg: 'bg-red-50',   text: 'text-red-700',   emoji: '🟥', label: '지금 경기 中!' } :
     remaining === 0 && liveIdx < 0
-                    ? { bg:'bg-red-50',    text:'text-red-700',   emoji:'🔴', label:'지금 내 차례!' } :
+                    ? { bg: 'bg-red-50',   text: 'text-red-700',   emoji: '🟥', label: '지금 바로 이동!' } :
     remaining === 0 && liveIdx >= 0
-                    ? { bg:'bg-amber-50',  text:'text-amber-700', emoji:'🟡', label:'다음 경기 — 준비해주세요!' } :
-    remaining === 1 ? { bg:'bg-amber-50',  text:'text-amber-700', emoji:'🟡', label:'다음 경기 — 준비해주세요!' } :
-    remaining === 2 ? { bg:'bg-green-50',  text:'text-green-700', emoji:'🟢', label:`앞에 ${remaining}경기 남음` } :
-                      { bg:'bg-stone-50',  text:'text-stone-500', emoji:'⏳', label:`앞에 ${remaining}경기 남음` }
+                    ? { bg: 'bg-amber-50', text: 'text-amber-700', emoji: '🟨', label: '다음 경기 준비해주세요!' } :
+    remaining === 1 ? { bg: 'bg-amber-50', text: 'text-amber-700', emoji: '🟨', label: '다음 경기 준비해주세요!' } :
+    remaining === 2 ? { bg: 'bg-green-50', text: 'text-green-700', emoji: '🟩', label: `앞에 ${remaining}경기 남음` } :
+                     { bg: 'bg-stone-50', text: 'text-stone-500',  emoji: '⬜', label: `앞에 ${remaining}경기 남음` }
 
   const currentMatch = curIdx >= 0 && !iAmLive ? queue[curIdx] : null
 
@@ -657,9 +726,9 @@ function CourtQueue({ queue, myMatchId, court }: {
         <div className="flex items-center justify-between">
           <span className={`text-sm font-bold ${cfg.text}`}>{cfg.emoji} {cfg.label}</span>
           <div className="flex items-center gap-2">
-            <span className="text-xs text-stone-400">📍 {court}</span>
+            <span className="text-xs text-stone-400">🎾 {court}</span>
             <button onClick={() => setExpanded(!expanded)} className="text-xs text-stone-400 hover:text-stone-600">
-              {expanded ? '접기 ▲' : '전체보기 ▼'}
+              {expanded ? '접기 ▲' : '펼치기 ▼'}
             </button>
           </div>
         </div>
@@ -676,7 +745,7 @@ function CourtQueue({ queue, myMatchId, court }: {
             const isLive = q.status === 'IN_PROGRESS'
             const isMe   = q.id === myMatchId
             const origIdx = queue.indexOf(q)
-            const badge  = isLive ? '🔴' : origIdx === curIdx ? '🔴' : origIdx === curIdx + 1 ? '🟡' : origIdx === curIdx + 2 ? '🟢' : ''
+            const badge  = isLive ? '🟥' : origIdx === curIdx ? '🟥' : origIdx === curIdx + 1 ? '🟨' : origIdx === curIdx + 2 ? '🟩' : ''
             return (
               <div key={q.id} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs ${
                 isMe   ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' :
