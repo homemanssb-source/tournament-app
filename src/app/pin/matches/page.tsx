@@ -178,18 +178,25 @@ export default function PinMatchesPage() {
         (divResult.data || []).map((d: any) => d.match_date).filter(Boolean)
       )] as string[]
 
-      // division_id → match_date 매핑 (내 부서들)
-      const divDateMap: Record<string, string> = {}
-      ;(divResult.data || []).forEach((d: any) => { if (d.id && d.match_date) divDateMap[d.id] = d.match_date })
+      // 내 날짜에 해당하는 전체 부서 ID 조회
+      let allowedDivIds: Set<string> | null = null
+      if (myDates.length > 0) {
+        const { data: sameDateDivs } = await supabase
+          .from('divisions')
+          .select('id')
+          .eq('event_id', s.event_id)
+          .in('match_date', myDates)
+        if (sameDateDivs && sameDateDivs.length > 0) {
+          allowedDivIds = new Set(sameDateDivs.map((d: any) => d.id))
+        }
+      }
 
       const rawMatches = matchResult.data
 
       const allMatches = (rawMatches || []).filter((m: any) => {
         if (m.score === 'BYE') return false
-        if (myDates.length === 0) return true
-        // match_date 있으면 그 날짜로 판단
-        const mDate = m.match_date || divDateMap[m.division_id]
-        if (mDate && !myDates.includes(mDate)) return false
+        // 날짜 필터: 허용된 부서 ID에 속하는 경기만
+        if (allowedDivIds && !allowedDivIds.has(m.division_id)) return false
         return true
       })
 
