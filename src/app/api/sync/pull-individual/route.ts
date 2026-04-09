@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
 function getAppAClient() {
@@ -25,10 +25,12 @@ function shortenClub(club: string | null | undefined): string {
 }
 
 // "홍길동(제주하나)/홍길금(제주아라)" 형식 생성
+// p1Name이 비어있으면 클럽 괄호 없이 처리
 function buildTeamName(p1Name: string, p1Club: string | null, p2Name: string, p2Club: string | null): string {
-  const p1 = p1Club ? `${p1Name}(${p1Club})` : p1Name;
+  const p1 = p1Name ? (p1Club ? `${p1Name}(${p1Club})` : p1Name) : '';
   const p2 = p2Name ? (p2Club ? `${p2Name}(${p2Club})` : p2Name) : '';
-  return p2 ? `${p1}/${p2}` : p1;
+  if (p1 && p2) return `${p1}/${p2}`;
+  return p1 || p2;
 }
 
 export async function POST(request: NextRequest) {
@@ -67,11 +69,12 @@ export async function POST(request: NextRequest) {
       if (matched) divisionMap[aDiv.division_id] = matched.id;
     }
 
-    // 4. 앱A event_entries + teams 가져오기
+    // 4. 앱A event_entries + teams 가져오기 (삭제/취소 제외: pending, confirmed 만)
     const { data: entries, error: entErr } = await appA
       .from('event_entries')
       .select('*, team:teams(*)')
-      .eq('event_id', app_a_event_id);
+      .eq('event_id', app_a_event_id)
+      .in('status', ['pending', 'confirmed']);
     if (entErr) {
       return NextResponse.json({ success: false, error: 'appA entries 조회 실패: ' + entErr.message }, { status: 500 });
     }
@@ -85,13 +88,15 @@ export async function POST(request: NextRequest) {
       if (entry.team?.member1_id) memberIds.add(entry.team.member1_id);
       if (entry.team?.member2_id) memberIds.add(entry.team.member2_id);
     }
-    const { data: membersData } = await appA
-      .from('members')
-      .select('member_id, name, pin_code, grade, club')
-      .in('member_id', [...memberIds]);
     const memberMap: Record<string, any> = {};
-    for (const m of (membersData || [])) {
-      memberMap[m.member_id] = m;
+    if (memberIds.size > 0) {
+      const { data: membersData } = await appA
+        .from('members')
+        .select('member_id, name, pin_code, grade, club')
+        .in('member_id', [...memberIds]);
+      for (const m of (membersData || [])) {
+        memberMap[m.member_id] = m;
+      }
     }
 
     let syncedCount = 0;
