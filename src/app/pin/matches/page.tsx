@@ -505,7 +505,7 @@ export default function PinMatchesPage() {
                     const isLive   = m.status === 'IN_PROGRESS'
                     const isDone   = m.status === 'FINISHED'
                     const canInput = isLive && !m.locked_by_participant
-                    const queue    = m.court ? (courtQueues.get(m.court) || []).filter(q => q.division_id === m.division_id) : []
+                    const queue    = m.court ? courtQueues.get(m.court) || [] : []
                     const showQueue = m.court && queue.length > 0 && !isDone
                     const winner   = winners[m.id]
                     const loser    = loserScores[m.id] || ''
