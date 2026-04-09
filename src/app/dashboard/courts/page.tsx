@@ -884,7 +884,7 @@ export default function CourtsPage() {
                     const firstPendingIdx = courtItems.findIndex(mm => mm.status === 'PENDING')
                     const canStart = !m.is_team_tie && m.status === 'PENDING' && allIdx === firstPendingIdx
                     return (
-                      <MatchChip key={m.id} m={m} order={m.court_order||allIdx+1} badge={badge}
+                      <MatchChip key={m.id} m={m} badge={badge}
                         isCurrentSlot={m.status==='PENDING'&&allIdx===currentIdx}
                         divColor={divColors[m.division_id]}
                         allMatches={allFinalsMatches.length > 0 ? allFinalsMatches : matches}
@@ -988,7 +988,6 @@ function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }:
             <div key={m.id} className="rounded-lg border border-stone-100 bg-stone-50 p-2 opacity-60">
               <div className="flex items-center justify-between gap-1">
                 <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                  <span className="text-[10px] text-stone-400 font-mono flex-shrink-0">#{m.court_order}</span>
                   <span className="text-xs text-stone-500"><MatchTeamRow raw={m.team_a_name} done /><span className="text-stone-300 mx-0.5">vs</span><MatchTeamRow raw={m.team_b_name} done /></span>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
@@ -1006,8 +1005,8 @@ function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }:
 }
 
 // ── MatchChip 컴포넌트
-function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
-  m: MatchSlim; order?: number; badge?: string; divColor?: string; isCurrentSlot?: boolean
+function MatchChip({ m, badge, divColor, isCurrentSlot, allMatches, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
+  m: MatchSlim; badge?: string; divColor?: string; isCurrentSlot?: boolean
   allMatches?: MatchSlim[]
   onDragStart: (id: string) => void; onClickScore: () => void
   onClickStart?: () => void; onClickUnassign?: () => void
@@ -1064,7 +1063,6 @@ function MatchChip({ m, order, badge, divColor, isCurrentSlot, allMatches, onDra
       }`}>
       {/* 1줄: order + badge + 색점/단체 + 버튼들 */}
       <div className="flex items-center gap-1 min-w-0">
-        {order && <span className="text-stone-400 font-bold flex-shrink-0 text-[10px]">#{order}</span>}
         {badge && <span className="text-[10px] flex-shrink-0">{badge}</span>}
         {isTeam
           ? <span className="text-[10px] bg-blue-600 text-white px-1 rounded flex-shrink-0">단체</span>
