@@ -3,26 +3,11 @@ import { useEffect, useState } from 'react'
 import { supabase, Division } from '@/lib/supabase'
 
 export function useEventId(): string {
-  const [id, setId] = useState<string>(() => {
-    if (typeof window === 'undefined') return ''
-    return localStorage.getItem('dashboard_event_id') || ''
-  })
-
+  const [id, setId] = useState('')
   useEffect(() => {
-    function onStorageChange() {
-      const next = localStorage.getItem('dashboard_event_id') || ''
-      setId(prev => prev !== next ? next : prev)
-    }
-    // localStorage는 다른 탭에서 변경 시 storage 이벤트 발생
-    // 같은 탭 변경은 layout이 dispatchEvent로 알려줌
-    window.addEventListener('dashboard_event_changed', onStorageChange)
-    window.addEventListener('storage', onStorageChange)
-    return () => {
-      window.removeEventListener('dashboard_event_changed', onStorageChange)
-      window.removeEventListener('storage', onStorageChange)
-    }
+    const stored = localStorage.getItem('dashboard_event_id') || ''
+    setId(stored)
   }, [])
-
   return id
 }
 
@@ -33,7 +18,6 @@ export function useDivisions(eventId: string) {
 
   useEffect(() => {
     if (!eventId) return
-    setLoading(true)
     supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order')
       .then(({ data }) => {
         setDivisions(data || [])
