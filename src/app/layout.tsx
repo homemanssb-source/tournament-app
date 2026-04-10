@@ -27,6 +27,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="ko">
       <head>
         <meta name="mobile-web-app-capable" content="yes" />
+        {/* Pretendard 폰트: @import(렌더블로킹) → <link>(더 빠른 병렬 로드) */}
+        <link rel="preconnect" href="https://cdn.jsdelivr.net" crossOrigin="anonymous" />
+        <link
+          rel="stylesheet"
+          href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+        />
         <link rel="apple-touch-icon" sizes="192x192" href="/icon-192x192.png" />
       </head>
       <body>
