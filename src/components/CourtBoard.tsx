@@ -11,7 +11,7 @@ interface CourtMatch {
   winner_team_id: string | null; is_team_tie?: boolean
 }
 
-export default function CourtBoard({ eventId }: { eventId: string }) {
+export default function CourtBoard({ eventId, initialDate }: { eventId: string; initialDate?: string }) {
   const [matches, setMatches]       = useState<CourtMatch[]>([])
   const [loading, setLoading]       = useState(true)
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
@@ -21,7 +21,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
   const [suggestions, setSugg]      = useState<string[]>([])
   const [showSugg, setShowSugg]     = useState(false)
   const [searchResult, setResult]   = useState<{ name: string; court: string; idx: number } | null>(null)
-  const [dateFilter, setDateFilter] = useState<string>('ALL')
+  const [dateFilter, setDateFilter] = useState<string>(initialDate || 'ALL')
   const [venueFilter, setVenueFilter] = useState<string>('ALL')
   const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({})
   const inputRef = useRef<HTMLInputElement>(null)
@@ -86,7 +86,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
   // ✅ 첫 번째 날짜 자동 선택
   useEffect(() => {
     const dates = [...new Set(Object.values(divMatchDates))].sort()
-    if (dates.length > 1 && dateFilter === 'ALL') {
+    if (dates.length > 1 && dateFilter === 'ALL' && !initialDate) {
       setDateFilter(dates[0])
     }
   }, [divMatchDates])
