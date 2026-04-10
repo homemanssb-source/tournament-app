@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
     )
 
     const supabaseAdmin = getServiceClient()
-    const { event_id, court, match_id, trigger } = await req.json()
+    const { event_id, court, match_id, finished_match_id, match_date, trigger } = await req.json()
 
     if (!event_id || !court) {
       return NextResponse.json({ error: 'event_id, court 필수' }, { status: 400 })
@@ -43,7 +43,46 @@ export async function POST(req: NextRequest) {
     let divisionName = ''
     let targetId = ''
 
-    if (match_id) {
+    if (finished_match_id) {
+      // ✅ 점수 제출 후 호출: 방금 끝난 경기의 코트+날짜 기준으로 다음 PENDING 경기 찾기
+      const { data: finishedMatch } = await supabaseAdmin
+        .from('v_matches_with_teams')
+        .select('court, court_order, match_date')
+        .eq('id', finished_match_id)
+        .single()
+
+      if (finishedMatch) {
+        let q = supabaseAdmin
+          .from('v_matches_with_teams')
+          .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status, score, court_order')
+          .eq('event_id', event_id)
+          .eq('court', finishedMatch.court || court)
+          .order('court_order')
+
+        // 날짜 필터: match_date 있으면 같은 날짜만
+        if (finishedMatch.match_date) q = q.eq('match_date', finishedMatch.match_date)
+
+        const { data: courtMatches } = await q
+        const filtered = (courtMatches || []).filter((m: any) => m.score !== 'BYE')
+
+        // ✅ court_order 값이 아닌 배열 인덱스 기준으로 다음 경기 찾기
+        // (수동 수정으로 court_order가 뒤섞여도 정렬 순서상 다음이 정확함)
+        const finishedIdx = filtered.findIndex((m: any) => m.id === finished_match_id)
+        const target = finishedIdx >= 0
+          ? filtered.slice(finishedIdx + 1).find((m: any) => m.status === 'PENDING')
+          : undefined
+
+        if (target) {
+          teamAId = target.team_a_id
+          teamBId = target.team_b_id
+          teamAName = target.team_a_name
+          teamBName = target.team_b_name
+          divisionName = target.division_name
+          targetId = target.id
+        }
+      }
+    } else if (match_id) {
+      // 기존: 특정 경기 팀에게 직접 발송 (드래그 배정 등)
       const { data } = await supabaseAdmin
         .from('v_matches_with_teams')
         .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name')
@@ -82,15 +121,26 @@ export async function POST(req: NextRequest) {
         teamBName = clubB?.name || ''
       } else {
         // 개인전 matches
-        const { data: courtMatches } = await supabaseAdmin
+        // ✅ 날짜 필터: 외부에서 안 넘겨도 IN_PROGRESS 경기의 match_date로 자동 결정
+        // 1단계: 날짜 없이 전체 조회
+        const { data: allCourtMatches } = await supabaseAdmin
           .from('v_matches_with_teams')
-          .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status, score')
+          .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status, score, match_date')
           .eq('event_id', event_id)
           .eq('court', court)
           .order('court_order')
 
-        // ✅ BYE 제외 클라이언트 필터 (NULL score 포함)
-        const filteredMatches = (courtMatches || []).filter((m: any) => m.score !== 'BYE')
+        const allFiltered = (allCourtMatches || []).filter((m: any) => m.score !== 'BYE')
+
+        // 2단계: 현재 IN_PROGRESS 경기의 match_date 추출 → 같은 날짜만 필터
+        const liveMatch = allFiltered.find((m: any) => m.status === 'IN_PROGRESS')
+        const todayDate = liveMatch?.match_date || match_date || null
+        const courtMatches = todayDate
+          ? allFiltered.filter((m: any) => m.match_date === todayDate)
+          : allFiltered
+
+        // ✅ BYE 제외는 위에서 처리됨
+        const filteredMatches = courtMatches
 
         if (filteredMatches && filteredMatches.length > 0) {
           const activeIdx = filteredMatches.findIndex(m => m.status === 'IN_PROGRESS')

@@ -372,9 +372,11 @@ export default function PinMatchesPage() {
         body: JSON.stringify({
           event_id: session.event_id,
           court: match.court,
+          finished_match_id: matchId,        // 방금 끝난 경기 ID (다음 순서 찾기용)
+          match_date: match.match_date || null, // 날짜 필터용
           trigger: 'finished',
         }),
-      }).catch(() => {}) // 실패해도 점수 제출에는 영향 없음
+      }).catch(() => {})
     }
 
     loadData(session)
