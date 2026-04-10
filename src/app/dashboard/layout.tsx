@@ -76,6 +76,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           if (id) {
             setEventId(id)
             localStorage.setItem('dashboard_event_id', id)
+    window.dispatchEvent(new Event('dashboard_event_changed'))
           }
         }
 
@@ -104,6 +105,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   function handleEventChange(id: string) {
     setEventId(id)
     localStorage.setItem('dashboard_event_id', id)
+    window.dispatchEvent(new Event('dashboard_event_changed'))
   }
 
   if (isLoginPage) return <>{children}</>
