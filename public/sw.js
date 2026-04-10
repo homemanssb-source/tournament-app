@@ -1,5 +1,5 @@
 // JTA 제주테니스 Service Worker
-const CACHE_NAME = 'jta-ranking-v7';
+const CACHE_NAME = 'jta-ranking-v8';
 const STATIC_ASSETS = ['/icon-192x192.png', '/icon-512x512.png', '/manifest.json'];
 
 self.addEventListener('install', e => {
@@ -85,12 +85,14 @@ self.addEventListener('push', e => {
         body: d.body || '새로운 알림이 있습니다.',
         icon: '/icon-192x192.png',
         badge: '/icon-72x72.png',
-        vibrate: [200, 100, 200],
+        vibrate: [300, 100, 300, 100, 500],
         tag: d.tag || 'jta-notification',
         renotify: true,
-        data: { url: d.url || '/' },
+        requireInteraction: true,
+        silent: false,
+        data: { url: d.url || '/pin/matches' },
         actions: [
-          { action: 'open',  title: '확인하기' },
+          { action: 'open',  title: '✅ 확인하기' },
           { action: 'close', title: '닫기' }
         ]
       });
@@ -111,3 +113,5 @@ self.addEventListener('notificationclick', e => {
     })
   );
 });
+
+
