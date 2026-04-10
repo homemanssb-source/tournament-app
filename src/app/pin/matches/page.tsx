@@ -364,6 +364,19 @@ export default function PinMatchesPage() {
     // ✅ 본선 TBD 슬롯 자동 채우기 시도 (조별 경기인 경우)
     await tryFillTournamentSlots(match)
 
+    // ✅ 점수 제출 후 다음 대기팀에게 Web Push 발송
+    if (match.court) {
+      fetch('/api/notify/court', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id: session.event_id,
+          court: match.court,
+          trigger: 'finished',
+        }),
+      }).catch(() => {}) // 실패해도 점수 제출에는 영향 없음
+    }
+
     loadData(session)
   }
 
