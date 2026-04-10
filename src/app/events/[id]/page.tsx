@@ -350,7 +350,7 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
   if (!data.length) return <p className="text-center py-10 text-stone-400">아직 조편성이 없습니다.</p>
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {data.map(g => (
         <div key={g.label} className="bg-white rounded-xl border overflow-hidden">
           <div className="bg-tennis-600 text-white px-4 py-2 font-bold text-sm">{g.label}</div>
