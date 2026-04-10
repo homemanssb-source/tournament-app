@@ -292,6 +292,18 @@ export default function CourtsPage() {
     finally { if (showLoading) setLoading(false) }
   }, [eventId])
 
+  // ✅ 자동배정 완료 후 코트별 푸시 일괄 발송
+  async function sendBulkNotify(courts: string[]) {
+    const unique = [...new Set(courts)]
+    await Promise.all(unique.map(court =>
+      fetch('/api/notify/court', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_id: eventId, court, trigger: 'court_changed' }),
+      }).catch(() => {})
+    ))
+  }
+
   async function loadMatches() {
     if (!eventId) return
     const { data } = await supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
@@ -384,7 +396,9 @@ export default function CourtsPage() {
           const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
           await supabase.from('ties').update({ court_number:courtNum, court_order:nextOrder }).eq('id', divTies[i].id)
         }
-        setMsg(`✅ [단체전] ${divTies.length}경기 배정 완료`); loadTies()
+        setMsg(`✅ [단체전] ${divTies.length}경기 배정 완료`)
+        sendBulkNotify(divTies.map((_, i) => autoCourts[i % autoCourts.length]))
+        loadTies()
       } finally { setAssigning(false) }
       return
     }
@@ -414,7 +428,9 @@ export default function CourtsPage() {
     for (const u of updates) await supabase.from('matches').update({ court:u.court, court_order:u.court_order }).eq('id', u.id)
     const divName = divisions.find(d => d.id === autoDiv)?.name || ''
     const summary = pool.map(c => { const cnt = updates.filter(u => u.court === c).length; return cnt > 0 ? `${c}:${cnt}경기` : '' }).filter(Boolean).join(' | ')
-    setMsg(`✅ [${divName}] 예선 ${updates.length}경기 배정 완료 — ${summary}`); loadMatches()
+    setMsg(`✅ [${divName}] 예선 ${updates.length}경기 배정 완료 — ${summary}`)
+    sendBulkNotify(updates.map(u => u.court))
+    loadMatches()
   }
 
   async function assignFinals(round: string) {
@@ -438,7 +454,9 @@ export default function CourtsPage() {
     }
     for (const u of updates) await supabase.from('matches').update({ court:u.court, court_order:u.court_order }).eq('id', u.id)
     const divName = divisions.find(d => d.id === autoDiv)?.name || ''
-    setMsg(`✅ [${divName}] ${STAGE_LABEL[round] || round} ${updates.length}경기 배정 완료`); loadMatches()
+    setMsg(`✅ [${divName}] ${STAGE_LABEL[round] || round} ${updates.length}경기 배정 완료`)
+    sendBulkNotify(updates.map(u => u.court))
+    loadMatches()
   }
 
   async function assignAllFinals() {
@@ -463,7 +481,9 @@ export default function CourtsPage() {
       }
     }
     if (total === 0) { setMsg(`[${divName}] 배정할 본선 경기가 없습니다.`); return }
-    setMsg(`✅ [${divName}] 전체 본선 ${total}경기 미리배정 완료`); loadMatches()
+    setMsg(`✅ [${divName}] 전체 본선 ${total}경기 미리배정 완료`)
+    sendBulkNotify([...new Set(currentMatches.filter(m => m.court).map(m => m.court!))])
+    loadMatches()
   }
 
   async function assignItemToCourt(itemId: string, court: string) {
