@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 import React from 'react'
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -9,8 +9,219 @@ interface Team {
   pin_plain: string; division_id: string; division_name: string; event_id: string
   p1_grade: string | null; p2_grade: string | null; club_name: string | null
   p1_club: string | null; p2_club: string | null
+  group_id: string | null
 }
 
+interface GroupOption {
+  id: string; label: string; num: number
+}
+
+// ── 팀 상세 편집 모달 ─────────────────────────────────────
+interface EditModalProps {
+  team: Team
+  groups: GroupOption[]
+  eventId: string
+  divisionName: string
+  onClose: () => void
+  onSaved: () => void
+}
+
+function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: EditModalProps) {
+  const [p1Name, setP1Name] = useState(team.player1_name)
+  const [p2Name, setP2Name] = useState(team.player2_name)
+  const [p1Club, setP1Club] = useState(team.p1_club || '')
+  const [p2Club, setP2Club] = useState(team.p2_club || '')
+  const [groupId, setGroupId] = useState(team.group_id || '')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  // 팀명 미리보기
+  function buildTeamName(p1: string, c1: string, p2: string, c2: string) {
+    const a = c1.trim() ? `${p1.trim()}(${c1.trim()})` : p1.trim()
+    const b = p2.trim() ? (c2.trim() ? `${p2.trim()}(${c2.trim()})` : p2.trim()) : ''
+    return b ? `${a}/${b}` : a
+  }
+
+  async function handleSave() {
+    if (!p1Name.trim() || !p2Name.trim()) { setMsg('❌ 이름을 모두 입력하세요.'); return }
+    setSaving(true); setMsg('')
+    try {
+      // 1. teams 테이블 업데이트
+      const teamName = buildTeamName(p1Name, p1Club, p2Name, p2Club)
+      const teamKey = `${divisionName}|${p1Name.trim()}|${p2Name.trim()}`
+      const { error: teamErr } = await supabase.from('teams').update({
+        player1_name: p1Name.trim(),
+        player2_name: p2Name.trim(),
+        p1_club: p1Club.trim() || null,
+        p2_club: p2Club.trim() || null,
+        team_name: teamName,
+        team_key: teamKey,
+      }).eq('id', team.id)
+      if (teamErr) { setMsg('❌ ' + teamErr.message); return }
+
+      // 2. 조 변경 처리
+      const newGroupId = groupId || null
+      if (newGroupId !== team.group_id) {
+        // 기존 조에서 제거
+        if (team.group_id) {
+          const { error: delErr } = await supabase
+            .from('group_members')
+            .delete()
+            .eq('team_id', team.id)
+            .eq('group_id', team.group_id)
+          if (delErr) { setMsg('❌ 기존 조 제거 실패: ' + delErr.message); return }
+
+          // 기존 조의 조별 경기에서 이 팀이 포함된 미완료 경기 team 제거 (NULL 처리)
+          // ※ score가 이미 있는 경기는 건드리지 않음
+          const { error: matchErr } = await supabase
+            .from('matches')
+            .update({ team_b_id: null })
+            .eq('group_id', team.group_id)
+            .eq('team_b_id', team.id)
+            .is('score', null)
+          // team_a_id 쪽도
+          await supabase
+            .from('matches')
+            .update({ team_a_id: null })
+            .eq('group_id', team.group_id)
+            .eq('team_a_id', team.id)
+            .is('score', null)
+        }
+
+        // 새 조에 추가
+        if (newGroupId) {
+          // 현재 조 멤버 수 (seed 계산)
+          const { data: members } = await supabase
+            .from('group_members')
+            .select('id')
+            .eq('group_id', newGroupId)
+          const nextSeed = (members?.length || 0) + 1
+
+          const { error: insErr } = await supabase
+            .from('group_members')
+            .insert({ group_id: newGroupId, team_id: team.id, event_id: eventId, seed: nextSeed })
+          if (insErr) { setMsg('❌ 새 조 배정 실패: ' + insErr.message); return }
+        }
+
+        // teams.group_id 동기화
+        await supabase.from('teams').update({ group_id: newGroupId }).eq('id', team.id)
+      }
+
+      setMsg('✅ 저장됨')
+      setTimeout(() => { onSaved(); onClose() }, 500)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function handleBackdrop(e: React.MouseEvent) {
+    if (e.target === e.currentTarget) onClose()
+  }
+
+  const currentGroup = groups.find(g => g.id === team.group_id)
+  const newGroup = groups.find(g => g.id === groupId)
+  const groupChanged = (groupId || null) !== team.group_id
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onMouseDown={handleBackdrop}
+    >
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md mx-4 p-6 space-y-4">
+        {/* 헤더 */}
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold text-stone-800">✏️ 팀 수정</h2>
+          <button onClick={onClose} className="text-stone-400 hover:text-stone-600 text-2xl leading-none">×</button>
+        </div>
+
+        <div className="text-xs text-stone-400 font-mono">{team.team_num} · {divisionName}</div>
+
+        {msg && (
+          <div className={`text-sm px-3 py-2 rounded-lg ${msg.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
+            {msg}
+          </div>
+        )}
+
+        {/* 선수 1 */}
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-stone-500 uppercase tracking-wide">선수 1</label>
+          <div className="flex gap-2">
+            <input
+              type="text" value={p1Name} onChange={e => setP1Name(e.target.value)}
+              placeholder="이름" autoFocus
+              className="flex-1 border border-stone-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#2d5016]/30"
+            />
+            <input
+              type="text" value={p1Club} onChange={e => setP1Club(e.target.value)}
+              placeholder="소속클럽"
+              className="w-28 border border-stone-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#2d5016]/30"
+            />
+          </div>
+        </div>
+
+        {/* 선수 2 */}
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-stone-500 uppercase tracking-wide">선수 2</label>
+          <div className="flex gap-2">
+            <input
+              type="text" value={p2Name} onChange={e => setP2Name(e.target.value)}
+              placeholder="이름"
+              className="flex-1 border border-stone-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#2d5016]/30"
+            />
+            <input
+              type="text" value={p2Club} onChange={e => setP2Club(e.target.value)}
+              placeholder="소속클럽"
+              className="w-28 border border-stone-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#2d5016]/30"
+            />
+          </div>
+        </div>
+
+        {/* 조 배정 */}
+        {groups.length > 0 && (
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-stone-500 uppercase tracking-wide">조 배정</label>
+            <select
+              value={groupId}
+              onChange={e => setGroupId(e.target.value)}
+              className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#2d5016]/30"
+            >
+              <option value="">— 조 없음 —</option>
+              {groups.map(g => (
+                <option key={g.id} value={g.id}>{g.label}조</option>
+              ))}
+            </select>
+            {groupChanged && (
+              <p className="text-xs text-orange-600 bg-orange-50 rounded-lg px-3 py-2">
+                ⚠️ {currentGroup ? `${currentGroup.label}조 → ` : '미배정 → '}{newGroup ? `${newGroup.label}조` : '미배정'}
+                {' '}— 점수 없는 조별 경기에서 자동 제거됩니다.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* 팀명 미리보기 */}
+        <div className="bg-stone-50 rounded-lg px-3 py-2 text-sm text-stone-600">
+          <span className="text-stone-400 text-xs mr-1">팀명 미리보기:</span>
+          <span className="font-medium">{buildTeamName(p1Name, p1Club, p2Name, p2Club) || '—'}</span>
+        </div>
+
+        {/* 버튼 */}
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={onClose}
+            className="flex-1 border border-stone-300 rounded-lg py-2.5 text-sm text-stone-600 hover:bg-stone-50 transition-colors"
+          >취소</button>
+          <button
+            onClick={handleSave} disabled={saving}
+            className="flex-1 bg-[#2d5016] text-white rounded-lg py-2.5 text-sm font-semibold hover:bg-[#3a6b1e] disabled:opacity-50 transition-colors"
+          >{saving ? '저장 중...' : '저장'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── 메인 페이지 ───────────────────────────────────────────
 export default function TeamsPage() {
   const eventId = useEventId()
   const { divisions, selected, setSelected, loading: divLoading } = useDivisions(eventId)
@@ -18,25 +229,27 @@ export default function TeamsPage() {
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
 
-  // ✅ 부서별 날짜
   const [divDates, setDivDates] = useState<Record<string, string>>({})
 
   const [p1Name, setP1Name] = useState('')
   const [p2Name, setP2Name] = useState('')
   const [addLoading, setAddLoading] = useState(false)
 
+  // 인라인 편집 (기존 호환)
   const [editId, setEditId] = useState<string | null>(null)
   const [editP1, setEditP1] = useState('')
   const [editP2, setEditP2] = useState('')
 
-  // ✅ 검색
+  // 상세 편집 모달
+  const [editModalTeam, setEditModalTeam] = useState<Team | null>(null)
+  const [groups, setGroups] = useState<GroupOption[]>([])
+
   const [searchQuery, setSearchQuery] = useState('')
 
   const fileRef = useRef<HTMLInputElement>(null)
 
   const selectedDiv = divisions.find(d => d.id === selected)
 
-  // ✅ 검색 필터링된 팀 목록
   const filteredTeams = searchQuery.trim()
     ? teams.filter(t => {
         const q = searchQuery.trim().toLowerCase()
@@ -55,12 +268,12 @@ export default function TeamsPage() {
     if (eventId) loadDivDates(eventId)
   }, [eventId])
 
-  useEffect(() => { if (eventId && selected) loadTeams() }, [eventId, selected])
+  useEffect(() => {
+    if (eventId && selected) { loadTeams(); loadGroups() }
+  }, [eventId, selected])
 
-  // ✅ 부서 변경 시 검색어 초기화
   useEffect(() => { setSearchQuery('') }, [selected])
 
-  // ✅ 부서별 날짜 로드
   async function loadDivDates(eid: string) {
     try {
       const { data } = await supabase.from('divisions').select('id, match_date').eq('event_id', eid)
@@ -79,6 +292,17 @@ export default function TeamsPage() {
       .order('team_num')
     setTeams(data || [])
     setLoading(false)
+  }
+
+  async function loadGroups() {
+    if (!eventId || !selected) return
+    const { data } = await supabase
+      .from('groups')
+      .select('id, label, num')
+      .eq('event_id', eventId)
+      .eq('division_id', selected)
+      .order('num')
+    setGroups((data || []).map((g: any) => ({ id: g.id, label: g.label, num: g.num })))
   }
 
   function generatePin() {
@@ -197,9 +421,21 @@ export default function TeamsPage() {
 
   return (
     <div>
+      {/* 상세 편집 모달 */}
+      {editModalTeam && (
+        <EditModal
+          team={editModalTeam}
+          groups={groups}
+          eventId={eventId}
+          divisionName={selectedDiv?.name || ''}
+          onClose={() => setEditModalTeam(null)}
+          onSaved={() => { loadTeams(); loadGroups() }}
+        />
+      )}
+
       <h1 className="text-2xl font-bold mb-4">👥 팀 관리</h1>
 
-      {/* ✅ 부서 탭 — 날짜 뱃지 포함 */}
+      {/* 부서 탭 — 날짜 뱃지 포함 */}
       <div className="flex flex-wrap gap-2 mb-4">
         {divisions.map(d => {
           const date = divDates[d.id]
@@ -220,7 +456,7 @@ export default function TeamsPage() {
         })}
       </div>
 
-      {/* ✅ 선택된 부서 날짜 표시 */}
+      {/* 선택된 부서 날짜 표시 */}
       {selected && divDates[selected] && (
         <div className="mb-4 flex items-center gap-2 text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5">
           <span>📅</span>
@@ -270,7 +506,7 @@ export default function TeamsPage() {
       ) : (
         <>
           <div className="flex justify-between items-center mb-2 gap-2">
-            {/* ✅ 검색 인풋 */}
+            {/* 검색 */}
             <div className="relative flex-1 max-w-xs">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-sm">🔍</span>
               <input
@@ -284,9 +520,7 @@ export default function TeamsPage() {
                 <button
                   onClick={() => setSearchQuery('')}
                   className="absolute right-2 top-1/2 -translate-y-1/2 text-stone-300 hover:text-stone-500 text-lg leading-none"
-                >
-                  ×
-                </button>
+                >×</button>
               )}
             </div>
             <div className="flex items-center gap-3 flex-shrink-0">
@@ -313,62 +547,73 @@ export default function TeamsPage() {
                     <th className="text-left px-4 py-2 w-20">#</th>
                     <th className="text-left px-4 py-2">선수1</th>
                     <th className="text-left px-4 py-2">선수2</th>
-                    <th className="text-left px-4 py-2 w-20">클럽</th>
+                    <th className="text-left px-4 py-2 w-12">조</th>
                     <th className="text-left px-4 py-2 w-28">PIN</th>
                     <th className="text-right px-4 py-2 w-24">작업</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-100">
-                  {filteredTeams.map(t => (
-                    <tr key={t.id} className="hover:bg-stone-50">
-                      <td className="px-4 py-2 text-stone-400 text-xs">{t.team_num}</td>
-                      <td className="px-4 py-2">
-                        {editId === t.id ? (
-                          <input type="text" value={editP1} onChange={e => setEditP1(e.target.value)}
-                            className="border rounded px-2 py-1 text-sm w-full" autoFocus />
-                        ) : (
-                          <div>
-                            <span className="font-medium">
-                              {searchQuery.trim()
-                                ? highlightMatch(t.player1_name, searchQuery)
-                                : t.player1_name}
-                              {t.p1_grade && <span className="text-xs text-blue-500 ml-1">{t.p1_grade}</span>}
-                            </span>
-                            {t.p1_club && <div className="text-xs text-stone-400">{t.p1_club}</div>}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-2">
-                        {editId === t.id ? (
-                          <div className="flex gap-1">
-                            <input type="text" value={editP2} onChange={e => setEditP2(e.target.value)}
-                              onKeyDown={e => e.key === 'Enter' && saveEdit(t.id)}
-                              className="border rounded px-2 py-1 text-sm flex-1" />
-                            <button onClick={() => saveEdit(t.id)} className="text-tennis-600 text-xs">저장</button>
-                            <button onClick={() => setEditId(null)} className="text-stone-400 text-xs">취소</button>
-                          </div>
-                        ) : (
-                          <div>
-                            <span className="font-medium">
-                              {searchQuery.trim()
-                                ? highlightMatch(t.player2_name, searchQuery)
-                                : t.player2_name}
-                              {t.p2_grade && <span className="text-xs text-blue-500 ml-1">{t.p2_grade}</span>}
-                            </span>
-                            {t.p2_club && <div className="text-xs text-stone-400">{t.p2_club}</div>}
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-2 text-xs text-stone-500">{t.club_name || '-'}</td>
-                      <td className="px-4 py-2 font-mono text-xs text-stone-500">{t.pin_plain}</td>
-                      <td className="px-4 py-2 text-right">
-                        <button onClick={() => { setEditId(t.id); setEditP1(t.player1_name); setEditP2(t.player2_name) }}
-                          className="text-xs text-stone-400 hover:text-stone-600 mr-2">✏️</button>
-                        <button onClick={() => deleteTeam(t.id, t.team_name)}
-                          className="text-xs text-stone-400 hover:text-red-500">🗑️</button>
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredTeams.map(t => {
+                    const groupLabel = groups.find(g => g.id === t.group_id)?.label
+                    return (
+                      <tr key={t.id} className="hover:bg-stone-50">
+                        <td className="px-4 py-2 text-stone-400 text-xs">{t.team_num}</td>
+                        <td className="px-4 py-2">
+                          {editId === t.id ? (
+                            <input type="text" value={editP1} onChange={e => setEditP1(e.target.value)}
+                              className="border rounded px-2 py-1 text-sm w-full" autoFocus />
+                          ) : (
+                            <div>
+                              <span className="font-medium">
+                                {searchQuery.trim()
+                                  ? highlightMatch(t.player1_name, searchQuery)
+                                  : t.player1_name}
+                                {t.p1_grade && <span className="text-xs text-blue-500 ml-1">{t.p1_grade}</span>}
+                              </span>
+                              {t.p1_club && <div className="text-xs text-stone-400">{t.p1_club}</div>}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-2">
+                          {editId === t.id ? (
+                            <div className="flex gap-1">
+                              <input type="text" value={editP2} onChange={e => setEditP2(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && saveEdit(t.id)}
+                                className="border rounded px-2 py-1 text-sm flex-1" />
+                              <button onClick={() => saveEdit(t.id)} className="text-tennis-600 text-xs">저장</button>
+                              <button onClick={() => setEditId(null)} className="text-stone-400 text-xs">취소</button>
+                            </div>
+                          ) : (
+                            <div>
+                              <span className="font-medium">
+                                {searchQuery.trim()
+                                  ? highlightMatch(t.player2_name, searchQuery)
+                                  : t.player2_name}
+                                {t.p2_grade && <span className="text-xs text-blue-500 ml-1">{t.p2_grade}</span>}
+                              </span>
+                              {t.p2_club && <div className="text-xs text-stone-400">{t.p2_club}</div>}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-2">
+                          {groupLabel
+                            ? <span className="inline-block bg-[#2d5016]/10 text-[#2d5016] text-xs font-bold px-2 py-0.5 rounded-full">{groupLabel}</span>
+                            : <span className="text-stone-300 text-xs">-</span>
+                          }
+                        </td>
+                        <td className="px-4 py-2 font-mono text-xs text-stone-500">{t.pin_plain}</td>
+                        <td className="px-4 py-2 text-right">
+                          <button
+                            onClick={() => { setEditModalTeam(t); setEditId(null) }}
+                            className="text-xs text-stone-400 hover:text-[#2d5016] mr-2 transition-colors"
+                            title="상세 편집 (이름·클럽·조)"
+                          >✏️</button>
+                          <button onClick={() => deleteTeam(t.id, t.team_name)}
+                            className="text-xs text-stone-400 hover:text-red-500">🗑️</button>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -379,7 +624,7 @@ export default function TeamsPage() {
   )
 }
 
-// ✅ 검색어 하이라이트 헬퍼
+// 검색어 하이라이트
 function highlightMatch(text: string, query: string): React.ReactNode {
   if (!query.trim()) return text
   const idx = text.toLowerCase().indexOf(query.trim().toLowerCase())
