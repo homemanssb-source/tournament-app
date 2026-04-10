@@ -8,9 +8,9 @@
 // ✅ [성능] ResultsView: matches+groups 병렬, standings Promise.all
 // ============================================================
 'use client'
-import React from 'react'
+import React, { Suspense } from 'react'
 import { useEffect, useState, useCallback } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase, Division, Match } from '@/lib/supabase'
 import TournamentBracket from '@/components/TournamentBracket'
@@ -30,9 +30,11 @@ async function logAccess(eventId: string, page: string, tab?: string) {
   } catch {}
 }
 
-export default function EventDetailPage() {
+function EventDetailInner() {
   const { id } = useParams()
   const eventId = id as string
+  const searchParams = useSearchParams()
+  const dateParam = searchParams.get('date')  // ?date=YYYY-MM-DD
   const [event, setEvent] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [mode, setMode] = useState<Mode>('individual')
@@ -105,11 +107,16 @@ export default function EventDetailPage() {
       else setMode('individual')
 
       setDivisions(divs)
-      if (divs.length) setActiveDivision(divs[0].id)
       setTeamDivisions(divs)
-      if (divs.length) setSelectedTeamDiv(divs[0].id)
 
-      await loadTeamData(divs[0]?.id)
+      // ?date= 파라미터 기준으로 해당 날짜 첫 번째 division 자동선택
+      const firstDiv = dateParam
+        ? (divs.find((d: any) => d.match_date === dateParam) ?? divs[0])
+        : divs[0]
+      if (firstDiv) setActiveDivision(firstDiv.id)
+      if (firstDiv) setSelectedTeamDiv(firstDiv.id)
+
+      await loadTeamData(firstDiv?.id)
       setLoading(false)
       logAccess(eventId, 'event_detail')
     })()
@@ -208,7 +215,7 @@ export default function EventDetailPage() {
 
         {mode === 'individual' && divisions.length > 1 && iTab !== 'courts' && (
           <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
-            {divisions.map(d => (
+            {(dateParam ? divisions.filter((d: any) => d.match_date === dateParam || !d.match_date) : divisions).map(d => (
               <button key={d.id} onClick={() => setActiveDivision(d.id)}
                 className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
                   activeDivision === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
@@ -226,7 +233,7 @@ export default function EventDetailPage() {
 
         {mode === 'team' && teamDivisions.length > 1 && tTab !== 'courts' && (
           <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
-            {teamDivisions.map(d => (
+            {(dateParam ? teamDivisions.filter((d: any) => d.match_date === dateParam || !d.match_date) : teamDivisions).map(d => (
               <button key={d.id} onClick={() => handleTeamDivChange(d.id)}
                 className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
                   selectedTeamDiv === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
@@ -349,9 +356,9 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
           <div className="bg-tennis-600 text-white px-4 py-2 font-bold text-sm">{g.label}</div>
           <div className="p-3">
             {g.teams.map((t: any, i: number) => (
-              <div key={t.team_id} className="flex items-center gap-2 py-2 border-b border-stone-100 last:border-0">
+              <div key={t.team_id} className="flex items-center gap-2 py-2 border-b border-stone-100 last:border-0 min-w-0">
                 <span className="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-500">{i + 1}</span>
-                <span className="font-bold text-base text-stone-800">{t.team_name}</span>
+                <span className="font-bold text-sm text-stone-800 truncate min-w-0">{t.team_name}</span>
               </div>
             ))}
           </div>
@@ -498,8 +505,8 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
                                 : <span className="text-stone-400 text-xs">{i + 1}</span>
                             }
                           </td>
-                          <td className="px-3 py-2.5">
-                            <span className={`font-medium ${isFirst && !isTied ? 'text-green-800' : 'text-stone-800'}`}>
+                          <td className="px-3 py-2.5 max-w-0">
+                            <span className={`font-medium truncate block ${isFirst && !isTied ? 'text-green-800' : 'text-stone-800'}`}>
                               {t.name}
                             </span>
                             {isTied && (
@@ -777,5 +784,13 @@ function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function EventDetailPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-stone-400">불러오는 중...</div>}>
+      <EventDetailInner />
+    </Suspense>
   )
 }
