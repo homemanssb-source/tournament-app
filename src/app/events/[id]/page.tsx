@@ -356,9 +356,11 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
           <div className="bg-tennis-600 text-white px-4 py-2 font-bold text-sm">{g.label}</div>
           <div className="p-3">
             {g.teams.map((t: any, i: number) => (
-              <div key={t.team_id} className="flex items-center gap-2 py-2 border-b border-stone-100 last:border-0 min-w-0">
-                <span className="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-500">{i + 1}</span>
-                <span className="font-bold text-sm text-stone-800 truncate min-w-0">{t.team_name}</span>
+              <div key={t.team_id} className="flex items-start gap-2 py-2 border-b border-stone-100 last:border-0">
+                <span className="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-500 flex-shrink-0 mt-0.5">{i + 1}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold text-sm text-stone-800 truncate">{t.team_name}</div>
+                </div>
               </div>
             ))}
           </div>
