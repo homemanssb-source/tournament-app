@@ -432,11 +432,13 @@ function FinishedMatches({ matches }: { matches: CourtMatch[] }) {
         {open ? '▼' : '▶'} 완료 {matches.length}경기
       </button>
       {open && (
-        <div className="space-y-1 mt-1">
+        <div className="space-y-1 mt-1 ml-3">
           {matches.map(m => (
-            <div key={m.id} className="text-xs text-stone-400 py-1 border-b border-stone-50 last:border-0 line-through">
-              {m.team_a_name} vs {m.team_b_name}
-              {m.score && <span className="ml-1 font-bold no-underline not-italic">{m.score}</span>}
+            <div key={m.id} className="text-xs py-1 text-stone-400 border-b border-stone-50 last:border-0">
+              <span>#{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
+              {m.is_team_tie && <span className="text-blue-500 mr-1">[단체]</span>}
+              <span>{m.team_a_name} vs {m.team_b_name}</span>
+              {m.score && <span className={`font-bold ml-1 ${m.is_team_tie ? 'text-blue-600' : 'text-tennis-600'}`}>{m.score}</span>}
             </div>
           ))}
         </div>
