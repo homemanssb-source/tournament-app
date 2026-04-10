@@ -171,11 +171,11 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
     } else if (idx === curIdx && !hasLive) {
       posLabel = '지금 내 차례'; urgency = 2
     } else if (idx === curIdx && hasLive) {
-      posLabel = '다음 대기'; urgency = 1
+      posLabel = `${idx + 1}번째 경기`; urgency = 1
     } else if (waitNum === 1) {
-      posLabel = '다음 대기'; urgency = 1
+      posLabel = `${idx + 1}번째 경기`; urgency = 1
     } else {
-      posLabel = `${waitNum}번째 대기`; urgency = 0
+      posLabel = `${idx + 1}번째 경기`; urgency = 0
     }
 
     return {
@@ -298,9 +298,7 @@ export default function CourtBoard({ eventId }: { eventId: string }) {
                       ? '🔴 지금 경기 중!'
                       : searchInfo.urgency === 2
                         ? '⚡ 지금 내 차례!'
-                        : searchInfo.urgency === 1
-                          ? '🟡 곧 내 차례'
-                          : `⏳ ${searchInfo.wait}경기 후 내 차례`}
+                        : `⏳ ${searchInfo.posLabel} 대기 중`}
                   </span>
                 )}
               </div>
@@ -374,7 +372,7 @@ function CourtSlot({ label, labelColor, match, highlight }: { label: string; lab
     <div className={`rounded-lg border p-2.5 ${highlight ? 'ring-2 ring-blue-400 ' : ''}${labelColor}`}>
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-xs font-bold">{label}</span>
-        <span className="text-xs opacity-70">#{match.court_order > 100 ? match.match_num : match.court_order} · {match.round}</span>
+        <span className="text-xs opacity-70">{match.round}</span>
       </div>
       <div className="flex items-center gap-2">
         <div className="flex-1 min-w-0">
@@ -410,7 +408,7 @@ function RemainingMatches({ matches, searchName }: { matches: CourtMatch[]; sear
             )
             return (
               <div key={m.id} className={`text-xs py-1 border-b border-stone-50 last:border-0 ${isHit ? 'font-bold text-blue-700 bg-blue-50 px-1 rounded' : ''}`}>
-                <span className="text-stone-400">#{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
+                <span className="text-stone-400">{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
                 {m.is_team_tie && <span className="text-blue-600 mr-1">[단체]</span>}
                 <span>{m.team_a_name}</span><span className="text-stone-300"> vs </span><span>{m.team_b_name}</span>
                 {!m.is_team_tie && <span className="text-stone-400 ml-1">({m.division_name})</span>}
@@ -435,7 +433,7 @@ function FinishedMatches({ matches }: { matches: CourtMatch[] }) {
         <div className="space-y-1 mt-1 ml-3">
           {matches.map(m => (
             <div key={m.id} className="text-xs py-1 text-stone-400 border-b border-stone-50 last:border-0">
-              <span>#{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
+              <span>{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
               {m.is_team_tie && <span className="text-blue-500 mr-1">[단체]</span>}
               <span>{m.team_a_name} vs {m.team_b_name}</span>
               {m.score && <span className={`font-bold ml-1 ${m.is_team_tie ? 'text-blue-600' : 'text-tennis-600'}`}>{m.score}</span>}
