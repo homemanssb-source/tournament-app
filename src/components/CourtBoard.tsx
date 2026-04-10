@@ -376,9 +376,25 @@ function CourtSlot({ label, labelColor, match, highlight }: { label: string; lab
       </div>
       <div className="flex items-center gap-2">
         <div className="flex-1 min-w-0">
-          <div className="font-bold text-sm truncate">{match.team_a_name || 'TBD'}</div>
+          {(match.team_a_name || 'TBD').includes('/') ? (
+            <div className="flex items-center gap-1 min-w-0">
+              <span className="font-bold text-sm truncate flex-1 min-w-0">{(match.team_a_name || 'TBD').split('/')[0].trim()}</span>
+              <span className="text-stone-300 text-xs flex-shrink-0">/</span>
+              <span className="font-bold text-sm truncate flex-1 min-w-0">{(match.team_a_name || 'TBD').split('/').slice(1).join('/').trim()}</span>
+            </div>
+          ) : (
+            <div className="font-bold text-sm truncate">{match.team_a_name || 'TBD'}</div>
+          )}
           <div className="text-xs opacity-60">vs</div>
-          <div className="font-bold text-sm truncate">{match.team_b_name || 'TBD'}</div>
+          {(match.team_b_name || 'TBD').includes('/') ? (
+            <div className="flex items-center gap-1 min-w-0">
+              <span className="font-bold text-sm truncate flex-1 min-w-0">{(match.team_b_name || 'TBD').split('/')[0].trim()}</span>
+              <span className="text-stone-300 text-xs flex-shrink-0">/</span>
+              <span className="font-bold text-sm truncate flex-1 min-w-0">{(match.team_b_name || 'TBD').split('/').slice(1).join('/').trim()}</span>
+            </div>
+          ) : (
+            <div className="font-bold text-sm truncate">{match.team_b_name || 'TBD'}</div>
+          )}
         </div>
         <div className="text-right flex-shrink-0">
           <div className={`text-xs font-medium px-2 py-0.5 rounded-full ${isTeam ? 'bg-blue-100 text-blue-700' : 'bg-white/50'}`}>
