@@ -601,20 +601,17 @@ function MatchResultRow({ m }: { m: any }) {
   const rightWon  = false
 
   // ✅ 점수를 항상 승자:패자 순으로 표시
-  // 이름은 승자를 왼쪽으로 이동 → 점수도 항상 왼쪽(승자):오른쪽(패자) 순이어야 함
-  // DB score는 team_a:team_b 고정 → 승자가 누구냐에 따라 표시 조정
+  // DB score 저장 방식이 혼재 (개인PIN=team_a:team_b 고정, 마스터PIN=직접입력)
+  // → 두 숫자 중 높은 쪽을 승자 점수로 간주, 항상 높은쪽:낮은쪽 순으로 표시
   let displayScore = m.score
   if (m.winner_team_id && m.score && m.score.includes(':')) {
     const parts = m.score.split(':')
-    const sa = parseInt(parts[0], 10)  // team_a 점수
-    const sb = parseInt(parts[1], 10)  // team_b 점수
-    if (!isNaN(sa) && !isNaN(sb)) {
-      // 승자 점수가 항상 왼쪽(높아야 정상)
-      // aWon이면 sa가 승자점수 → sa >= sb 이면 정상, sa < sb 이면 뒤집기
-      // bWon이면 sb가 승자점수 → 무조건 sb:sa 순으로 표시 (이름이 왼쪽으로 이동했으므로)
-      const winnerScore = aWon ? sa : sb
-      const loserScore  = aWon ? sb : sa
-      displayScore = `${winnerScore}:${loserScore}`
+    const s0 = parseInt(parts[0], 10)
+    const s1 = parseInt(parts[1], 10)
+    if (!isNaN(s0) && !isNaN(s1)) {
+      const high = Math.max(s0, s1)
+      const low  = Math.min(s0, s1)
+      displayScore = `${high}:${low}`
     }
   }
 
