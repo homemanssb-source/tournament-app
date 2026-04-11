@@ -3,12 +3,9 @@
 // ✅ TeamBracketView: 가로 브래킷 형태로 교체 (운영자와 동일)
 // ✅ preparing 상태 대회 잠금 처리
 // ✅ ResultsView: 조별 순위 + 경기결과 목록 추가
-// ✅ [성능] 초기 로드 waterfall 제거: event+divisions+teamData 병렬
-// ✅ [성능] loadTeamData: groups별 fetchStandings for루프 → Promise.all
-// ✅ [성능] ResultsView: matches+groups 병렬, standings Promise.all
 // ============================================================
 'use client'
-import React, { Suspense } from 'react'
+import React from 'react'
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
@@ -23,6 +20,46 @@ type Mode = 'individual' | 'team'
 type IndividualTab = 'groups' | 'tournament' | 'results' | 'courts'
 type TeamTab = 'standings' | 'matches' | 'bracket' | 'courts'
 
+// ─── 공통 헬퍼: "전태홍(제주하나)/강기호(행복배틀)" → [{ name, club }] ───
+function parsePlayers(raw: string): { name: string; club: string }[] {
+  if (!raw || raw === 'TBD' || raw === 'BYE') return []
+  return raw.split('/').map(p => {
+    const m = p.trim().match(/^(.+?)\((.+)\)$/)
+    return m ? { name: m[1].trim(), club: m[2].trim() } : { name: p.trim(), club: '' }
+  })
+}
+
+// 클럽명 최대 6자 축약
+function shortClub(club: string, max = 6): string {
+  return club.length > max ? club.slice(0, max) + '…' : club
+}
+
+// 선수 쌍: 이름 굵게, 클럽명 최대 6자 축약
+function PlayerPair({ raw, winner, trophy, align = 'left' }: { raw: string; winner?: boolean; trophy?: boolean; align?: 'left' | 'right' }) {
+  const players = parsePlayers(raw)
+  if (players.length === 0) {
+    return <span className={`font-bold text-sm ${winner ? 'text-[#2d5016]' : 'text-stone-500'}`}>{raw || 'TBD'}</span>
+  }
+  return (
+    <div className={`flex items-start gap-1.5 min-w-0 ${align === 'right' ? 'flex-row-reverse' : 'flex-row'}`}>
+      {trophy && <span className="text-xs flex-shrink-0 self-start pt-0.5">🏆</span>}
+      {players.map((p, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <span className={`text-stone-300 font-normal flex-shrink-0 text-sm leading-tight ${winner ? 'text-[#2d5016]' : ''}`}>/</span>}
+          <div className={`min-w-0 ${align === 'right' ? 'text-right' : ''}`}>
+            <div className={`text-sm font-bold leading-tight truncate ${winner ? 'text-[#2d5016]' : 'text-stone-700'}`}>{p.name}</div>
+            {p.club && (
+              <div className={`text-[10px] text-stone-400 leading-tight truncate ${align === 'right' ? 'text-right' : ''}`} title={p.club}>
+                {shortClub(p.club)}
+              </div>
+            )}
+          </div>
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
 async function logAccess(eventId: string, page: string, tab?: string) {
   try {
     const device = window.innerWidth < 768 ? 'mobile' : 'desktop'
@@ -30,11 +67,11 @@ async function logAccess(eventId: string, page: string, tab?: string) {
   } catch {}
 }
 
-function EventDetailInner() {
+export default function EventDetailPage() {
   const { id } = useParams()
-  const eventId = id as string
   const searchParams = useSearchParams()
-  const dateParam = searchParams.get('date')  // ?date=YYYY-MM-DD
+  const dateFilter = searchParams.get('date') // 대회목록에서 넘어온 날짜 (예: "2025-05-10")
+  const eventId = id as string
   const [event, setEvent] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [mode, setMode] = useState<Mode>('individual')
@@ -53,70 +90,32 @@ function EventDetailInner() {
   const [teamDivisions, setTeamDivisions] = useState<Division[]>([])
   const [selectedTeamDiv, setSelectedTeamDiv] = useState<string>('')
 
-  // ✅ Fix: loadTeamData - groups별 fetchStandings for루프 → Promise.all 병렬
-  const loadTeamData = useCallback(async (divisionId?: string) => {
-    const divId = divisionId || selectedTeamDiv || undefined
-
-    // cfg + clubs + ties 병렬 (기존 유지)
-    const [cfg, clubList, tieList] = await Promise.all([
-      fetchEventTeamConfig(eventId),
-      fetchClubs(eventId, divId || null),
-      fetchTies(eventId),
-    ])
-    setTeamConfig(cfg)
-    setClubs(clubList)
-    const filteredTies = divId ? tieList.filter(t => (t as any).division_id === divId) : tieList
-    setTies(filteredTies)
-
-    const map: Record<string, StandingWithClub[]> = {}
-    if (cfg?.team_format === 'full_league') {
-      map['full'] = await fetchStandings(eventId, null)
-    } else {
-      const { data: grps } = await supabase
-        .from('groups').select('*').eq('event_id', eventId).order('group_num')
-      const filteredGrps = divId
-        ? (grps || []).filter((g: any) => g.division_id === divId)
-        : (grps || [])
-      setGroups(filteredGrps)
-
-      // ✅ Fix: for 루프 순차 → Promise.all 병렬
-      //    조가 6개면 기존엔 6 round-trip, 수정 후 1 round-trip
-      const results = await Promise.all(
-        filteredGrps.map(g => fetchStandings(eventId, g.id))
-      )
-      filteredGrps.forEach((g, i) => { map[g.id] = results[i] })
-    }
-    setStandingsMap(map)
-  }, [eventId, selectedTeamDiv])
-
   useEffect(() => {
-    // ✅ Fix: 기존 순차 waterfall 제거
-    //    기존: await event → await divisions → await loadTeamData (3 round-trip)
-    //    수정: Promise.all([event, divisions]) 병렬 → loadTeamData 1회
-    ;(async () => {
-      const [evRes, divRes] = await Promise.all([
+    (async () => {
+      // ✅ events + divisions 병렬 로드
+      const [{ data: ev }, { data: divs }] = await Promise.all([
         supabase.from('events').select('*').eq('id', eventId).single(),
         supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order'),
       ])
-
-      const ev   = evRes.data
-      const divs = divRes.data || []
-
       setEvent(ev)
       if (ev?.event_type === 'team') setMode('team')
       else setMode('individual')
 
-      setDivisions(divs)
-      setTeamDivisions(divs)
+      const allDivs = divs || []
+      setDivisions(allDivs)
+      setTeamDivisions(allDivs)
 
-      // ?date= 파라미터 기준으로 해당 날짜 첫 번째 division 자동선택
-      const firstDiv = dateParam
-        ? (divs.find((d: any) => d.match_date === dateParam) ?? divs[0])
-        : divs[0]
-      if (firstDiv) setActiveDivision(firstDiv.id)
-      if (firstDiv) setSelectedTeamDiv(firstDiv.id)
+      // ✅ dateFilter(쿼리스트링)가 있으면 해당 날짜 부서만, 없으면 전체
+      const filtered = dateFilter
+        ? allDivs.filter((d: any) => d.match_date === dateFilter)
+        : allDivs
+      const firstDiv = filtered[0] || allDivs[0]
+      if (firstDiv) { setActiveDivision(firstDiv.id); setSelectedTeamDiv(firstDiv.id) }
 
-      await loadTeamData(firstDiv?.id)
+      // ✅ 개인전이면 팀 데이터 로드 스킵
+      if (ev?.event_type === 'team' || ev?.event_type === 'both') {
+        await loadTeamData(firstDiv?.id)
+      }
       setLoading(false)
       logAccess(eventId, 'event_detail')
     })()
@@ -132,6 +131,33 @@ function EventDetailInner() {
     if (mode === 'team') logAccess(eventId, 'event_detail', `team_${tTab}`)
   }, [tTab, mode, eventId, loading])
 
+  const loadTeamData = useCallback(async (divisionId?: string) => {
+    const divId = divisionId || selectedTeamDiv || undefined
+    const [cfg, clubList, tieList] = await Promise.all([
+      fetchEventTeamConfig(eventId),
+      fetchClubs(eventId, divId || null),
+      fetchTies(eventId),
+    ])
+    setTeamConfig(cfg)
+    setClubs(clubList)
+    const filteredTies = divId ? tieList.filter((t: any) => (t as any).division_id === divId) : tieList
+    setTies(filteredTies)
+
+    const map: Record<string, StandingWithClub[]> = {}
+    if (cfg?.team_format === 'full_league') {
+      map['full'] = await fetchStandings(eventId, null)
+    } else {
+      const { data: grps } = await supabase.from('groups').select('*').eq('event_id', eventId).order('group_num')
+      const filteredGrps = divId ? (grps || []).filter((g: any) => g.division_id === divId) : (grps || [])
+      setGroups(filteredGrps)
+      // ✅ 병렬 로드
+      await Promise.all(filteredGrps.map(async (g: any) => {
+        map[g.id] = await fetchStandings(eventId, g.id)
+      }))
+    }
+    setStandingsMap(map)
+  }, [eventId, selectedTeamDiv])
+
   async function handleTeamDivChange(divId: string) {
     setSelectedTeamDiv(divId)
     await loadTeamData(divId)
@@ -146,7 +172,7 @@ function EventDetailInner() {
   if (loading) return <div className="min-h-screen flex items-center justify-center text-stone-400">불러오는 중...</div>
   if (!event)  return <div className="min-h-screen flex items-center justify-center text-stone-400">대회를 찾을 수 없습니다.</div>
 
-  // 준비중 잠금 화면
+  // ✅ 준비중 잠금 화면
   if (event.status === 'preparing') {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-8 bg-stone-50">
@@ -167,16 +193,16 @@ function EventDetailInner() {
   }
 
   const individualTabs: { key: IndividualTab; label: string; emoji: string }[] = [
-    { key: 'groups',     label: '조편성',   emoji: '📋' },
+    { key: 'groups', label: '조편성', emoji: '📋' },
     { key: 'tournament', label: '토너먼트', emoji: '🏆' },
-    { key: 'results',    label: '경기결과', emoji: '📊' },
-    { key: 'courts',     label: '코트현황', emoji: '🎾' },
+    { key: 'results', label: '경기결과', emoji: '📊' },
+    { key: 'courts', label: '코트현황', emoji: '🎾' },
   ]
   const teamTabs: { key: TeamTab; label: string; emoji: string }[] = [
-    { key: 'standings', label: '순위',     emoji: '📊' },
-    { key: 'matches',   label: '경기결과', emoji: '📋' },
-    { key: 'bracket',   label: '토너먼트', emoji: '🏆' },
-    { key: 'courts',    label: '코트현황', emoji: '🎾' },
+    { key: 'standings', label: '순위', emoji: '📊' },
+    { key: 'matches', label: '경기결과', emoji: '📋' },
+    { key: 'bracket', label: '토너먼트', emoji: '🏆' },
+    { key: 'courts', label: '코트현황', emoji: '🎾' },
   ]
 
   const liveTies = ties.filter(t => t.status === 'in_progress')
@@ -213,41 +239,44 @@ function EventDetailInner() {
           </div>
         )}
 
-        {mode === 'individual' && divisions.length > 1 && iTab !== 'courts' && (
-          <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
-            {(dateParam ? divisions.filter((d: any) => d.match_date === dateParam || !d.match_date) : divisions).map(d => (
-              <button key={d.id} onClick={() => setActiveDivision(d.id)}
-                className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                  activeDivision === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
-                }`}>
-                {d.name}
-                {(d as any).match_date && (
-                  <span className="ml-1 text-[10px] opacity-80">
-                    {new Date((d as any).match_date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
+        {mode === 'individual' && iTab !== 'courts' && (() => {
+          // dateFilter 있으면 해당 날짜 부서만, 없으면 전체
+          const visibleDivs = dateFilter
+            ? divisions.filter((d: any) => d.match_date === dateFilter)
+            : divisions
+          if (visibleDivs.length <= 1) return null
+          return (
+            <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
+              {visibleDivs.map(d => (
+                <button key={d.id} onClick={() => setActiveDivision(d.id)}
+                  className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                    activeDivision === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
+                  }`}>
+                  {d.name}
+                </button>
+              ))}
+            </div>
+          )
+        })()}
 
-        {mode === 'team' && teamDivisions.length > 1 && tTab !== 'courts' && (
-          <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
-            {(dateParam ? teamDivisions.filter((d: any) => d.match_date === dateParam || !d.match_date) : teamDivisions).map(d => (
-              <button key={d.id} onClick={() => handleTeamDivChange(d.id)}
-                className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
-                  selectedTeamDiv === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
-                }`}>
-                {d.name}
-                {(d as any).match_date && (
-                  <span className="ml-1 text-[10px] opacity-80">
-                    {new Date((d as any).match_date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
+        {mode === 'team' && tTab !== 'courts' && (() => {
+          const visibleDivs = dateFilter
+            ? teamDivisions.filter((d: any) => d.match_date === dateFilter)
+            : teamDivisions
+          if (visibleDivs.length <= 1) return null
+          return (
+            <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto pb-2">
+              {visibleDivs.map(d => (
+                <button key={d.id} onClick={() => handleTeamDivChange(d.id)}
+                  className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                    selectedTeamDiv === d.id ? 'bg-white text-[#2d5016]' : 'bg-white/20 text-white/80'
+                  }`}>
+                  {d.name}
+                </button>
+              ))}
+            </div>
+          )
+        })()}
 
         <div className="max-w-5xl mx-auto px-4 flex border-t border-white/10">
           {mode === 'individual' ? (
@@ -273,7 +302,7 @@ function EventDetailInner() {
           {iTab === 'groups'     && <GroupsView eventId={eventId} divisionId={activeDivision} />}
           {iTab === 'tournament' && <TournamentView eventId={eventId} divisionId={activeDivision} />}
           {iTab === 'results'    && <ResultsView eventId={eventId} divisionId={activeDivision} />}
-          {iTab === 'courts'     && <CourtBoard eventId={eventId} initialDate={dateParam || undefined} />}
+          {iTab === 'courts'     && <CourtBoard eventId={eventId} initialDate={dateFilter ?? undefined} />}
         </>)}
 
         {mode === 'team' && (<>
@@ -313,7 +342,7 @@ function EventDetailInner() {
           {tTab === 'standings' && <TeamStandingsView standingsMap={standingsMap} groups={groups} />}
           {tTab === 'matches'   && <TeamMatchesView ties={ties} />}
           {tTab === 'bracket'   && <TeamBracketView ties={ties} />}
-          {tTab === 'courts'    && <CourtBoard eventId={eventId} initialDate={dateParam || undefined} />}
+          {tTab === 'courts'    && <CourtBoard eventId={eventId} initialDate={dateFilter ?? undefined} />}
 
           <div className="text-center mt-6">
             <button onClick={() => loadTeamData()} className="text-sm text-gray-400 hover:text-gray-600">
@@ -337,7 +366,7 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
     setLoading(true)
     supabase.from('v_group_board').select('*').eq('event_id', eventId).eq('division_id', divisionId)
       .order('group_num').order('team_num')
-      .then(({ data: rows }) => {
+      .then(({ data: rows }: { data: any[] | null }) => {
         const map = new Map<string, { label: string; num: number; teams: any[] }>()
         for (const r of (rows || [])) {
           if (!map.has(r.group_id)) map.set(r.group_id, { label: r.group_label, num: r.group_num, teams: [] })
@@ -350,25 +379,15 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
   if (!data.length) return <p className="text-center py-10 text-stone-400">아직 조편성이 없습니다.</p>
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {data.map(g => (
         <div key={g.label} className="bg-white rounded-xl border overflow-hidden">
           <div className="bg-tennis-600 text-white px-4 py-2 font-bold text-sm">{g.label}</div>
           <div className="p-3">
             {g.teams.map((t: any, i: number) => (
-              <div key={t.team_id} className="flex items-start gap-2 py-2 border-b border-stone-100 last:border-0">
-                <span className="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-500 flex-shrink-0 mt-0.5">{i + 1}</span>
-                <div className="min-w-0 flex-1">
-                  {t.team_name.includes('/') ? (
-                    <div className="flex items-center gap-1 min-w-0">
-                      <span className="font-bold text-sm text-stone-800 truncate flex-1 min-w-0">{t.team_name.split('/')[0].trim()}</span>
-                      <span className="text-stone-300 text-xs flex-shrink-0">/</span>
-                      <span className="font-bold text-sm text-stone-800 truncate flex-1 min-w-0">{t.team_name.split('/').slice(1).join('/').trim()}</span>
-                    </div>
-                  ) : (
-                    <div className="font-bold text-sm text-stone-800 truncate">{t.team_name}</div>
-                  )}
-                </div>
+              <div key={t.team_id} className="flex items-center gap-2 py-2 border-b border-stone-100 last:border-0">
+                <span className="w-6 h-6 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-500 flex-shrink-0">{i + 1}</span>
+                <PlayerPair raw={t.team_name} />
               </div>
             ))}
           </div>
@@ -383,11 +402,16 @@ function TournamentView({ eventId, divisionId }: { eventId: string; divisionId: 
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     setLoading(true)
+    // ✅ v_matches_with_teams 뷰 사용 → team_a_name, team_b_name 포함
     supabase.from('v_matches_with_teams').select('*')
       .eq('event_id', eventId).eq('division_id', divisionId).eq('stage', 'FINALS')
       .order('slot')
-      .then(({ data }) => {
-        const mapped = (data || []).map((m: any) => ({ ...m, match_id: m.id }))
+      .then(({ data }: { data: any[] | null }) => {
+        // TournamentBracket이 기대하는 match_id 필드로 매핑
+        const mapped = (data || []).map((m: any) => ({
+          ...m,
+          match_id: m.id,  // TournamentBracket은 match_id 사용
+        }))
         setMatches(mapped)
         setLoading(false)
       })
@@ -397,46 +421,39 @@ function TournamentView({ eventId, divisionId }: { eventId: string; divisionId: 
   return <TournamentBracket matches={matches} />
 }
 
-// ✅ Fix: ResultsView - matches+groups 병렬, standings Promise.all 병렬
+// ✅ ResultsView — 조별 순위 + 경기결과 목록
 function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: string }) {
-  const [matches, setMatches]   = useState<any[]>([])
-  const [groups, setGroups]     = useState<any[]>([])
+  const [matches, setMatches] = useState<any[]>([])
+  const [groups, setGroups]   = useState<any[]>([])
   const [standings, setStandings] = useState<Record<string, any[]>>({})
-  const [loading, setLoading]   = useState(true)
-  const [view, setView]         = useState<'standings' | 'matches'>('standings')
+  const [loading, setLoading] = useState(true)
+  const [view, setView] = useState<'standings' | 'matches'>('standings')
 
   useEffect(() => {
     if (!divisionId) return
     setLoading(true)
     ;(async () => {
-      // ✅ matches + groups 병렬
-      const [mRes, gRes] = await Promise.all([
-        supabase.from('v_matches_with_teams').select('*')
-          .eq('event_id', eventId).eq('division_id', divisionId)
-          .eq('status', 'FINISHED').neq('score', 'BYE')
-          .order('updated_at', { ascending: false }).limit(100),
-        supabase.from('groups').select('*')
-          .eq('event_id', eventId).eq('division_id', divisionId)
-          .order('group_num'),
-      ])
-      setMatches(mRes.data || [])
-      const gData = gRes.data || []
-      setGroups(gData)
+      const { data: mData } = await supabase
+        .from('v_matches_with_teams').select('*')
+        .eq('event_id', eventId).eq('division_id', divisionId)
+        .eq('status', 'FINISHED').neq('score', 'BYE')
+        .order('updated_at', { ascending: false }).limit(100)
+      setMatches(mData || [])
 
-      // ✅ 각 조의 경기 데이터 병렬 fetch
-      const groupMatchResults = await Promise.all(
-        gData.map(g =>
-          supabase.from('v_matches_with_teams').select('*')
-            .eq('event_id', eventId).eq('group_id', g.id)
-            .eq('status', 'FINISHED').neq('score', 'BYE')
-        )
-      )
+      const { data: gData } = await supabase
+        .from('groups').select('*')
+        .eq('event_id', eventId).eq('division_id', divisionId)
+        .order('group_num')
+      setGroups(gData || [])
 
       const map: Record<string, any[]> = {}
-      gData.forEach((g, i) => {
-        const sData = groupMatchResults[i].data || []
+      await Promise.all((gData || []).map(async (g: any) => {
+        const { data: sData } = await supabase
+          .from('v_matches_with_teams').select('*')
+          .eq('event_id', eventId).eq('group_id', g.id)
+          .eq('status', 'FINISHED').neq('score', 'BYE')
         const teamMap: Record<string, { name: string; win: number; lose: number; scored: number; against: number }> = {}
-        for (const m of sData) {
+        for (const m of (sData || [])) {
           if (!teamMap[m.team_a_id]) teamMap[m.team_a_id] = { name: m.team_a_name, win:0, lose:0, scored:0, against:0 }
           if (!teamMap[m.team_b_id]) teamMap[m.team_b_id] = { name: m.team_b_name, win:0, lose:0, scored:0, against:0 }
           const parts = (m.score || '0:0').split(':').map(Number)
@@ -455,7 +472,7 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
         map[g.id] = Object.values(teamMap).sort((a, b) =>
           b.win - a.win || (b.scored - b.against) - (a.scored - a.against)
         )
-      })
+      }))
       setStandings(map)
       setLoading(false)
     })()
@@ -515,13 +532,13 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
                                 : <span className="text-stone-400 text-xs">{i + 1}</span>
                             }
                           </td>
-                          <td className="px-3 py-2.5 max-w-0">
-                            <span className={`font-medium truncate block ${isFirst && !isTied ? 'text-green-800' : 'text-stone-800'}`}>
-                              {t.name}
-                            </span>
-                            {isTied && (
-                              <span className="ml-1.5 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">동률</span>
-                            )}
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <PlayerPair raw={t.name} winner={isFirst && !isTied} />
+                              {isTied && (
+                                <span className="ml-1 text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium flex-shrink-0">동률</span>
+                              )}
+                            </div>
                           </td>
                           <td className="px-3 py-2.5 text-center font-bold text-green-700">{t.win}</td>
                           <td className="px-3 py-2.5 text-center text-stone-400">{t.lose}</td>
@@ -548,7 +565,9 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
             <div>
               <h3 className="text-xs font-bold text-stone-500 uppercase tracking-wide mb-2">본선</h3>
               <div className="space-y-2">
-                {finalsMatches.map(m => <MatchResultRow key={m.id} m={m} />)}
+                {finalsMatches.map(m => (
+                  <MatchResultRow key={m.id} m={m} />
+                ))}
               </div>
             </div>
           )}
@@ -556,7 +575,9 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
             <div>
               <h3 className="text-xs font-bold text-stone-500 uppercase tracking-wide mb-2">예선</h3>
               <div className="space-y-2">
-                {groupMatches.map(m => <MatchResultRow key={m.id} m={m} />)}
+                {groupMatches.map(m => (
+                  <MatchResultRow key={m.id} m={m} />
+                ))}
               </div>
             </div>
           )}
@@ -570,27 +591,55 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
 }
 
 function MatchResultRow({ m }: { m: any }) {
+  const aWon = m.winner_team_id === m.team_a_id
+  const bWon = m.winner_team_id === m.team_b_id
+
+  // ✅ 승자를 항상 왼쪽으로 (점수도 승자:패자 순으로 조정)
+  const leftName  = aWon ? m.team_a_name : m.team_b_name
+  const rightName = aWon ? m.team_b_name : m.team_a_name
+  const leftWon   = !!(m.winner_team_id)  // 왼쪽은 항상 승자 (winner 있을 때)
+  const rightWon  = false
+
+  // ✅ 점수도 승자:패자 순으로 조정
+  // DB는 항상 team_a:team_b 순 저장 → bWon이면(B팀 승자=왼쪽 이동) 점수 뒤집기
+  let displayScore = m.score
+  if (bWon && m.score && m.score.includes(':')) {
+    const [sa, sb] = m.score.split(':')
+    displayScore = `${sb}:${sa}`
+  }
+
+  // winner_team_id 없으면 그냥 원래 순서
+  const noWinner = !m.winner_team_id
   return (
     <div className="bg-white rounded-xl border p-3">
-      <div className="flex items-center justify-between text-xs text-stone-400 mb-1.5">
+      <div className="flex items-center justify-between text-xs text-stone-400 mb-2">
         <span>{m.group_label || m.round} · {m.match_num}</span>
         {m.court && <span className="text-[#2d5016] font-medium">{m.court}</span>}
       </div>
-      <div className="flex items-center">
-        <span className={`flex-1 text-sm font-bold ${m.winner_team_id === m.team_a_id ? 'text-[#2d5016]' : 'text-stone-500'}`}>
-          {m.winner_team_id === m.team_a_id && '🏆 '}{m.team_a_name}
-        </span>
-        <span className="text-lg font-black mx-3 text-stone-800">{m.score}</span>
-        <span className={`flex-1 text-sm font-bold text-right ${m.winner_team_id === m.team_b_id ? 'text-[#2d5016]' : 'text-stone-500'}`}>
-          {m.team_b_name}{m.winner_team_id === m.team_b_id && ' 🏆'}
-        </span>
+      <div className="flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <PlayerPair
+            raw={noWinner ? m.team_a_name : leftName}
+            winner={noWinner ? aWon : leftWon}
+            trophy={noWinner ? aWon : leftWon}
+          />
+        </div>
+        <span className="text-lg font-black mx-1 text-stone-800 flex-shrink-0">{displayScore}</span>
+        <div className="flex-1 min-w-0">
+          <PlayerPair
+            raw={noWinner ? m.team_b_name : rightName}
+            winner={noWinner ? bWon : rightWon}
+            trophy={false}
+            align="right"
+          />
+        </div>
       </div>
     </div>
   )
 }
 
 // =====================================
-// 단체전 뷰
+// 단체전 뷰 (기존 그대로)
 // =====================================
 function TeamStandingsView({ standingsMap, groups }: { standingsMap: Record<string, StandingWithClub[]>; groups: any[] }) {
   if (Object.keys(standingsMap).length === 0) {
@@ -797,10 +846,532 @@ function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
   )
 }
 
-export default function EventDetailPage() {
+============================================================
+FILE: src\app\events\[id]\team\page.tsx
+============================================================
+// ============================================================
+// 단체전 공개뷰 (관람객/참가자용)
+// src/app/events/[id]/team/page.tsx
+// ============================================================
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import { useParams } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
+import { fetchClubs, fetchTies, fetchStandings, fetchEventTeamConfig } from '@/lib/team-api';
+import {
+  getFormatLabel, getRoundLabel, getTieStatusLabel, getTieStatusColor,
+  formatSetScore, getMajority, calculateBracket,
+} from '@/lib/team-utils';
+import type { Club, TieWithClubs, StandingWithClub, EventTeamConfig } from '@/types/team';
+
+type Tab = 'standings' | 'matches' | 'bracket';
+
+export default function TeamPublicViewPage() {
+  const params = useParams();
+  const eventId = params.id as string;
+
+  const [event, setEvent] = useState<any>(null);
+  const [config, setConfig] = useState<EventTeamConfig | null>(null);
+  const [clubs, setClubs] = useState<Club[]>([]);
+  const [ties, setTies] = useState<TieWithClubs[]>([]);
+  const [groups, setGroups] = useState<any[]>([]);
+  const [standingsMap, setStandingsMap] = useState<Record<string, StandingWithClub[]>>({});
+  const [tab, setTab] = useState<Tab>('standings');
+  const [loading, setLoading] = useState(true);
+
+  const loadData = useCallback(async () => {
+    if (!eventId) return;
+    setLoading(true);
+
+    const { data: ev } = await supabase.from('events').select('*').eq('id', eventId).single();
+    setEvent(ev);
+
+    const [cfg, clubList, tieList] = await Promise.all([
+      fetchEventTeamConfig(eventId),
+      fetchClubs(eventId),
+      fetchTies(eventId),
+    ]);
+    setConfig(cfg);
+    setClubs(clubList);
+    setTies(tieList);
+
+    // 순위
+    const map: Record<string, StandingWithClub[]> = {};
+    if (cfg?.team_format === 'full_league') {
+      map['full'] = await fetchStandings(eventId, null);
+    } else {
+      const { data: grps } = await supabase
+        .from('groups')
+        .select('*')
+        .eq('event_id', eventId)
+        .order('group_index');
+      setGroups(grps || []);
+      for (const g of (grps || [])) {
+        map[g.id] = await fetchStandings(eventId, g.id);
+      }
+    }
+    setStandingsMap(map);
+    setLoading(false);
+  }, [eventId]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  // 자동 새로고침 (30초)
+  useEffect(() => {
+    const interval = setInterval(loadData, 30000);
+    return () => clearInterval(interval);
+  }, [loadData]);
+
+  // 대전 분류
+  const leagueTies = ties.filter(t => t.round === 'full_league' || t.round === 'group');
+  const tournamentTies = ties.filter(t => ['round_of_16', 'quarter', 'semi', 'final'].includes(t.round || ''));
+  const liveTies = ties.filter(t => t.status === 'in_progress');
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center text-gray-500">로딩중...</div>;
+
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-stone-400">불러오는 중...</div>}>
-      <EventDetailInner />
-    </Suspense>
+    <div className="min-h-screen bg-gray-50">
+      <div className="max-w-4xl mx-auto p-4 space-y-4">
+
+        {/* 헤더 */}
+        <div className="bg-white rounded-xl border p-6 text-center">
+          <h1 className="text-2xl font-bold">{event?.name || '단체전'}</h1>
+          <p className="text-gray-500 mt-1">
+            {config ? getFormatLabel(config.team_format) : ''} · {clubs.length}팀 · {config?.team_rubber_count}복식
+          </p>
+        </div>
+
+        {/* 실시간 경기 */}
+        {liveTies.length > 0 && (
+          <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+            <h2 className="font-semibold text-green-800 mb-2">🔴 진행중인 경기</h2>
+            <div className="space-y-2">
+              {liveTies.map(tie => (
+                <div key={tie.id} className="bg-white rounded-lg p-3 flex items-center justify-between">
+                  <div>
+                    <span className="font-medium">{tie.club_a?.name}</span>
+                    <span className="text-gray-400 mx-2">vs</span>
+                    <span className="font-medium">{tie.club_b?.name}</span>
+                  </div>
+                  <span className="text-lg font-bold text-green-700">
+                    {tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 탭 */}
+        <div className="flex bg-white rounded-xl border overflow-hidden">
+          {(['standings', 'matches', 'bracket'] as Tab[]).map(t => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`flex-1 py-3 text-sm font-medium transition ${
+                tab === t ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {t === 'standings' ? '📊 순위' : t === 'matches' ? '⚔️ 대전' : '🏅 토너먼트'}
+            </button>
+          ))}
+        </div>
+
+        {/* ── 순위 탭 ── */}
+        {tab === 'standings' && (
+          <div className="space-y-4">
+            {Object.entries(standingsMap).map(([key, standings]) => {
+              const title = key === 'full'
+                ? '풀리그 순위'
+                : groups.find(g => g.id === key)?.group_name || '';
+
+              return (
+                <div key={key} className="bg-white rounded-xl border overflow-hidden">
+                  <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">{title}</div>
+                  <table className="w-full text-sm">
+                    <thead className="border-t bg-gray-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left w-12">#</th>
+                        <th className="px-3 py-2 text-left">클럽</th>
+                        <th className="px-3 py-2 text-center w-10">승</th>
+                        <th className="px-3 py-2 text-center w-10">패</th>
+                        <th className="px-3 py-2 text-center w-14">득실</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {standings.map(s => (
+                        <tr key={s.id} className={s.is_tied ? 'bg-yellow-50' : ''}>
+                          <td className="px-3 py-2 font-bold">
+                            {s.rank ?? <span className="text-yellow-500 text-xs">⚠️</span>}
+                          </td>
+                          <td className="px-3 py-2 font-medium">
+                            {s.club?.name}
+                            {s.club?.seed_number && (
+                              <span className="ml-1 text-xs text-yellow-600">[{s.club.seed_number}]</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-center font-medium">{s.won}</td>
+                          <td className="px-3 py-2 text-center">{s.lost}</td>
+                          <td className="px-3 py-2 text-center">
+                            <span className={s.rubber_diff > 0 ? 'text-green-600' : s.rubber_diff < 0 ? 'text-red-600' : ''}>
+                              {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
+
+            {Object.keys(standingsMap).length === 0 && (
+              <div className="text-center text-gray-400 py-8">아직 순위 데이터가 없습니다.</div>
+            )}
+          </div>
+        )}
+
+        {/* ── 대전 탭 ── */}
+        {tab === 'matches' && (
+          <div className="space-y-2">
+            {ties.length === 0 ? (
+              <div className="text-center text-gray-400 py-8">대전이 없습니다.</div>
+            ) : (
+              ties.map(tie => (
+                <div key={tie.id} className={`bg-white rounded-xl border p-4 ${tie.is_bye ? 'opacity-50' : ''}`}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-gray-400">
+                      {getRoundLabel(tie.round || '')} #{tie.tie_order}
+                    </span>
+                    <span className={`text-xs px-2 py-0.5 rounded ${getTieStatusColor(tie.status)}`}>
+                      {getTieStatusLabel(tie.status)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <span className={`font-medium ${tie.winning_club_id === tie.club_a_id ? 'text-green-700' : ''}`}>
+                        {tie.club_a?.name || 'TBD'}
+                      </span>
+                    </div>
+                    <div className="text-center px-4">
+                      {tie.status === 'completed' || tie.status === 'in_progress' ? (
+                        <span className="text-xl font-bold">
+                          {tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}
+                        </span>
+                      ) : tie.is_bye ? (
+                        <span className="text-sm text-gray-400">BYE</span>
+                      ) : (
+                        <span className="text-sm text-gray-400">vs</span>
+                      )}
+                    </div>
+                    <div className="flex-1 text-right">
+                      <span className={`font-medium ${tie.winning_club_id === tie.club_b_id ? 'text-green-700' : ''}`}>
+                        {tie.club_b?.name || 'TBD'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 라인업 봉인 상태 */}
+                  {tie.status === 'lineup_phase' && (
+                    <div className="text-xs text-center text-yellow-600 mt-2">
+                      라인업: {tie.club_a_lineup_submitted ? '✅' : '⏳'} {tie.club_a?.name}
+                      {' · '}
+                      {tie.club_b_lineup_submitted ? '✅' : '⏳'} {tie.club_b?.name}
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* ── 토너먼트 탭 ── */}
+        {tab === 'bracket' && (
+          <div className="space-y-4">
+            {tournamentTies.length === 0 ? (
+              <div className="text-center text-gray-400 py-8">토너먼트가 아직 시작되지 않았습니다.</div>
+            ) : (
+              (() => {
+                const rounds = [...new Set(tournamentTies.map(t => t.round))].sort(
+                  (a, b) => {
+                    const order = ['round_of_16', 'quarter', 'semi', 'final'];
+                    return order.indexOf(a || '') - order.indexOf(b || '');
+                  }
+                );
+
+                return rounds.map(round => (
+                  <div key={round} className="bg-white rounded-xl border overflow-hidden">
+                    <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">
+                      {getRoundLabel(round || '')}
+                    </div>
+                    <div className="divide-y">
+                      {tournamentTies
+                        .filter(t => t.round === round)
+                        .sort((a, b) => (a.bracket_position || 0) - (b.bracket_position || 0))
+                        .map(tie => (
+                          <div key={tie.id} className="p-3">
+                            <div className="flex items-center">
+                              <div className={`flex-1 ${tie.winning_club_id === tie.club_a_id ? 'font-bold' : ''}`}>
+                                {tie.club_a?.seed_number && (
+                                  <span className="text-xs text-yellow-600 mr-1">[{tie.club_a.seed_number}]</span>
+                                )}
+                                {tie.club_a?.name || (tie.is_bye ? 'BYE' : 'TBD')}
+                              </div>
+                              <div className="px-4 font-bold">
+                                {tie.status === 'completed' || tie.status === 'in_progress'
+                                  ? `${tie.club_a_rubbers_won} - ${tie.club_b_rubbers_won}`
+                                  : tie.is_bye ? 'BYE' : 'vs'
+                                }
+                              </div>
+                              <div className={`flex-1 text-right ${tie.winning_club_id === tie.club_b_id ? 'font-bold' : ''}`}>
+                                {tie.club_b?.name || (tie.is_bye ? 'BYE' : 'TBD')}
+                                {tie.club_b?.seed_number && (
+                                  <span className="text-xs text-yellow-600 ml-1">[{tie.club_b.seed_number}]</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      }
+                    </div>
+                  </div>
+                ));
+              })()
+            )}
+
+            {/* 우승 */}
+            {(() => {
+              const finalTie = tournamentTies.find(t => t.round === 'final');
+              if (finalTie?.winning_club_id) {
+                const winner = finalTie.winning_club_id === finalTie.club_a_id
+                  ? finalTie.club_a?.name
+                  : finalTie.club_b?.name;
+                return (
+                  <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-6 text-center">
+                    <div className="text-4xl mb-2">🏆</div>
+                    <div className="text-2xl font-bold">{winner}</div>
+                    <div className="text-sm text-yellow-700 mt-1">우승!</div>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+          </div>
+        )}
+
+        {/* 새로고침 */}
+        <div className="text-center">
+          <button
+            onClick={loadData}
+            className="text-sm text-gray-400 hover:text-gray-600"
+          >
+            🔄 새로고침
+          </button>
+          <p className="text-xs text-gray-300 mt-1">30초마다 자동 갱신</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+============================================================
+FILE: src\app\events\page.tsx
+============================================================
+'use client'
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+
+interface DivSlim {
+  id: string
+  name: string
+  match_date: string | null
+  sort_order: number
+}
+
+interface EventWithDivs {
+  id: string
+  name: string
+  date: string
+  location: string
+  status: string
+  event_type: string | null
+  divisions: DivSlim[]
+}
+
+interface EventCardItem {
+  event: EventWithDivs
+  date: string | null
+  divisions: DivSlim[]
+  isMultiDay: boolean
+}
+
+function fmtDate(d: string) {
+  const dt = new Date(d + 'T00:00:00')
+  return `${dt.getMonth() + 1}월 ${dt.getDate()}일`
+}
+
+function splitEventToCards(e: EventWithDivs): EventCardItem[] {
+  const dated = e.divisions.filter(d => d.match_date)
+  const uniqueDates = [...new Set(dated.map(d => d.match_date!))].sort()
+  if (uniqueDates.length > 1) {
+    return uniqueDates.map(date => ({
+      event: e, date,
+      divisions: dated.filter(d => d.match_date === date),
+      isMultiDay: true,
+    }))
+  }
+  return [{ event: e, date: uniqueDates[0] || null, divisions: e.divisions, isMultiDay: false }]
+}
+
+export default function EventsPage() {
+  const [events, setEvents] = useState<EventWithDivs[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    supabase
+      .from('events')
+      .select('*, divisions(id, name, match_date, sort_order)')
+      .order('date', { ascending: false })
+      .then(({ data }) => {
+        const evs = (data || []).map((e: any) => ({
+          ...e,
+          divisions: (e.divisions || []).sort((a: DivSlim, b: DivSlim) => a.sort_order - b.sort_order),
+        }))
+        setEvents(evs)
+        setLoading(false)
+      })
+  }, [])
+
+  const cards: EventCardItem[] = events.flatMap(e => splitEventToCards(e))
+
+  return (
+    <div className="min-h-screen bg-stone-50">
+      <header className="bg-white border-b sticky top-0 z-10">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
+          <Link href="/" className="text-stone-400 hover:text-stone-600">←</Link>
+          <h1 className="text-lg font-bold">🎾 대회 목록</h1>
+        </div>
+      </header>
+
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        {loading ? (
+          <p className="text-center py-20 text-stone-400">불러오는 중...</p>
+        ) : cards.length === 0 ? (
+          <p className="text-center py-20 text-stone-400">등록된 대회가 없습니다.</p>
+        ) : (
+          <div className="space-y-3">
+            {cards.map((item, idx) => {
+              const e = item.event
+              const isPreparing = e.status === 'preparing'
+              const isActive = e.status === 'active'
+              const isCompleted = e.status === 'completed'
+              const detailHref = item.date
+                ? `/events/${e.id}?date=${item.date}`
+                : `/events/${e.id}`
+
+              // 표시할 날짜
+              const displayDate = item.isMultiDay && item.date
+                ? fmtDate(item.date)
+                : e.date
+
+              // 상태 뱃지
+              const statusBadge = isPreparing
+                ? <span className="text-xs px-2.5 py-1 rounded-full bg-stone-100 text-stone-400 font-medium">🔒 준비중</span>
+                : isActive
+                  ? <span className="text-xs px-2.5 py-1 rounded-full bg-green-100 text-green-700 font-medium">진행중</span>
+                  : isCompleted
+                    ? <span className="text-xs px-2.5 py-1 rounded-full bg-stone-100 text-stone-500 font-medium">완료</span>
+                    : <span className="text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-700 font-medium">준비중</span>
+
+              // 종목 뱃지 색
+              const typeBadgeClass = isPreparing
+                ? 'bg-stone-100 text-stone-400'
+                : e.event_type === 'both' ? 'bg-purple-100 text-purple-700'
+                : e.event_type === 'team' ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-sky-100 text-sky-700'
+
+              const typeLabel = e.event_type === 'both' ? '개인+단체'
+                : e.event_type === 'team' ? '단체전'
+                : e.event_type === 'individual' ? '개인전'
+                : null
+
+              const cardInner = (
+                <div className="flex items-center gap-3">
+                  {/* 왼쪽: 상태 컬러 바 */}
+                  <div className={`w-1 self-stretch rounded-full flex-shrink-0 ${
+                    isPreparing ? 'bg-stone-200' :
+                    isActive ? 'bg-green-400' :
+                    isCompleted ? 'bg-stone-300' : 'bg-amber-300'
+                  }`} />
+
+                  {/* 본문 */}
+                  <div className="flex-1 min-w-0 py-0.5">
+                    {/* 대회명 + 종목뱃지 한 줄 */}
+                    <div className="flex items-center gap-2 min-w-0">
+                      <h2 className={`font-bold text-base leading-snug truncate ${isPreparing ? 'text-stone-400' : 'text-stone-800'}`}>
+                        {e.name}
+                      </h2>
+                      {typeLabel && (
+                        <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap flex-shrink-0 ${typeBadgeClass}`}>
+                          {typeLabel}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 날짜 · 장소 */}
+                    <p className={`text-xs mt-0.5 ${isPreparing ? 'text-stone-300' : 'text-stone-400'}`}>
+                      {displayDate}{e.location ? ` · ${e.location}` : ''}
+                    </p>
+
+                    {/* 부서 태그 */}
+                    {item.divisions.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {item.divisions.map(d => (
+                          <span key={d.id} className={`text-[11px] px-2 py-0.5 rounded-full ${
+                            isPreparing ? 'bg-stone-100 text-stone-300' : 'bg-blue-50 text-blue-600'
+                          }`}>
+                            {d.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 오른쪽: 상태뱃지 + 화살표 */}
+                  <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                    {statusBadge}
+                    {!isPreparing && (
+                      <span className="text-stone-300 text-sm">→</span>
+                    )}
+                  </div>
+                </div>
+              )
+
+              if (isPreparing) {
+                return (
+                  <div key={`${e.id}-${item.date || idx}`}
+                    className="bg-white rounded-2xl border border-stone-100 px-4 py-3 opacity-60 cursor-not-allowed">
+                    {cardInner}
+                  </div>
+                )
+              }
+
+              return (
+                <Link key={`${e.id}-${item.date || idx}`} href={detailHref}
+                  className="block bg-white rounded-2xl border border-stone-200 px-4 py-3 hover:border-[#2d5016] hover:shadow-sm transition-all active:scale-[0.99]">
+                  {cardInner}
+                </Link>
+              )
+            })}
+          </div>
+        )}
+      </main>
+    </div>
   )
 }
+
+
