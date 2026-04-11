@@ -51,11 +51,10 @@ export default function PinMatchesPage() {
   const [session, setSession]     = useState<any>(null)
   const [matches, setMatches]     = useState<PinMatch[]>([])
   const [courtQueues, setCourtQueues] = useState<Map<string, CourtQueueMatch[]>>(new Map())
-  const [loading, setLoading]     = useState(true)
+  const [loading, setLoading]     = useState(true)   // 최초 진입 시만 true, loadData finally에서 항상 해제
   const [msg, setMsg]             = useState('')
 
   const [finalsMatches, setFinalsMatches] = useState<FinalsMatch[]>([])
-  const [winners, setWinners]       = useState<Record<string, 'A'|'B'|null>>({})
   const [loserScores, setLoserScores] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState<string | null>(null)
 
@@ -126,125 +125,131 @@ export default function PinMatchesPage() {
   }, [session])
 
   const loadData = useCallback(async (s: any) => {
-    const { data, error } = await supabase.rpc('rpc_pin_list_matches', { p_token: s.token })
+    try {
+      const { data, error } = await supabase.rpc('rpc_pin_list_matches', { p_token: s.token })
 
-    if (error) {
-      const isAuthError =
-        error.code === 'PGRST301' ||
-        error.code === '42501' ||
-        error.message?.includes('JWT') ||
-        error.message?.includes('invalid token')
+      if (error) {
+        const isAuthError =
+          error.code === 'PGRST301' ||
+          error.code === '42501' ||
+          error.message?.includes('JWT') ||
+          error.message?.includes('invalid token')
 
-      if (isAuthError) {
-        sessionStorage.removeItem('pin_session')
-        router.replace('/pin')
+        if (isAuthError) {
+          sessionStorage.removeItem('pin_session')
+          router.replace('/pin')
+          return
+        }
+
+        errorCountRef.current += 1
+        console.warn(`[PIN] loadData error (${errorCountRef.current}/${MAX_ERRORS}):`, error.message)
+
+        if (errorCountRef.current >= MAX_ERRORS) {
+          sessionStorage.removeItem('pin_session')
+          router.replace('/pin')
+        }
         return
       }
 
-      errorCountRef.current += 1
-      console.warn(`[PIN] loadData error (${errorCountRef.current}/${MAX_ERRORS}):`, error.message)
+      errorCountRef.current = 0
 
-      if (errorCountRef.current >= MAX_ERRORS) {
-        sessionStorage.removeItem('pin_session')
-        router.replace('/pin')
-      }
-      return
-    }
+      const myMatches: PinMatch[] = data.matches || []
+      setMatches(myMatches)
 
-    errorCountRef.current = 0
+      const courts = [...new Set(myMatches.map(m => m.court).filter(Boolean))] as string[]
+      const queueMap = new Map<string, CourtQueueMatch[]>()
 
-    const myMatches: PinMatch[] = data.matches || []
-    setMatches(myMatches)
+      if (courts.length > 0) {
+        // 내 경기 ID로 match_date 조회 (RPC가 match_date를 반환 안 하므로)
+        const myMatchIds = myMatches.map(m => m.id).filter(Boolean)
+        const { data: myMatchDates } = myMatchIds.length > 0
+          ? await supabase
+              .from('v_matches_with_teams')
+              .select('id, court, match_date')
+              .in('id', myMatchIds)
+          : { data: [] }
 
-    const courts = [...new Set(myMatches.map(m => m.court).filter(Boolean))] as string[]
-    const queueMap = new Map<string, CourtQueueMatch[]>()
-
-    if (courts.length > 0) {
-      // 내 경기 ID로 match_date 조회 (RPC가 match_date를 반환 안 하므로)
-      const myMatchIds = myMatches.map(m => m.id).filter(Boolean)
-      const { data: myMatchDates } = myMatchIds.length > 0
-        ? await supabase
-            .from('v_matches_with_teams')
-            .select('id, court, match_date')
-            .in('id', myMatchIds)
-        : { data: [] }
-
-      // 코트별로 내 경기의 match_date 매핑
-      const courtDateMap: Record<string, string> = {}
-      for (const m of (myMatchDates || [])) {
-        if (m.court && m.match_date) courtDateMap[m.court] = m.match_date
-      }
-
-      // 코트별로 해당 날짜 경기만 조회
-      const queueResults = await Promise.all(
-        courts.map(async (court) => {
-          const myCourtDate = courtDateMap[court]
-          let q = supabase
-            .from('v_matches_with_teams')
-            .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
-            .eq('event_id', s.event_id)
-            .eq('court', court)
-            .order('court_order')
-          if (myCourtDate) q = q.eq('match_date', myCourtDate)
-          const { data } = await q
-          return { court, matches: (data || []).filter((m: any) => m.score !== 'BYE') }
-        })
-      )
-
-      const allMatches: any[] = []
-      for (const { court, matches } of queueResults) {
-        const sorted = [...matches].sort((a: any, b: any) => (a.court_order || 0) - (b.court_order || 0))
-        queueMap.set(court, sorted as CourtQueueMatch[])
-        allMatches.push(...matches)
-      }
-
-      for (const m of myMatches) {
-        if (!m.court) continue
-        const queue   = queueMap.get(m.court) || []
-        const liveIdx = queue.findIndex(q => q.status === 'IN_PROGRESS')
-        const pendIdx = queue.findIndex(q => q.status === 'PENDING')
-        const curIdx  = liveIdx >= 0 ? liveIdx : pendIdx
-        const myIdx   = queue.findIndex(q => q.id === m.id)
-        const remaining = curIdx >= 0 && myIdx >= 0 ? Math.max(0, myIdx - curIdx) : 0
-
-        if (notifAllowed && remaining === 1) {
-          const prev = prevWaitRef.current.get(m.court) ?? 99
-          if (prev > 1) {
-            showInAppNotif('🎾 준비하세요!', `${m.court}에서 다음 경기로 이동해주세요.`)
-            sendBrowserNotif(m.court)
-          }
+        // 코트별로 내 경기의 match_date 매핑
+        const courtDateMap: Record<string, string> = {}
+        for (const m of (myMatchDates || [])) {
+          if (m.court && m.match_date) courtDateMap[m.court] = m.match_date
         }
-        if (m.court) prevWaitRef.current.set(m.court, remaining)
+
+        // 코트별로 해당 날짜 경기만 조회
+        const queueResults = await Promise.all(
+          courts.map(async (court) => {
+            const myCourtDate = courtDateMap[court]
+            let q = supabase
+              .from('v_matches_with_teams')
+              .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
+              .eq('event_id', s.event_id)
+              .eq('court', court)
+              .order('court_order')
+            if (myCourtDate) q = q.eq('match_date', myCourtDate)
+            const { data } = await q
+            return { court, matches: (data || []).filter((m: any) => m.score !== 'BYE') }
+          })
+        )
+
+        const allMatches: any[] = []
+        for (const { court, matches } of queueResults) {
+          const sorted = [...matches].sort((a: any, b: any) => (a.court_order || 0) - (b.court_order || 0))
+          queueMap.set(court, sorted as CourtQueueMatch[])
+          allMatches.push(...matches)
+        }
+
+        for (const m of myMatches) {
+          if (!m.court) continue
+          const queue   = queueMap.get(m.court) || []
+          const liveIdx = queue.findIndex(q => q.status === 'IN_PROGRESS')
+          const pendIdx = queue.findIndex(q => q.status === 'PENDING')
+          const curIdx  = liveIdx >= 0 ? liveIdx : pendIdx
+          const myIdx   = queue.findIndex(q => q.id === m.id)
+          const remaining = curIdx >= 0 && myIdx >= 0 ? Math.max(0, myIdx - curIdx) : 0
+
+          if (notifAllowed && remaining === 1) {
+            const prev = prevWaitRef.current.get(m.court) ?? 99
+            if (prev > 1) {
+              showInAppNotif('🎾 준비하세요!', `${m.court}에서 다음 경기로 이동해주세요.`)
+              sendBrowserNotif(m.court)
+            }
+          }
+          if (m.court) prevWaitRef.current.set(m.court, remaining)
+        }
       }
+
+      setCourtQueues(queueMap)
+
+      const eventId = s.event_id
+      if (eventId) {
+        const [{ data: rawFinals }, { data: viewData }] = await Promise.all([
+          supabase.from('matches')
+            .select('id, round, slot, division_id, team_a_id, team_b_id, winner_team_id, status')
+            .eq('event_id', eventId).eq('stage', 'FINALS')
+            .order('slot', { ascending: true, nullsFirst: true }),
+          supabase.from('v_matches_with_teams')
+            .select('team_a_id, team_b_id, team_a_name, team_b_name')
+            .eq('event_id', eventId).eq('stage', 'FINALS')
+            .not('team_a_name', 'is', null),
+        ])
+        const tMap: Record<string, string> = {}
+        ;(viewData || []).forEach((m: any) => {
+          if (m.team_a_id && m.team_a_name) tMap[m.team_a_id] = m.team_a_name
+          if (m.team_b_id && m.team_b_name) tMap[m.team_b_id] = m.team_b_name
+        })
+        setFinalsMatches((rawFinals || []).map((m: any) => ({
+          ...m,
+          team_a_name: m.team_a_id ? (tMap[m.team_a_id] || null) : null,
+          team_b_name: m.team_b_id ? (tMap[m.team_b_id] || null) : null,
+        })) as FinalsMatch[])
+      }
+    } catch (err) {
+      // 예외 발생 시에도 로딩 해제 (네트워크 오류 등)
+      console.warn('[PIN] loadData 예외:', err)
+    } finally {
+      // ✅ 에러/예외/정상 모든 경우에 반드시 로딩 해제
+      setLoading(false)
     }
-
-    setCourtQueues(queueMap)
-
-    const eventId = s.event_id
-    if (eventId) {
-      const [{ data: rawFinals }, { data: viewData }] = await Promise.all([
-        supabase.from('matches')
-          .select('id, round, slot, division_id, team_a_id, team_b_id, winner_team_id, status')
-          .eq('event_id', eventId).eq('stage', 'FINALS')
-          .order('slot', { ascending: true, nullsFirst: true }),
-        supabase.from('v_matches_with_teams')
-          .select('team_a_id, team_b_id, team_a_name, team_b_name')
-          .eq('event_id', eventId).eq('stage', 'FINALS')
-          .not('team_a_name', 'is', null),
-      ])
-      const tMap: Record<string, string> = {}
-      ;(viewData || []).forEach((m: any) => {
-        if (m.team_a_id && m.team_a_name) tMap[m.team_a_id] = m.team_a_name
-        if (m.team_b_id && m.team_b_name) tMap[m.team_b_id] = m.team_b_name
-      })
-      setFinalsMatches((rawFinals || []).map((m: any) => ({
-        ...m,
-        team_a_name: m.team_a_id ? (tMap[m.team_a_id] || null) : null,
-        team_b_name: m.team_b_id ? (tMap[m.team_b_id] || null) : null,
-      })) as FinalsMatch[])
-    }
-
-    setLoading(false)
   }, [notifAllowed, showInAppNotif])
 
   function sendBrowserNotif(court: string) {
@@ -273,12 +278,6 @@ export default function PinMatchesPage() {
     } catch { setNotifAllowed(false) }
   }
 
-  function selectWinner(matchId: string, side: 'A' | 'B') {
-    setWinners(prev => ({ ...prev, [matchId]: side }))
-    setLoserScores(prev => ({ ...prev, [matchId]: '' }))
-    setMsg('')
-  }
-
   // ============================================================
   // ✅ 점수 제출 후 조별 완료 체크 → rpc_fill_tournament_slots 호출
   // ============================================================
@@ -300,18 +299,19 @@ export default function PinMatchesPage() {
 
     if (!matchData?.group_id) return
 
-    // 해당 그룹의 남은 경기 수 확인
-    // [3] .neq('status','FINISHED') → 전체 조회 후 클라이언트 필터 (NULL status 포함)
+    // 해당 그룹의 남은 경기 수 확인 (score 컬럼도 조회 → BYE 제외용)
     const { data: groupMatches } = await supabase
       .from('matches')
-      .select('id, status')
+      .select('id, status, score, stage')
       .eq('event_id', eventId)
       .eq('group_id', matchData.group_id)
-      .eq('stage', 'GROUP')
+
+    // stage 대소문자 무관 필터 (DB에 'group'/'GROUP' 혼재 가능)
+    const groupOnly = (groupMatches || []).filter(m => (m.stage || '').toUpperCase() === 'GROUP')
 
     // 방금 제출한 경기 포함해서 미완료 경기 수 계산
-    // (rpc_pin_submit_score 완료 후 호출이므로 해당 경기는 이미 FINISHED)
-    const unfinished = (groupMatches || []).filter(m => m.status !== 'FINISHED')
+    // BYE 경기는 status가 FINISHED가 아닐 수 있으므로 제외
+    const unfinished = groupOnly.filter(m => m.status !== 'FINISHED' && m.score !== 'BYE')
     if (unfinished.length > 0) return // 아직 남은 경기 있음
 
     // 본선 브래킷에 TBD 슬롯이 있는지 확인
@@ -346,10 +346,10 @@ export default function PinMatchesPage() {
   }
 
   async function submitScore(matchId: string, match: PinMatch) {
-    const winner = winners[matchId]
+    // ✅ 본인 팀이 항상 승자 — my_side 직접 사용
+    const winner = match.my_side
     const loser  = loserScores[matchId]?.trim()
-    if (!winner) { setMsg('승자를 선택해주세요.'); return }
-    if (!loser)  { setMsg('패자 점수를 입력해주세요. (예: 4)'); return }
+    if (!loser)  { setMsg('상대팀 점수를 입력해주세요. (예: 4)'); return }
     if (!/^\d+$/.test(loser)) { setMsg('숫자만 입력해주세요.'); return }
     const score = winner === 'A' ? `6:${loser}` : `${loser}:6`
     setSubmitting(matchId); setMsg('')
@@ -528,7 +528,6 @@ export default function PinMatchesPage() {
                     const canInput = isLive && !m.locked_by_participant
                     const queue    = m.court ? courtQueues.get(m.court) || [] : []
                     const showQueue = m.court && queue.length > 0 && !isDone
-                    const winner   = winners[m.id]
                     const loser    = loserScores[m.id] || ''
 
                     return (
@@ -583,38 +582,26 @@ export default function PinMatchesPage() {
                             <div className="text-center py-2 text-xs text-stone-400">경기 완료 · 결과: {m.score || '-'}</div>
                           )}
 
-                          {canInput && (
-                            <div className="space-y-3 pt-1">
-                              <p className="text-xs text-stone-400 text-center">
-                                ① 승자를 선택 후 ② 패자 점수 입력 후 ③ 제출<br />
-                                <span className="text-amber-600 font-medium">점수 제출 후 수정 불가</span>
-                              </p>
-                              <div className="grid grid-cols-2 gap-2">
-                                <button onClick={() => selectWinner(m.id, 'A')}
-                                  className={`py-3 px-3 rounded-xl border-2 text-sm font-bold transition-all ${
-                                    winner === 'A' ? 'border-[#2d5016] bg-[#2d5016] text-white' : 'border-stone-200 bg-stone-50 text-stone-700 hover:border-[#2d5016]/40'
-                                  }`}>
-                                  🏆 {m.team_a_name}
-                                </button>
-                                <button onClick={() => selectWinner(m.id, 'B')}
-                                  className={`py-3 px-3 rounded-xl border-2 text-sm font-bold transition-all ${
-                                    winner === 'B' ? 'border-[#2d5016] bg-[#2d5016] text-white' : 'border-stone-200 bg-stone-50 text-stone-700 hover:border-[#2d5016]/40'
-                                  }`}>
-                                  🏆 {m.team_b_name}
-                                </button>
-                              </div>
-                              {winner && (
+                          {canInput && (() => {
+                            // ✅ 본인 팀이 항상 승자 — 승자 선택 버튼 없음
+                            const myTeamName = m.my_side === 'A' ? m.team_a_name : m.team_b_name
+                            const oppTeamName = m.my_side === 'A' ? m.team_b_name : m.team_a_name
+                            return (
+                              <div className="space-y-3 pt-1">
+                                {/* 승자 고정 표시 */}
+                                <div className="flex items-center justify-center gap-2 py-2.5 bg-[#2d5016]/10 rounded-xl border border-[#2d5016]/20">
+                                  <span className="text-lg">🏆</span>
+                                  <span className="text-sm font-bold text-[#2d5016]">{myTeamName}</span>
+                                  <span className="text-xs text-stone-400">승리로 제출됩니다</span>
+                                </div>
+                                {/* 패자 점수 입력 */}
                                 <div className="bg-stone-50 rounded-xl p-3">
                                   <div className="flex items-center justify-center gap-3 mb-3">
-                                    <span className={`text-sm font-bold ${winner === 'A' ? 'text-[#2d5016]' : 'text-stone-400'}`}>
-                                      {winner === 'A' ? m.team_a_name : m.team_b_name}
-                                    </span>
+                                    <span className="text-sm font-bold text-[#2d5016]">{myTeamName}</span>
                                     <span className="text-xl font-black text-stone-700">6 : {loser || '?'}</span>
-                                    <span className={`text-sm font-bold ${winner === 'B' ? 'text-[#2d5016]' : 'text-stone-400'}`}>
-                                      {winner === 'B' ? m.team_a_name : m.team_b_name}
-                                    </span>
+                                    <span className="text-sm font-bold text-stone-400">{oppTeamName}</span>
                                   </div>
-                                  <p className="text-xs text-stone-400 text-center mb-2">패자 점수 입력 (승자는 항상 6)</p>
+                                  <p className="text-xs text-stone-400 text-center mb-2">상대팀 점수 입력 (내 팀은 항상 6)</p>
                                   <div className="flex gap-2">
                                     <input
                                       type="number" inputMode="numeric" min="0" max="5" placeholder="0~5"
@@ -633,16 +620,17 @@ export default function PinMatchesPage() {
                                   </div>
                                   {loser && (
                                     <div className="mt-2 text-center text-xs text-stone-500">
-                                      최종 점수: <span className="font-bold text-stone-700">
-                                        {winner === 'A' ? `6:${loser}` : `${loser}:6`}
-                                      </span>
-                                      &nbsp;· {winner === 'A' ? m.team_a_name : m.team_b_name} 승리
+                                      최종 점수: <span className="font-bold text-stone-700">6:{loser}</span>
+                                      &nbsp;· <span className="text-[#2d5016] font-medium">{myTeamName}</span> 승리
                                     </div>
                                   )}
                                 </div>
-                              )}
-                            </div>
-                          )}
+                                <p className="text-xs text-stone-400 text-center">
+                                  <span className="text-amber-600 font-medium">점수 제출 후 수정 불가</span>
+                                </p>
+                              </div>
+                            )
+                          })()}
 
                           {!isDone && !isLive && (
                             <div className="text-center py-2 text-xs text-stone-400">
