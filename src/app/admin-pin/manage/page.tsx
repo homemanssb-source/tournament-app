@@ -111,15 +111,15 @@ export default function AdminPinManagePage() {
   }
 
   async function handleUpdateScore() {
-    if (!session||!selectedMatch||!newScore||!newWinner) { setMsg('?먯닔? ?뱀옄瑜?紐⑤몢 ?낅젰?댁＜?몄슂.'); return }
+    if (!session||!selectedMatch||!newScore||!newWinner) { setMsg('점수와 승자를 모두 입력해주세요.'); return }
     setLoading(true); setMsg('')
     const winnerId = newWinner==='A' ? selectedMatch.team_a_id : selectedMatch.team_b_id
     const { error } = await supabase.rpc('rpc_admin_pin_update_score', {
       p_token: session.token, p_match_id: selectedMatch.id, p_score: newScore, p_winner_team_id: winnerId
     })
-    if (error) { setLoading(false); setMsg('??'+error.message); return }
+    if (error) { setLoading(false); setMsg('❌ '+error.message); return }
 
-    // ??GROUP 寃쎄린 ?섏젙 ????議??꾨즺 ?щ? ?뺤씤 ??蹂몄꽑 TBD ?щ’ ?먮룞 梨꾩슦湲?    const stageUp = (selectedMatch.stage || '').toUpperCase()
+    const stageUp = (selectedMatch.stage || '').toUpperCase()
     if (stageUp === 'GROUP') {
       try {
         const { data: matchData } = await supabase
@@ -127,26 +127,21 @@ export default function AdminPinManagePage() {
           .select('group_id, division_id')
           .eq('id', selectedMatch.id)
           .single()
-
         if (matchData?.group_id) {
-          // ?대떦 洹몃９ 誘몄셿猷?寃쎄린 ?뺤씤 (?꾩껜 議고쉶 ???대씪?댁뼵???꾪꽣 ??NULL status ?ы븿)
           const { data: groupMatches } = await supabase
             .from('matches')
             .select('id, status')
             .eq('event_id', session.event_id)
             .eq('group_id', matchData.group_id)
             .eq('stage', 'GROUP')
-
           const unfinished = (groupMatches || []).filter(m => m.status !== 'FINISHED')
           if (unfinished.length === 0) {
-            // 蹂몄꽑 TBD ?щ’ 議댁옱 ?щ? ?뺤씤
             const { data: finalsMatches } = await supabase
               .from('matches')
               .select('id, qualifier_label_a, qualifier_label_b')
               .eq('event_id', session.event_id)
               .eq('division_id', matchData.division_id)
               .eq('stage', 'FINALS')
-
             const hasTbd = (finalsMatches || []).some(
               m => m.qualifier_label_a != null || m.qualifier_label_b != null
             )
@@ -157,7 +152,7 @@ export default function AdminPinManagePage() {
               })
               if (!fillError && fillResult?.success && fillResult.filled > 0) {
                 setLoading(false)
-                setMsg(`??寃곌낵媛 ?섏젙?섏뿀?듬땲?? (蹂몄꽑 ?щ’ ${fillResult.filled}媛??먮룞 ?낅뜲?댄듃??`)
+                setMsg('✅ 결과가 수정되었습니다. (본선 슬롯 ' + fillResult.filled + '개 자동 업데이트됨)')
                 loadAllMatches(session.event_id); setSelectedMatch(null)
                 return
               }
@@ -168,7 +163,7 @@ export default function AdminPinManagePage() {
     }
 
     setLoading(false)
-    setMsg('??寃곌낵媛 ?섏젙?섏뿀?듬땲??')
+    setMsg('✅ 결과가 수정되었습니다.')
     loadAllMatches(session.event_id); setSelectedMatch(null)
   }
 
