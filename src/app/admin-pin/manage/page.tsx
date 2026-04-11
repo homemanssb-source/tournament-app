@@ -111,6 +111,59 @@ export default function AdminPinManagePage() {
     loadAllMatches(session.event_id); setSelectedMatch(null)
   }
 
+  // ✅ 조별 경기 수정 후 본선 TBD 슬롯 자동 채우기
+  async function tryFillTournamentSlotsAdmin(matchId: string, eventId: string) {
+    // 해당 경기 정보 조회
+    const { data: matchData } = await supabase
+      .from('matches')
+      .select('group_id, division_id, stage')
+      .eq('id', matchId)
+      .single()
+
+    if (!matchData) return
+    // GROUP 경기가 아니면 skip (대소문자 무관)
+    const stageUp = (matchData.stage || '').toUpperCase()
+    if (stageUp !== 'GROUP') return
+    if (!matchData.group_id) return
+
+    // 해당 그룹의 미완료 경기 수 확인 (대소문자 무관 전체조회 후 클라이언트 필터)
+    const { data: groupMatches } = await supabase
+      .from('matches')
+      .select('id, status, stage')
+      .eq('event_id', eventId)
+      .eq('group_id', matchData.group_id)
+
+    const groupOnly = (groupMatches || []).filter(m => (m.stage||'').toUpperCase() === 'GROUP')
+    const unfinished = groupOnly.filter(m => m.status !== 'FINISHED')
+    if (unfinished.length > 0) return // 아직 남은 경기 있음
+
+    // 본선 브래킷에 TBD 슬롯이 있는지 확인
+    const { data: finalsData } = await supabase
+      .from('matches')
+      .select('id, qualifier_label_a, qualifier_label_b')
+      .eq('event_id', eventId)
+      .eq('division_id', matchData.division_id)
+      .eq('stage', 'FINALS')
+
+    const hasTbd = (finalsData || []).some(
+      m => m.qualifier_label_a != null || m.qualifier_label_b != null
+    )
+    if (!hasTbd) return
+
+    console.log('[AdminPIN] 조 완료 → rpc_fill_tournament_slots:', matchData.group_id)
+    const { data: fillResult, error: fillError } = await supabase.rpc('rpc_fill_tournament_slots', {
+      p_event_id: eventId,
+      p_group_id: matchData.group_id,
+    })
+    if (fillError) {
+      console.warn('[AdminPIN] fill_tournament_slots 오류:', fillError.message)
+      return
+    }
+    if (fillResult?.success && fillResult.filled > 0) {
+      console.log('[AdminPIN] 슬롯 채우기 완료:', fillResult)
+    }
+  }
+
   async function handleUpdateScore() {
     if (!session||!selectedMatch||!newScore||!newWinner) { setMsg('점수와 승자를 모두 입력해주세요.'); return }
     setLoading(true); setMsg('')
@@ -118,8 +171,12 @@ export default function AdminPinManagePage() {
     const { error } = await supabase.rpc('rpc_admin_pin_update_score', {
       p_token: session.token, p_match_id: selectedMatch.id, p_score: newScore, p_winner_team_id: winnerId
     })
+    if (error) { setLoading(false); setMsg('❌ '+error.message); return }
+
+    // ✅ 조별 경기인 경우 본선 TBD 슬롯 자동 채우기
+    await tryFillTournamentSlotsAdmin(selectedMatch.id, session.event_id)
+
     setLoading(false)
-    if (error) { setMsg('❌ '+error.message); return }
     setMsg('✅ 결과가 수정되었습니다.')
     loadAllMatches(session.event_id); setSelectedMatch(null)
   }
@@ -128,7 +185,6 @@ export default function AdminPinManagePage() {
     if (selectedTie?.id === tie.id) { setSelectedTie(null); setScoringRubber(null); return }
     setSelectedTie(tie); setScoringRubber(null); setTieMsg('')
     const [lineupData, rubberData] = await Promise.all([
-      // 운영자는 is_revealed 관계없이 전체 조회
       supabase.from('team_lineups').select('*').eq('tie_id', tie.id).order('rubber_number'),
       supabase.from('tie_rubbers').select('*').eq('tie_id', tie.id).order('rubber_number'),
     ])
@@ -160,7 +216,6 @@ export default function AdminPinManagePage() {
       if (err) { setScoreError(err.message); return }
       if (data && !data.success) { setScoreError(data.error || '저장 실패'); return }
 
-      // 데이터 새로고침
       const [rubberData, tieData] = await Promise.all([
         supabase.from('tie_rubbers').select('*').eq('tie_id', selectedTie!.id).order('rubber_number'),
         supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)').eq('id', selectedTie!.id).single(),
@@ -379,7 +434,6 @@ export default function AdminPinManagePage() {
 
                     {isSelected && (
                       <div className="border-t bg-gray-50 p-4 space-y-3">
-                        {/* 러버별 점수 */}
                         {Array.from({ length: tie.rubber_count }, (_, i) => i+1).map(num => {
                           const laA = tieLineups.find(l => l.rubber_number===num && l.club_id===tie.club_a_id)
                           const laB = tieLineups.find(l => l.rubber_number===num && l.club_id===tie.club_b_id)
@@ -396,7 +450,6 @@ export default function AdminPinManagePage() {
                                 )}
                               </div>
 
-                              {/* 라인업 */}
                               {(laA || laB) && (
                                 <div className="grid grid-cols-5 items-center gap-1 text-xs mb-2">
                                   <div className="col-span-2 text-right">
@@ -411,7 +464,6 @@ export default function AdminPinManagePage() {
                                 </div>
                               )}
 
-                              {/* 점수 표시 */}
                               {hasScore && !isScoring && (
                                 <div className="flex items-center justify-between">
                                   <div className="text-center flex-1 py-1 bg-gray-50 rounded text-sm font-bold">
@@ -431,7 +483,6 @@ export default function AdminPinManagePage() {
                                 </div>
                               )}
 
-                              {/* 점수 없으면 입력 버튼 */}
                               {!hasScore && !isScoring && rubber && (
                                 <button onClick={() => startScoring(rubber)}
                                   className="w-full bg-blue-50 text-blue-700 py-2 rounded-lg text-sm font-medium hover:bg-blue-100">
@@ -439,7 +490,6 @@ export default function AdminPinManagePage() {
                                 </button>
                               )}
 
-                              {/* 점수 입력 폼 */}
                               {isScoring && rubber && (
                                 <div className="space-y-2 mt-2 border-t pt-3">
                                   <SetRow label="1세트" aVal={set1a} bVal={set1b} setA={setSet1a} setB={setSet1b} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
