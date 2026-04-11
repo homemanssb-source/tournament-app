@@ -1,4 +1,3 @@
-'use client'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
@@ -118,8 +117,58 @@ export default function AdminPinManagePage() {
     const { error } = await supabase.rpc('rpc_admin_pin_update_score', {
       p_token: session.token, p_match_id: selectedMatch.id, p_score: newScore, p_winner_team_id: winnerId
     })
+    if (error) { setLoading(false); setMsg('❌ '+error.message); return }
+
+    // ✅ GROUP 경기 수정 시 → 조 완료 여부 확인 후 본선 TBD 슬롯 자동 채우기
+    const stageUp = (selectedMatch.stage || '').toUpperCase()
+    if (stageUp === 'GROUP') {
+      try {
+        const { data: matchData } = await supabase
+          .from('matches')
+          .select('group_id, division_id')
+          .eq('id', selectedMatch.id)
+          .single()
+
+        if (matchData?.group_id) {
+          // 해당 그룹 미완료 경기 확인 (전체 조회 후 클라이언트 필터 — NULL status 포함)
+          const { data: groupMatches } = await supabase
+            .from('matches')
+            .select('id, status')
+            .eq('event_id', session.event_id)
+            .eq('group_id', matchData.group_id)
+            .eq('stage', 'GROUP')
+
+          const unfinished = (groupMatches || []).filter(m => m.status !== 'FINISHED')
+          if (unfinished.length === 0) {
+            // 본선 TBD 슬롯 존재 여부 확인
+            const { data: finalsMatches } = await supabase
+              .from('matches')
+              .select('id, qualifier_label_a, qualifier_label_b')
+              .eq('event_id', session.event_id)
+              .eq('division_id', matchData.division_id)
+              .eq('stage', 'FINALS')
+
+            const hasTbd = (finalsMatches || []).some(
+              m => m.qualifier_label_a != null || m.qualifier_label_b != null
+            )
+            if (hasTbd) {
+              const { data: fillResult, error: fillError } = await supabase.rpc('rpc_fill_tournament_slots', {
+                p_event_id: session.event_id,
+                p_group_id: matchData.group_id,
+              })
+              if (!fillError && fillResult?.success && fillResult.filled > 0) {
+                setLoading(false)
+                setMsg(`✅ 결과가 수정되었습니다. (본선 슬롯 ${fillResult.filled}개 자동 업데이트됨)`)
+                loadAllMatches(session.event_id); setSelectedMatch(null)
+                return
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
     setLoading(false)
-    if (error) { setMsg('❌ '+error.message); return }
     setMsg('✅ 결과가 수정되었습니다.')
     loadAllMatches(session.event_id); setSelectedMatch(null)
   }
@@ -498,3 +547,5 @@ function SetRow({ label, aVal, bVal, setA, setB, clubA, clubB }: {
     </div>
   )
 }
+
+============================================================
