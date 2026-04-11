@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
@@ -129,12 +129,13 @@ export default function AdminPinManagePage() {
     // 해당 그룹의 미완료 경기 수 확인 (대소문자 무관 전체조회 후 클라이언트 필터)
     const { data: groupMatches } = await supabase
       .from('matches')
-      .select('id, status, stage')
+      .select('id, status, score, stage')
       .eq('event_id', eventId)
       .eq('group_id', matchData.group_id)
 
     const groupOnly = (groupMatches || []).filter(m => (m.stage||'').toUpperCase() === 'GROUP')
-    const unfinished = groupOnly.filter(m => m.status !== 'FINISHED')
+    // BYE 경기는 status가 FINISHED가 아닐 수 있으므로 제외
+    const unfinished = groupOnly.filter(m => m.status !== 'FINISHED' && m.score !== 'BYE')
     if (unfinished.length > 0) return // 아직 남은 경기 있음
 
     // 본선 브래킷에 TBD 슬롯이 있는지 확인
