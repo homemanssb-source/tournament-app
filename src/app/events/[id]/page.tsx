@@ -600,12 +600,22 @@ function MatchResultRow({ m }: { m: any }) {
   const leftWon   = !!(m.winner_team_id)  // 왼쪽은 항상 승자 (winner 있을 때)
   const rightWon  = false
 
-  // ✅ 점수도 승자:패자 순으로 조정
-  // DB는 항상 team_a:team_b 순 저장 → bWon이면(B팀 승자=왼쪽 이동) 점수 뒤집기
+  // ✅ 점수를 항상 승자:패자 순으로 표시
+  // 이름은 승자를 왼쪽으로 이동 → 점수도 항상 왼쪽(승자):오른쪽(패자) 순이어야 함
+  // DB score는 team_a:team_b 고정 → 승자가 누구냐에 따라 표시 조정
   let displayScore = m.score
-  if (bWon && m.score && m.score.includes(':')) {
-    const [sa, sb] = m.score.split(':')
-    displayScore = `${sb}:${sa}`
+  if (m.winner_team_id && m.score && m.score.includes(':')) {
+    const parts = m.score.split(':')
+    const sa = parseInt(parts[0], 10)  // team_a 점수
+    const sb = parseInt(parts[1], 10)  // team_b 점수
+    if (!isNaN(sa) && !isNaN(sb)) {
+      // 승자 점수가 항상 왼쪽(높아야 정상)
+      // aWon이면 sa가 승자점수 → sa >= sb 이면 정상, sa < sb 이면 뒤집기
+      // bWon이면 sb가 승자점수 → 무조건 sb:sa 순으로 표시 (이름이 왼쪽으로 이동했으므로)
+      const winnerScore = aWon ? sa : sb
+      const loserScore  = aWon ? sb : sa
+      displayScore = `${winnerScore}:${loserScore}`
+    }
   }
 
   // winner_team_id 없으면 그냥 원래 순서
