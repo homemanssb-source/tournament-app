@@ -1,541 +1,803 @@
-import { useState, useEffect } from 'react'
+'use client'
+import React from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { fetchTies, fetchClubMembers } from '@/lib/team-api'
-import { getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority } from '@/lib/team-utils'
-import type { TieWithClubs, TeamLineup, ClubMember } from '@/types/team'
+import { usePushSubscription } from '@/hooks/usePushSubscription'
 
-type Tab = 'individual' | 'team'
+interface PinMatch {
+  id: string; match_num: string; stage: string; round: string
+  court: string | null; court_order: number | null
+  status: string; score: string | null; locked_by_participant: boolean
+  team_a_name: string; team_b_name: string
+  team_a_id: string; team_b_id: string
+  my_side: 'A' | 'B'; division_name: string; division_id: string; group_label: string | null
+  match_date?: string | null; slot?: number | null
+}
 
-export default function AdminPinManagePage() {
+interface FinalsMatch {
+  id: string; round: string; slot: number | null
+  division_id: string; team_a_name: string | null; team_b_name: string | null
+  team_a_id: string | null; team_b_id: string | null
+  winner_team_id: string | null; status: string
+}
+
+interface CourtQueueMatch {
+  id: string; court_order: number; status: string
+  team_a_name: string; team_b_name: string; division_name: string; division_id: string
+}
+
+interface InAppNotif {
+  id: number
+  title: string
+  body: string
+}
+
+const ROUND_ORDER: Record<string, number> = {
+  group: 0, GROUP: 0,
+  R32: 1, R16: 2, QF: 3, SF: 4, F: 5,
+  '본선32강': 1, '본선16강': 1, '16강': 2, '8강': 3, '4강': 4, '결승': 5,
+}
+const ROUND_LABEL: Record<string, string> = {
+  group: '예선', GROUP: '예선',
+  R32: '32강', R16: '16강', QF: '8강', SF: '4강', F: '결승',
+  '본선32강': '32강', '본선16강': '16강', '16강': '16강', '8강': '8강', '4강': '4강', '결승': '결승',
+}
+
+const MAX_ERRORS = 3
+
+export default function PinMatchesPage() {
   const router = useRouter()
-  const [session, setSession] = useState<any>(null)
-  const [tab, setTab] = useState<Tab>('individual')
+  const [session, setSession]     = useState<any>(null)
+  const [matches, setMatches]     = useState<PinMatch[]>([])
+  const [courtQueues, setCourtQueues] = useState<Map<string, CourtQueueMatch[]>>(new Map())
+  const [loading, setLoading]     = useState(true)
+  const [msg, setMsg]             = useState('')
 
-  // ?? 媛쒖씤????
-  const [searchQuery, setSearchQuery] = useState('')
-  const [allMatches, setAllMatches] = useState<any[]>([])
-  const [selectedMatch, setSelectedMatch] = useState<any>(null)
-  const [newScore, setNewScore] = useState('')
-  const [newWinner, setNewWinner] = useState<'A' | 'B' | ''>('')
-  const [reason, setReason] = useState('')
-  const [msg, setMsg] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [finalsMatches, setFinalsMatches] = useState<FinalsMatch[]>([])
+  const [winners, setWinners]       = useState<Record<string, 'A'|'B'|null>>({})
+  const [loserScores, setLoserScores] = useState<Record<string, string>>({})
+  const [submitting, setSubmitting] = useState<string | null>(null)
 
-  // ?? ?⑥껜????
-  const [ties, setTies] = useState<TieWithClubs[]>([])
-  const [tiesLoading, setTiesLoading] = useState(false)
-  const [tieSearchQuery, setTieSearchQuery] = useState('')
-  const [selectedTie, setSelectedTie] = useState<TieWithClubs | null>(null)
-  const [tieLineups, setTieLineups] = useState<TeamLineup[]>([])
-  const [memberMap, setMemberMap] = useState<Record<string, ClubMember>>({})
-  const [tieRubbers, setTieRubbers] = useState<any[]>([])
+  const [notifAllowed, setNotifAllowed]     = useState(false)
+  const [notifRequested, setNotifRequested] = useState(false)
+  const prevWaitRef = useRef<Map<string, number>>(new Map())
+  const errorCountRef = useRef(0)
 
-  // ?⑥껜???먯닔 ?낅젰 state
-  const [scoringRubber, setScoringRubber] = useState<string | null>(null)
-  const [set1a, setSet1a] = useState('')
-  const [set1b, setSet1b] = useState('')
-  const [set2a, setSet2a] = useState('')
-  const [set2b, setSet2b] = useState('')
-  const [set3a, setSet3a] = useState('')
-  const [set3b, setSet3b] = useState('')
-  const [setsPerRubber, setSetsPerRubber] = useState(1)
-  const [scoreError, setScoreError] = useState('')
-  const [scoreSaving, setScoreSaving] = useState(false)
-  const [tieMsg, setTieMsg] = useState('')
+  const [inAppNotifs, setInAppNotifs] = useState<InAppNotif[]>([])
+  const notifIdRef = useRef(0)
 
-  useEffect(() => {
-    const raw = sessionStorage.getItem('admin_pin_session')
-    if (!raw) { router.push('/admin-pin'); return }
-    const s = JSON.parse(raw)
-    setSession(s)
-    loadAllMatches(s.event_id)
-    loadTiesData(s.event_id)
+  const { autoResubscribe, subscribeWithPin } = usePushSubscription()
+
+  const showInAppNotif = useCallback((title: string, body: string) => {
+    const id = ++notifIdRef.current
+    setInAppNotifs(prev => [...prev, { id, title, body }])
+    if ('vibrate' in navigator) navigator.vibrate([200, 100, 200])
+    setTimeout(() => {
+      setInAppNotifs(prev => prev.filter(n => n.id !== id))
+    }, 5000)
   }, [])
 
-  async function loadAllMatches(eventId: string) {
-    const { data } = await supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId).order('slot')
-    setAllMatches(data || [])
+  useEffect(() => {
+    let raw = sessionStorage.getItem('pin_session')
+    if (!raw) {
+      const lsRaw = localStorage.getItem('pin_session')
+      if (lsRaw) {
+        try {
+          const parsed = JSON.parse(lsRaw)
+          if (parsed._savedAt && Date.now() - parsed._savedAt < 12 * 60 * 60 * 1000) {
+            raw = lsRaw
+            sessionStorage.setItem('pin_session', lsRaw)
+          } else {
+            localStorage.removeItem('pin_session')
+          }
+        } catch {
+          localStorage.removeItem('pin_session')
+        }
+      }
+    }
+    if (!raw) { router.replace('/pin'); return }
+    const s = JSON.parse(raw)
+    setSession(s)
+    loadData(s)
+    if ('Notification' in window) {
+      const perm = Notification.permission
+      setNotifAllowed(perm === 'granted')
+      setNotifRequested(perm !== 'default')
+    }
+    autoResubscribe()
+  }, [])
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type === 'PUSH_NOTIFICATION') {
+        showInAppNotif(event.data.title, event.data.body)
+      }
+    }
+    navigator.serviceWorker.addEventListener('message', handler)
+    return () => navigator.serviceWorker.removeEventListener('message', handler)
+  }, [showInAppNotif])
+
+  useEffect(() => {
+    if (!session) return
+    const iv = setInterval(() => loadData(session), 15000)
+    return () => clearInterval(iv)
+  }, [session])
+
+  const loadData = useCallback(async (s: any) => {
+    const { data, error } = await supabase.rpc('rpc_pin_list_matches', { p_token: s.token })
+
+    if (error) {
+      const isAuthError =
+        error.code === 'PGRST301' ||
+        error.code === '42501' ||
+        error.message?.includes('JWT') ||
+        error.message?.includes('invalid token')
+
+      if (isAuthError) {
+        sessionStorage.removeItem('pin_session')
+        router.replace('/pin')
+        return
+      }
+
+      errorCountRef.current += 1
+      console.warn(`[PIN] loadData error (${errorCountRef.current}/${MAX_ERRORS}):`, error.message)
+
+      if (errorCountRef.current >= MAX_ERRORS) {
+        sessionStorage.removeItem('pin_session')
+        router.replace('/pin')
+      }
+      return
+    }
+
+    errorCountRef.current = 0
+
+    const myMatches: PinMatch[] = data.matches || []
+    setMatches(myMatches)
+
+    const courts = [...new Set(myMatches.map(m => m.court).filter(Boolean))] as string[]
+    const queueMap = new Map<string, CourtQueueMatch[]>()
+
+    if (courts.length > 0) {
+      // 내 경기 ID로 match_date 조회 (RPC가 match_date를 반환 안 하므로)
+      const myMatchIds = myMatches.map(m => m.id).filter(Boolean)
+      const { data: myMatchDates } = myMatchIds.length > 0
+        ? await supabase
+            .from('v_matches_with_teams')
+            .select('id, court, match_date')
+            .in('id', myMatchIds)
+        : { data: [] }
+
+      // 코트별로 내 경기의 match_date 매핑
+      const courtDateMap: Record<string, string> = {}
+      for (const m of (myMatchDates || [])) {
+        if (m.court && m.match_date) courtDateMap[m.court] = m.match_date
+      }
+
+      // 코트별로 해당 날짜 경기만 조회
+      const queueResults = await Promise.all(
+        courts.map(async (court) => {
+          const myCourtDate = courtDateMap[court]
+          let q = supabase
+            .from('v_matches_with_teams')
+            .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
+            .eq('event_id', s.event_id)
+            .eq('court', court)
+            .order('court_order')
+          if (myCourtDate) q = q.eq('match_date', myCourtDate)
+          const { data } = await q
+          return { court, matches: (data || []).filter((m: any) => m.score !== 'BYE') }
+        })
+      )
+
+      const allMatches: any[] = []
+      for (const { court, matches } of queueResults) {
+        const sorted = [...matches].sort((a: any, b: any) => (a.court_order || 0) - (b.court_order || 0))
+        queueMap.set(court, sorted as CourtQueueMatch[])
+        allMatches.push(...matches)
+      }
+
+      for (const m of myMatches) {
+        if (!m.court) continue
+        const queue   = queueMap.get(m.court) || []
+        const liveIdx = queue.findIndex(q => q.status === 'IN_PROGRESS')
+        const pendIdx = queue.findIndex(q => q.status === 'PENDING')
+        const curIdx  = liveIdx >= 0 ? liveIdx : pendIdx
+        const myIdx   = queue.findIndex(q => q.id === m.id)
+        const remaining = curIdx >= 0 && myIdx >= 0 ? Math.max(0, myIdx - curIdx) : 0
+
+        if (notifAllowed && remaining === 1) {
+          const prev = prevWaitRef.current.get(m.court) ?? 99
+          if (prev > 1) {
+            showInAppNotif('🎾 준비하세요!', `${m.court}에서 다음 경기로 이동해주세요.`)
+            sendBrowserNotif(m.court)
+          }
+        }
+        if (m.court) prevWaitRef.current.set(m.court, remaining)
+      }
+    }
+
+    setCourtQueues(queueMap)
+
+    const eventId = s.event_id
+    if (eventId) {
+      const [{ data: rawFinals }, { data: viewData }] = await Promise.all([
+        supabase.from('matches')
+          .select('id, round, slot, division_id, team_a_id, team_b_id, winner_team_id, status')
+          .eq('event_id', eventId).eq('stage', 'FINALS')
+          .order('slot', { ascending: true, nullsFirst: true }),
+        supabase.from('v_matches_with_teams')
+          .select('team_a_id, team_b_id, team_a_name, team_b_name')
+          .eq('event_id', eventId).eq('stage', 'FINALS')
+          .not('team_a_name', 'is', null),
+      ])
+      const tMap: Record<string, string> = {}
+      ;(viewData || []).forEach((m: any) => {
+        if (m.team_a_id && m.team_a_name) tMap[m.team_a_id] = m.team_a_name
+        if (m.team_b_id && m.team_b_name) tMap[m.team_b_id] = m.team_b_name
+      })
+      setFinalsMatches((rawFinals || []).map((m: any) => ({
+        ...m,
+        team_a_name: m.team_a_id ? (tMap[m.team_a_id] || null) : null,
+        team_b_name: m.team_b_id ? (tMap[m.team_b_id] || null) : null,
+      })) as FinalsMatch[])
+    }
+
+    setLoading(false)
+  }, [notifAllowed, showInAppNotif])
+
+  function sendBrowserNotif(court: string) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return
+    new Notification('🎾 준비하세요!', {
+      body: `${court}에서 다음 경기로 이동해주세요.`,
+      icon: '/icon-192x192.png',
+      tag: `court-${court}`,
+    })
   }
 
-  async function loadTiesData(eventId: string) {
-    setTiesLoading(true)
+  async function requestNotification() {
+    setNotifRequested(true)
+    if (!('Notification' in window)) { alert('이 브라우저는 알림을 지원하지 않습니다.'); return }
     try {
-      const { data: ev } = await supabase.from('events').select('team_sets_per_rubber').eq('id', eventId).single()
-      setSetsPerRubber(ev?.team_sets_per_rubber || 1)
-      const data = await fetchTies(eventId)
-      setTies(data)
-    } catch {}
-    setTiesLoading(false)
+      const perm = await Notification.requestPermission()
+      setNotifAllowed(perm === 'granted')
+      if (perm === 'granted') {
+        showInAppNotif('🎾 알림 활성화', '경기 알림이 설정되었습니다.')
+        const pin = session?.pin || sessionStorage.getItem('venue_pin') || session?.token
+        if (pin) await subscribeWithPin(pin)
+        else autoResubscribe()
+      } else if (perm === 'denied') {
+        alert('알림이 차단되어 있습니다.\n브라우저 설정에서 알림 허용으로 변경해주세요.')
+      }
+    } catch { setNotifAllowed(false) }
   }
 
-  // 媛쒖씤???꾪꽣
-  const filtered = allMatches.filter(m => {
-    if (!searchQuery) return false
-    const q = searchQuery.toLowerCase()
-    return (m.match_num||'').toLowerCase().includes(q)
-      || (m.team_a_name||'').toLowerCase().includes(q)
-      || (m.team_b_name||'').toLowerCase().includes(q)
-      || (m.division_name||'').toLowerCase().includes(q)
-      || (m.round||'').toLowerCase().includes(q)
-  })
-
-  // ?⑥껜???꾪꽣
-  const filteredTies = ties.filter(tie => {
-    if (!tieSearchQuery) return false
-    const q = tieSearchQuery.toLowerCase()
-    return (tie.club_a?.name||'').toLowerCase().includes(q)
-      || (tie.club_b?.name||'').toLowerCase().includes(q)
-      || (tie.tie_order?.toString()||'').includes(q)
-      || (tie.round||'').toLowerCase().includes(q)
-  })
-
-  async function selectMatch(m: any) {
-    setSelectedMatch(m)
-    setNewScore(m.score || '')
-    setNewWinner(m.winner_team_id===m.team_a_id?'A':m.winner_team_id===m.team_b_id?'B':'')
-    setReason('')
+  function selectWinner(matchId: string, side: 'A' | 'B') {
+    setWinners(prev => ({ ...prev, [matchId]: side }))
+    setLoserScores(prev => ({ ...prev, [matchId]: '' }))
     setMsg('')
   }
 
-  async function handleUnlock() {
-    if (!session || !selectedMatch) return
-    setLoading(true); setMsg('')
-    const { error } = await supabase.rpc('rpc_admin_pin_unlock_match', {
-      p_token: session.token, p_match_id: selectedMatch.id, p_reason: reason||'愿由ъ옄 ?댁젣'
-    })
-    setLoading(false)
-    if (error) { setMsg('??'+error.message); return }
-    setMsg('???좉툑???댁젣?섏뿀?듬땲??')
-    loadAllMatches(session.event_id); setSelectedMatch(null)
-  }
+  // ============================================================
+  // ✅ 점수 제출 후 조별 완료 체크 → rpc_fill_tournament_slots 호출
+  // ============================================================
+  async function tryFillTournamentSlots(match: PinMatch) {
+    // GROUP 경기가 아니면 skip (대소문자 모두 대응)
+    const stageUp = (match.stage || '').toUpperCase()
+    const roundUp = (match.round || '').toUpperCase()
+    if (stageUp !== 'GROUP' && roundUp !== 'GROUP') return
 
-  async function handleUpdateScore() {
-    if (!session||!selectedMatch||!newScore||!newWinner) { setMsg('점수와 승자를 모두 입력해주세요.'); return }
-    setLoading(true); setMsg('')
-    const winnerId = newWinner==='A' ? selectedMatch.team_a_id : selectedMatch.team_b_id
-    const { error } = await supabase.rpc('rpc_admin_pin_update_score', {
-      p_token: session.token, p_match_id: selectedMatch.id, p_score: newScore, p_winner_team_id: winnerId
-    })
-    if (error) { setLoading(false); setMsg('❌ '+error.message); return }
+    const eventId = session?.event_id
+    if (!eventId) return
 
-    const stageUp = (selectedMatch.stage || '').toUpperCase()
-    if (stageUp === 'GROUP') {
-      try {
-        const { data: matchData } = await supabase
-          .from('matches')
-          .select('group_id, division_id')
-          .eq('id', selectedMatch.id)
-          .single()
-        if (matchData?.group_id) {
-          const { data: groupMatches } = await supabase
-            .from('matches')
-            .select('id, status')
-            .eq('event_id', session.event_id)
-            .eq('group_id', matchData.group_id)
-            .eq('stage', 'GROUP')
-          const unfinished = (groupMatches || []).filter(m => m.status !== 'FINISHED')
-          if (unfinished.length === 0) {
-            const { data: finalsMatches } = await supabase
-              .from('matches')
-              .select('id, qualifier_label_a, qualifier_label_b')
-              .eq('event_id', session.event_id)
-              .eq('division_id', matchData.division_id)
-              .eq('stage', 'FINALS')
-            const hasTbd = (finalsMatches || []).some(
-              m => m.qualifier_label_a != null || m.qualifier_label_b != null
-            )
-            if (hasTbd) {
-              const { data: fillResult, error: fillError } = await supabase.rpc('rpc_fill_tournament_slots', {
-                p_event_id: session.event_id,
-                p_group_id: matchData.group_id,
-              })
-              if (!fillError && fillResult?.success && fillResult.filled > 0) {
-                setLoading(false)
-                setMsg('✅ 결과가 수정되었습니다. (본선 슬롯 ' + fillResult.filled + '개 자동 업데이트됨)')
-                loadAllMatches(session.event_id); setSelectedMatch(null)
-                return
-              }
-            }
-          }
-        }
-      } catch {}
+    // 해당 경기의 group_id 조회
+    const { data: matchData } = await supabase
+      .from('matches')
+      .select('group_id, division_id')
+      .eq('id', match.id)
+      .single()
+
+    if (!matchData?.group_id) return
+
+    // 해당 그룹의 남은 경기 수 확인
+    // [3] .neq('status','FINISHED') → 전체 조회 후 클라이언트 필터 (NULL status 포함)
+    const { data: groupMatches } = await supabase
+      .from('matches')
+      .select('id, status')
+      .eq('event_id', eventId)
+      .eq('group_id', matchData.group_id)
+      .eq('stage', 'GROUP')
+
+    // 방금 제출한 경기 포함해서 미완료 경기 수 계산
+    // (rpc_pin_submit_score 완료 후 호출이므로 해당 경기는 이미 FINISHED)
+    const unfinished = (groupMatches || []).filter(m => m.status !== 'FINISHED')
+    if (unfinished.length > 0) return // 아직 남은 경기 있음
+
+    // 본선 브래킷에 TBD 슬롯이 있는지 확인
+    // [4] .or() 문법 수정 → 전체 조회 후 클라이언트 필터
+    const { data: finalsMatches } = await supabase
+      .from('matches')
+      .select('id, qualifier_label_a, qualifier_label_b')
+      .eq('event_id', eventId)
+      .eq('division_id', matchData.division_id)
+      .eq('stage', 'FINALS')
+
+    const hasTbd = (finalsMatches || []).some(
+      m => m.qualifier_label_a != null || m.qualifier_label_b != null
+    )
+    if (!hasTbd) return // TBD 슬롯 없음 (브래킷 미생성 or 이미 완료)
+
+    // rpc_fill_tournament_slots 호출
+    console.log('[PIN] 조 완료 감지 → rpc_fill_tournament_slots 호출:', matchData.group_id)
+    const { data: fillResult, error: fillError } = await supabase.rpc('rpc_fill_tournament_slots', {
+      p_event_id: eventId,
+      p_group_id: matchData.group_id,
+    })
+
+    if (fillError) {
+      console.warn('[PIN] fill_tournament_slots 오류:', fillError.message)
+      return
     }
 
-    setLoading(false)
-    setMsg('✅ 결과가 수정되었습니다.')
-    loadAllMatches(session.event_id); setSelectedMatch(null)
-  }
-
-  async function handleSelectTie(tie: TieWithClubs) {
-    if (selectedTie?.id === tie.id) { setSelectedTie(null); setScoringRubber(null); return }
-    setSelectedTie(tie); setScoringRubber(null); setTieMsg('')
-    const [lineupData, rubberData] = await Promise.all([
-      // ?댁쁺?먮뒗 is_revealed 愿怨꾩뾾???꾩껜 議고쉶
-      supabase.from('team_lineups').select('*').eq('tie_id', tie.id).order('rubber_number'),
-      supabase.from('tie_rubbers').select('*').eq('tie_id', tie.id).order('rubber_number'),
-    ])
-    setTieLineups((lineupData.data || []) as TeamLineup[])
-    setTieRubbers(rubberData.data || [])
-    const mm: Record<string, ClubMember> = {}
-    if (tie.club_a_id) { (await fetchClubMembers(tie.club_a_id)).forEach(m => { mm[m.id]=m }) }
-    if (tie.club_b_id) { (await fetchClubMembers(tie.club_b_id)).forEach(m => { mm[m.id]=m }) }
-    setMemberMap(mm)
-  }
-
-  function startScoring(rubber: any) {
-    setScoringRubber(rubber.id); setScoreError('')
-    setSet1a(rubber.set1_a?.toString()||''); setSet1b(rubber.set1_b?.toString()||'')
-    setSet2a(rubber.set2_a?.toString()||''); setSet2b(rubber.set2_b?.toString()||'')
-    setSet3a(rubber.set3_a?.toString()||''); setSet3b(rubber.set3_b?.toString()||'')
-  }
-
-  async function handleTieScoreSave() {
-    if (!set1a || !set1b) { setScoreError('1?명듃 ?먯닔瑜??낅젰?섏꽭??'); return }
-    setScoreSaving(true); setScoreError('')
-    try {
-      const { data, error: err } = await supabase.rpc('rpc_admin_record_score', {
-        p_rubber_id: scoringRubber,
-        p_set1_a: parseInt(set1a), p_set1_b: parseInt(set1b),
-        p_set2_a: set2a ? parseInt(set2a) : null, p_set2_b: set2b ? parseInt(set2b) : null,
-        p_set3_a: set3a ? parseInt(set3a) : null, p_set3_b: set3b ? parseInt(set3b) : null,
-      })
-      if (err) { setScoreError(err.message); return }
-      if (data && !data.success) { setScoreError(data.error || '????ㅽ뙣'); return }
-
-      // ?곗씠???덈줈怨좎묠
-      const [rubberData, tieData] = await Promise.all([
-        supabase.from('tie_rubbers').select('*').eq('tie_id', selectedTie!.id).order('rubber_number'),
-        supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)').eq('id', selectedTie!.id).single(),
-      ])
-      setTieRubbers(rubberData.data || [])
-      if (tieData.data) {
-        setSelectedTie(tieData.data as any)
-        setTies(prev => prev.map(t => t.id === selectedTie!.id ? tieData.data as any : t))
-      }
-      setScoringRubber(null)
-      setTieMsg('???먯닔 ??λ맖')
-      setTimeout(() => setTieMsg(''), 3000)
-    } catch (err: any) {
-      setScoreError(err.message || '????ㅽ뙣')
-    } finally {
-      setScoreSaving(false)
+    if (fillResult?.success && fillResult.filled > 0) {
+      console.log('[PIN] 슬롯 채우기 완료:', fillResult)
     }
   }
 
-  function getMemberName(id: string|null|undefined): string {
-    return id && memberMap[id] ? memberMap[id].name : '-'
+  async function submitScore(matchId: string, match: PinMatch) {
+    const winner = winners[matchId]
+    const loser  = loserScores[matchId]?.trim()
+    if (!winner) { setMsg('승자를 선택해주세요.'); return }
+    if (!loser)  { setMsg('패자 점수를 입력해주세요. (예: 4)'); return }
+    if (!/^\d+$/.test(loser)) { setMsg('숫자만 입력해주세요.'); return }
+    const score = winner === 'A' ? `6:${loser}` : `${loser}:6`
+    setSubmitting(matchId); setMsg('')
+
+    const { error } = await supabase.rpc('rpc_pin_submit_score', {
+      p_token: session.token, p_match_id: matchId, p_score: score,
+    })
+    setSubmitting(null)
+    if (error) { setMsg('❌ ' + error.message); return }
+    setMsg('✅ 점수가 제출되었습니다!')
+
+    // ✅ 본선 TBD 슬롯 자동 채우기 시도 (조별 경기인 경우)
+    await tryFillTournamentSlots(match)
+
+    loadData(session)
   }
 
-  function handleLogout() { sessionStorage.removeItem('admin_pin_session'); router.push('/admin-pin') }
+  function handleLogout() {
+    sessionStorage.removeItem('pin_session')
+    sessionStorage.removeItem('venue_pin')
+    sessionStorage.removeItem('pin_event_id')
+    localStorage.removeItem('pin_session')
+    router.replace('/pin')
+  }
 
-  if (!session) return null
+  function NotifButton() {
+    if (notifAllowed) {
+      return (
+        <button
+          onClick={() => { autoResubscribe(); showInAppNotif('🎾 알림 테스트', '알림이 정상적으로 동작하고 있습니다.') }}
+          className="text-xs text-white/60 hover:text-white/90 flex items-center gap-1"
+          title="알림 확인"
+        >
+          🔔 알림 확인
+        </button>
+      )
+    }
+    if (notifRequested && !notifAllowed) {
+      return (
+        <button
+          onClick={() => alert('알림이 차단되어 있습니다.\n브라우저 설정 → 알림 허용으로 변경해주세요.')}
+          className="text-xs bg-red-500/80 text-white px-2.5 py-1 rounded-full"
+        >
+          🔕 알림 차단됨
+        </button>
+      )
+    }
+    return (
+      <button
+        onClick={requestNotification}
+        className="text-xs bg-amber-500 text-white px-2.5 py-1 rounded-full animate-pulse"
+      >
+        🔔 알림 허용
+      </button>
+    )
+  }
+
+  const byRound = matches.reduce<Record<string, PinMatch[]>>((acc, m) => {
+    const key = m.round || 'group'
+    if (!acc[key]) acc[key] = []
+    acc[key].push(m)
+    return acc
+  }, {})
+  const sortedRounds = Object.keys(byRound).sort((a, b) => (ROUND_ORDER[a] ?? 9) - (ROUND_ORDER[b] ?? 9))
+
+  // 상단 헤더: 본인 이름 + 부서별 파트너 추출
+  // team_name 형식: "신승배/홍길동" — '/' 앞이 본인(player1), 뒤가 파트너
+  const divPartners: { division: string; partner: string }[] = []
+  const seenDivs = new Set<string>()
+  let myName = session?.team_name || ''
+  for (const m of matches) {
+    const teamName = m.my_side === 'A' ? m.team_a_name : m.team_b_name
+    if (!teamName || seenDivs.has(m.division_id)) continue
+    seenDivs.add(m.division_id)
+    const parts = teamName.split('/')
+    if (parts.length >= 2) {
+      myName = parts[0].trim()           // 첫 번째 경기 기준 본인 이름 확정
+      const partner = parts.slice(1).join('/').trim()
+      divPartners.push({ division: m.division_name, partner })
+    } else {
+      divPartners.push({ division: m.division_name, partner: '' })
+    }
+  }
 
   return (
-    <div className="min-h-screen">
-      <header className="bg-red-700 text-white sticky top-0 z-10">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div>
-            <h1 className="font-bold">?썳截?愿由ъ옄 ?꾧뎄</h1>
-            <p className="text-xs text-white/60">{session.event_name} 쨌 30遺??몄뀡</p>
-          </div>
-          <button onClick={handleLogout} className="text-sm text-white/60 hover:text-white">濡쒓렇?꾩썐</button>
-        </div>
-      </header>
-
-      <div className="max-w-2xl mx-auto px-4 pt-4">
-        <div className="flex gap-2 mb-4">
-          <button onClick={() => { setTab('individual'); setSelectedMatch(null); setMsg('') }}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition ${tab==='individual'?'bg-red-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-            ?렱 媛쒖씤??          </button>
-          <button onClick={() => { setTab('team'); setSelectedTie(null); setScoringRubber(null); setTieMsg('') }}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition ${tab==='team'?'bg-blue-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-            ?뱥 ?⑥껜??          </button>
+    <div className="min-h-screen bg-stone-50">
+      {/* 인앱 알림 배너 */}
+      <div className="fixed top-0 left-0 right-0 z-50 pointer-events-none">
+        <div className="max-w-2xl mx-auto px-4 pt-2 space-y-2">
+          {inAppNotifs.map(n => (
+            <div key={n.id}
+              className="pointer-events-auto bg-[#2d5016] text-white rounded-2xl shadow-2xl px-4 py-3 flex items-start gap-3 animate-slideDown">
+              <span className="text-2xl flex-shrink-0">🎾</span>
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-sm">{n.title}</div>
+                <div className="text-xs text-white/80 mt-0.5">{n.body}</div>
+              </div>
+              <button
+                onClick={() => setInAppNotifs(prev => prev.filter(x => x.id !== n.id))}
+                className="text-white/60 hover:text-white text-lg leading-none flex-shrink-0">
+                ✕
+              </button>
+            </div>
+          ))}
         </div>
       </div>
 
-      <main className="max-w-2xl mx-auto px-4 pb-8 space-y-3">
-
-        {/* ?먥븧?먥븧?먥븧 媛쒖씤???먥븧?먥븧?먥븧 */}
-        {tab === 'individual' && (
-          <>
-            {msg && (
-              <div className={`p-3 rounded-lg text-sm ${msg.startsWith('??)?'bg-green-50 text-green-700':'bg-red-50 text-red-600'}`}>
-                {msg}
+      <header className="bg-[#2d5016] text-white sticky top-0 z-10">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div>
+            <div className="font-bold text-base">{myName || session?.team_name}</div>
+            {divPartners.length > 0 ? (
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
+                {divPartners.map(({ division, partner }) => (
+                  <span key={division} className="text-xs text-white/70">
+                    <span className="text-white/50">{division}</span>
+                    {partner ? <span className="text-white/90"> · /{partner}</span> : null}
+                  </span>
+                ))}
               </div>
+            ) : (
+              <div className="text-xs text-white/60">{session?.division} · 내 경기</div>
             )}
-            <div className="relative">
-              <input type="text" placeholder="?紐? 寃쎄린踰덊샇, 遺?쒕챸 寃??.."
-                value={searchQuery}
-                onChange={e => { setSearchQuery(e.target.value); setSelectedMatch(null); setMsg('') }}
-                className="w-full border-2 rounded-xl px-4 py-3 pr-10 focus:border-red-500 outline-none"
-                autoFocus
-              />
-              {searchQuery && (
-                <button onClick={() => { setSearchQuery(''); setSelectedMatch(null) }}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">??/button>
-              )}
-            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <NotifButton />
+            <button onClick={handleLogout} className="text-xs text-white/50 hover:text-white/80">로그아웃</button>
+          </div>
+        </div>
+      </header>
 
-            {!searchQuery && (
-              <div className="text-center py-10 text-gray-400">
-                <div className="text-3xl mb-2">?뵇</div>
-                <p>?紐??먮뒗 寃쎄린踰덊샇瑜?寃?됲븯?몄슂</p>
-              </div>
-            )}
-            {searchQuery && filtered.length === 0 && (
-              <div className="text-center py-8 text-gray-400">寃??寃곌낵媛 ?놁뒿?덈떎.</div>
-            )}
-
-            {filtered.map(m => (
-              <div key={m.id} onClick={() => selectMatch(m)}
-                className={`bg-white rounded-xl border p-4 cursor-pointer transition ${selectedMatch?.id===m.id?'border-red-400 bg-red-50':'hover:border-gray-300'}`}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-gray-400">{m.match_num} 쨌 {m.division_name} 쨌 {m.round}</span>
-                  <div className="flex items-center gap-2">
-                    {m.locked_by_participant && <span className="text-xs text-red-500">?뵏</span>}
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${m.status==='FINISHED'?'bg-green-100 text-green-700':m.status==='IN_PROGRESS'?'bg-red-100 text-red-700':'bg-gray-100 text-gray-500'}`}>
-                      {m.status==='FINISHED'?'?꾨즺':m.status==='IN_PROGRESS'?'吏꾪뻾以?:'?湲?}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="font-medium">{m.team_a_name}</span>
-                  <span className="text-gray-400 font-bold mx-2">{m.score || 'vs'}</span>
-                  <span className="font-medium">{m.team_b_name}</span>
-                </div>
-              </div>
-            ))}
-
-            {selectedMatch && (
-              <div className="bg-white rounded-xl border-2 border-red-300 p-5">
-                <h3 className="font-bold text-lg mb-1">寃쎄린 ?섏젙</h3>
-                <div className="text-xs text-stone-400 mb-4">{selectedMatch.match_num} 쨌 {selectedMatch.division_name} 쨌 {selectedMatch.round}</div>
-                <div className="flex items-center justify-center gap-4 my-4">
-                  <div className="text-center flex-1"><div className="font-bold">{selectedMatch.team_a_name||'TBD'}</div><span className="text-xs text-stone-400">? A</span></div>
-                  <span className="text-2xl text-stone-300 font-bold">VS</span>
-                  <div className="text-center flex-1"><div className="font-bold">{selectedMatch.team_b_name||'TBD'}</div><span className="text-xs text-stone-400">? B</span></div>
-                </div>
-                {selectedMatch.score && (
-                  <div className="text-center mb-4 text-sm">?꾩옱: <strong>{selectedMatch.score}</strong>
-                    {selectedMatch.winner_name && <span> ???? {selectedMatch.winner_name}</span>}
-                    {selectedMatch.locked_by_participant && <span className="ml-2 text-red-500">?뵏 李멸??먯옞湲?/span>}
-                  </div>
-                )}
-                <hr className="my-4" />
-                {selectedMatch.locked_by_participant && (
-                  <div className="mb-4 p-3 bg-amber-50 rounded-lg">
-                    <p className="text-sm font-bold text-amber-700 mb-2">?뵑 ?좉툑 ?댁젣</p>
-                    <input type="text" placeholder="?댁젣 ?ъ쑀 (?좏깮)" value={reason} onChange={e => setReason(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm mb-2" />
-                    <button onClick={handleUnlock} disabled={loading} className="w-full bg-amber-500 text-white py-2 rounded-lg font-medium hover:bg-amber-600 disabled:opacity-50">
-                      {loading?'泥섎━ 以?..':'?좉툑 ?댁젣 + 寃곌낵 珥덇린??}
-                    </button>
-                  </div>
-                )}
-                <div className="p-3 bg-stone-50 rounded-lg">
-                  <p className="text-sm font-bold mb-3">?륅툘 寃곌낵 ?섏젙</p>
-                  <div className="mb-3">
-                    <label className="text-xs text-stone-500">?먯닔</label>
-                    <input type="text" placeholder="6:4" value={newScore} onChange={e => setNewScore(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-center text-lg font-bold mt-1" />
-                  </div>
-                  <div className="mb-3">
-                    <label className="text-xs text-stone-500">?뱀옄</label>
-                    <div className="flex gap-2 mt-1">
-                      <button onClick={() => setNewWinner('A')} className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${newWinner==='A'?'bg-red-600 text-white border-red-600':'border-stone-300 hover:border-red-400'}`}>A: {selectedMatch.team_a_name||'TBD'}</button>
-                      <button onClick={() => setNewWinner('B')} className={`flex-1 py-2 rounded-lg text-sm font-medium border transition-all ${newWinner==='B'?'bg-red-600 text-white border-red-600':'border-stone-300 hover:border-red-400'}`}>B: {selectedMatch.team_b_name||'TBD'}</button>
-                    </div>
-                  </div>
-                  <button onClick={handleUpdateScore} disabled={loading||!newScore||!newWinner} className="w-full bg-red-600 text-white py-2.5 rounded-lg font-bold hover:bg-red-700 disabled:opacity-50">
-                    {loading?'泥섎━ 以?..':'寃곌낵 ???}
-                  </button>
-                </div>
-              </div>
-            )}
-          </>
+      <main className="max-w-2xl mx-auto px-4 py-5">
+        {msg && (
+          <div className={`mb-4 px-4 py-2.5 rounded-xl text-sm font-medium ${
+            msg.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+          }`}>
+            {msg}
+          </div>
         )}
 
-        {/* ?먥븧?먥븧?먥븧 ?⑥껜???먥븧?먥븧?먥븧 */}
-        {tab === 'team' && (
-          <>
-            {tieMsg && (
-              <div className={`p-3 rounded-lg text-sm ${tieMsg.startsWith('??)?'bg-green-50 text-green-700':'bg-red-50 text-red-600'}`}>
-                {tieMsg}
-              </div>
-            )}
-            <div className="relative">
-              <input type="text" placeholder="?대읇紐? ?쇱슫?? 踰덊샇 寃??.."
-                value={tieSearchQuery}
-                onChange={e => { setTieSearchQuery(e.target.value); setSelectedTie(null); setScoringRubber(null) }}
-                className="w-full border-2 rounded-xl px-4 py-3 pr-10 focus:border-blue-500 outline-none"
-                autoFocus
-              />
-              {tieSearchQuery && (
-                <button onClick={() => { setTieSearchQuery(''); setSelectedTie(null); setScoringRubber(null) }}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">??/button>
-              )}
-            </div>
+        {loading ? (
+          <div className="text-center py-16 text-stone-400">불러오는 중...</div>
+        ) : matches.length === 0 ? (
+          <div className="text-center py-16">
+            <div className="text-4xl mb-3">🎾</div>
+            <p className="text-stone-500">예정된 경기가 없습니다</p>
+            <p className="text-stone-400 text-sm mt-1">모든 경기가 완료됐거나 아직 배정 전입니다</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {sortedRounds.map(round => (
+              <section key={round}>
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-1 h-5 bg-[#2d5016] rounded-full" />
+                  <h2 className="text-sm font-bold text-stone-700">{ROUND_LABEL[round] || round}</h2>
+                </div>
+                <div className="space-y-3">
+                  {byRound[round].map(m => {
+                    const isLive   = m.status === 'IN_PROGRESS'
+                    const isDone   = m.status === 'FINISHED'
+                    const canInput = isLive && !m.locked_by_participant
+                    const queue    = m.court ? courtQueues.get(m.court) || [] : []
+                    const showQueue = m.court && queue.length > 0 && !isDone
+                    const winner   = winners[m.id]
+                    const loser    = loserScores[m.id] || ''
 
-            {!tieSearchQuery && (
-              <div className="text-center py-10 text-gray-400">
-                <div className="text-3xl mb-2">?뵇</div>
-                <p>?대읇紐??먮뒗 ?쇱슫?쒕? 寃?됲븯?몄슂</p>
-                <p className="text-xs mt-1 text-gray-300">?? "?곕룄", "16媛?, "1"</p>
-              </div>
-            )}
-            {tiesLoading && <div className="text-center py-8 text-gray-400">濡쒕뵫以?..</div>}
-            {tieSearchQuery && !tiesLoading && filteredTies.length === 0 && (
-              <div className="text-center py-8 text-gray-400">寃??寃곌낵媛 ?놁뒿?덈떎.</div>
-            )}
+                    return (
+                      <div key={m.id} className={`bg-white rounded-2xl border overflow-hidden shadow-sm ${isLive ? 'border-red-200' : 'border-stone-200'}`}>
+                        {showQueue && (
+                          <CourtQueue queue={queue} myMatchId={m.id} court={m.court!} />
+                        )}
 
-            <div className="space-y-3">
-              {filteredTies.map(tie => {
-                const isSelected = selectedTie?.id === tie.id
-                const maj = getMajority(tie.rubber_count)
-                const aWin = tie.club_a_rubbers_won >= maj
-                const bWin = tie.club_b_rubbers_won >= maj
-                return (
-                  <div key={tie.id} className="bg-white rounded-xl border overflow-hidden">
-                    <div onClick={() => handleSelectTie(tie)} className="p-4 cursor-pointer hover:bg-gray-50 transition">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs text-gray-400">#{tie.tie_order}</span>
-                          <span className={`font-semibold ${aWin?'text-blue-600':''}`}>{tie.club_a?.name||'TBD'}</span>
-                          <span className="text-gray-400 text-sm">vs</span>
-                          <span className={`font-semibold ${bWin?'text-blue-600':''}`}>{tie.club_b?.name||'TBD'}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {(tie.status==='completed'||tie.status==='in_progress') && (
-                            <span className="text-lg font-bold">{tie.club_a_rubbers_won} - {tie.club_b_rubbers_won}</span>
+                        <div className="p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-xs text-stone-400">{m.match_num}</span>
+                              <span className="text-xs px-1.5 py-0.5 rounded bg-stone-100 text-stone-500">{m.division_name}</span>
+                              {m.group_label && <span className="text-xs text-stone-400">{m.group_label}</span>}
+                            </div>
+                            {m.court ? (
+                              <span className="text-xs px-2.5 py-0.5 rounded-full bg-[#2d5016]/10 text-[#2d5016] font-bold">
+                                🎾 {m.court}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-stone-400">코트 미배정</span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-center gap-3 mb-4">
+                            <div className={`text-center flex-1 ${m.my_side === 'A' ? 'font-bold' : ''}`}>
+                              <PinTeamName name={m.team_a_name} isMy={m.my_side === 'A'}
+                                finalsMatches={finalsMatches} matchId={m.id} abSlot="A" />
+                            </div>
+                            <div className="px-2 text-center">
+                              {isDone && m.score ? (
+                                <span className="text-lg font-black text-stone-700">{m.score}</span>
+                              ) : isLive ? (
+                                <span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded-full">진행中</span>
+                              ) : (
+                                <span className="text-stone-300 font-bold text-sm">VS</span>
+                              )}
+                            </div>
+                            <div className={`text-center flex-1 ${m.my_side === 'B' ? 'font-bold' : ''}`}>
+                              <PinTeamName name={m.team_b_name} isMy={m.my_side === 'B'}
+                                finalsMatches={finalsMatches} matchId={m.id} abSlot="B" />
+                            </div>
+                          </div>
+
+                          {isDone && m.locked_by_participant && (
+                            <div className="flex items-center justify-center gap-2 py-2.5 bg-stone-50 rounded-xl">
+                              <span className="text-stone-400 text-sm">✅ 점수 제출 완료</span>
+                              <span className="text-stone-700 font-bold text-sm">{m.score}</span>
+                            </div>
                           )}
-                          <span className={`text-xs px-2 py-1 rounded-full ${getTieStatusColor(tie.status)}`}>
-                            {getTieStatusLabel(tie.status)}
-                          </span>
-                          <span className="text-gray-400 text-xs">{isSelected?'??:'??}</span>
-                        </div>
-                      </div>
-                      {tie.round && (
-                        <div className="text-xs text-gray-400 mt-1">{tie.round}</div>
-                      )}
-                    </div>
+                          {isDone && !m.locked_by_participant && (
+                            <div className="text-center py-2 text-xs text-stone-400">경기 완료 · 결과: {m.score || '-'}</div>
+                          )}
 
-                    {isSelected && (
-                      <div className="border-t bg-gray-50 p-4 space-y-3">
-                        {/* ?щ쾭蹂??먯닔 */}
-                        {Array.from({ length: tie.rubber_count }, (_, i) => i+1).map(num => {
-                          const laA = tieLineups.find(l => l.rubber_number===num && l.club_id===tie.club_a_id)
-                          const laB = tieLineups.find(l => l.rubber_number===num && l.club_id===tie.club_b_id)
-                          const rubber = tieRubbers.find((r: any) => r.rubber_number===num)
-                          const hasScore = rubber?.set1_a !== null && rubber?.set1_a !== undefined
-                          const isScoring = scoringRubber === rubber?.id
-
-                          return (
-                            <div key={num} className={`bg-white rounded-lg border p-3 ${rubber?.status==='completed'?'border-green-200':''}`}>
-                              <div className="flex items-center justify-between mb-2">
-                                <span className="font-medium text-sm">?щ쾭 {num}</span>
-                                {rubber?.status==='completed' && (
-                                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">?꾨즺</span>
-                                )}
-                              </div>
-
-                              {/* ?쇱씤??*/}
-                              {(laA || laB) && (
-                                <div className="grid grid-cols-5 items-center gap-1 text-xs mb-2">
-                                  <div className="col-span-2 text-right">
-                                    <div className="font-medium">{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</div>
-                                    <div className="text-gray-400">{tie.club_a?.name}</div>
-                                  </div>
-                                  <div className="text-center text-gray-400 font-bold">vs</div>
-                                  <div className="col-span-2">
-                                    <div className="font-medium">{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</div>
-                                    <div className="text-gray-400">{tie.club_b?.name}</div>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* ?먯닔 ?쒖떆 */}
-                              {hasScore && !isScoring && (
-                                <div className="flex items-center justify-between">
-                                  <div className="text-center flex-1 py-1 bg-gray-50 rounded text-sm font-bold">
-                                    {formatSetScore(rubber.set1_a, rubber.set1_b)}
-                                    {rubber.set2_a !== null && ' / '+formatSetScore(rubber.set2_a, rubber.set2_b)}
-                                    {rubber.set3_a !== null && ' / '+formatSetScore(rubber.set3_a, rubber.set3_b)}
-                                    {rubber.winning_club_id && (
-                                      <span className="text-xs text-blue-600 ml-2">
-                                        ?? {rubber.winning_club_id===tie.club_a_id?tie.club_a?.name:tie.club_b?.name}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <button onClick={() => startScoring(rubber)}
-                                    className="ml-2 text-xs text-amber-500 hover:text-amber-700 px-2 py-1 rounded hover:bg-amber-50">
-                                    ?섏젙
-                                  </button>
-                                </div>
-                              )}
-
-                              {/* ?먯닔 ?놁쑝硫??낅젰 踰꾪듉 */}
-                              {!hasScore && !isScoring && rubber && (
-                                <button onClick={() => startScoring(rubber)}
-                                  className="w-full bg-blue-50 text-blue-700 py-2 rounded-lg text-sm font-medium hover:bg-blue-100">
-                                  + ?먯닔 ?낅젰
+                          {canInput && (
+                            <div className="space-y-3 pt-1">
+                              <p className="text-xs text-stone-400 text-center">
+                                ① 승자를 선택 후 ② 패자 점수 입력 후 ③ 제출<br />
+                                <span className="text-amber-600 font-medium">점수 제출 후 수정 불가</span>
+                              </p>
+                              <div className="grid grid-cols-2 gap-2">
+                                <button onClick={() => selectWinner(m.id, 'A')}
+                                  className={`py-3 px-3 rounded-xl border-2 text-sm font-bold transition-all ${
+                                    winner === 'A' ? 'border-[#2d5016] bg-[#2d5016] text-white' : 'border-stone-200 bg-stone-50 text-stone-700 hover:border-[#2d5016]/40'
+                                  }`}>
+                                  🏆 {m.team_a_name}
                                 </button>
-                              )}
-
-                              {/* ?먯닔 ?낅젰 ??*/}
-                              {isScoring && rubber && (
-                                <div className="space-y-2 mt-2 border-t pt-3">
-                                  <SetRow label="1?명듃" aVal={set1a} bVal={set1b} setA={setSet1a} setB={setSet1b} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
-                                  {setsPerRubber === 3 && (<>
-                                    <SetRow label="2?명듃" aVal={set2a} bVal={set2b} setA={setSet2a} setB={setSet2b} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
-                                    <SetRow label="3?명듃" aVal={set3a} bVal={set3b} setA={setSet3a} setB={setSet3b} clubA={tie.club_a?.name} clubB={tie.club_b?.name} />
-                                  </>)}
-                                  {scoreError && <p className="text-red-500 text-xs">{scoreError}</p>}
+                                <button onClick={() => selectWinner(m.id, 'B')}
+                                  className={`py-3 px-3 rounded-xl border-2 text-sm font-bold transition-all ${
+                                    winner === 'B' ? 'border-[#2d5016] bg-[#2d5016] text-white' : 'border-stone-200 bg-stone-50 text-stone-700 hover:border-[#2d5016]/40'
+                                  }`}>
+                                  🏆 {m.team_b_name}
+                                </button>
+                              </div>
+                              {winner && (
+                                <div className="bg-stone-50 rounded-xl p-3">
+                                  <div className="flex items-center justify-center gap-3 mb-3">
+                                    <span className={`text-sm font-bold ${winner === 'A' ? 'text-[#2d5016]' : 'text-stone-400'}`}>
+                                      {winner === 'A' ? m.team_a_name : m.team_b_name}
+                                    </span>
+                                    <span className="text-xl font-black text-stone-700">6 : {loser || '?'}</span>
+                                    <span className={`text-sm font-bold ${winner === 'B' ? 'text-[#2d5016]' : 'text-stone-400'}`}>
+                                      {winner === 'B' ? m.team_a_name : m.team_b_name}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-stone-400 text-center mb-2">패자 점수 입력 (승자는 항상 6)</p>
                                   <div className="flex gap-2">
-                                    <button onClick={() => { setScoringRubber(null); setScoreError('') }}
-                                      className="flex-1 bg-gray-100 py-2 rounded-lg text-sm">痍⑥냼</button>
-                                    <button onClick={handleTieScoreSave} disabled={scoreSaving}
-                                      className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-bold hover:bg-green-700 disabled:opacity-50">
-                                      {scoreSaving ? '??μ쨷...' : '?먯닔 ?뺤젙'}
+                                    <input
+                                      type="number" inputMode="numeric" min="0" max="5" placeholder="0~5"
+                                      value={loser}
+                                      onChange={e => setLoserScores(prev => ({ ...prev, [m.id]: e.target.value }))}
+                                      onKeyDown={e => e.key === 'Enter' && submitScore(m.id, m)}
+                                      className="flex-1 border-2 border-amber-300 rounded-xl px-4 py-3 text-center text-2xl font-bold focus:outline-none focus:border-amber-500"
+                                    />
+                                    <button
+                                      onClick={() => submitScore(m.id, m)}
+                                      disabled={submitting === m.id || !loser.trim()}
+                                      className="bg-amber-500 text-white font-bold px-6 py-3 rounded-xl hover:bg-amber-600 disabled:opacity-50 transition-all whitespace-nowrap text-sm"
+                                    >
+                                      {submitting === m.id ? '...' : '제출'}
                                     </button>
                                   </div>
+                                  {loser && (
+                                    <div className="mt-2 text-center text-xs text-stone-500">
+                                      최종 점수: <span className="font-bold text-stone-700">
+                                        {winner === 'A' ? `6:${loser}` : `${loser}:6`}
+                                      </span>
+                                      &nbsp;· {winner === 'A' ? m.team_a_name : m.team_b_name} 승리
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
-                          )
-                        })}
+                          )}
+
+                          {!isDone && !isLive && (
+                            <div className="text-center py-2 text-xs text-stone-400">
+                              ⏳ 경기 대기 중 · 진행中이 되면 점수 입력 가능
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </>
+                    )
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
         )}
       </main>
     </div>
   )
 }
 
-function SetRow({ label, aVal, bVal, setA, setB, clubA, clubB }: {
-  label: string; aVal: string; bVal: string
-  setA: (v: string) => void; setB: (v: string) => void
-  clubA?: string; clubB?: string
+// TBD 후보 계산 (본선 브래킷용)
+function getTbdCandidates(finalsMatches: FinalsMatch[], matchId: string, abSlot: 'A' | 'B'): string[] {
+  const PREV: Record<string, string> = {
+    '결승': '4강', '4강': '8강', '8강': '16강', '16강': '32강', '32강': '64강', '64강': '128강',
+    'F': 'SF', 'SF': 'QF', 'QF': 'R16', 'R16': 'R32', 'R32': 'R64', 'R64': 'R128',
+  }
+  const cur = finalsMatches.find(m => m.id === matchId)
+  if (!cur) return []
+  const prevRound = PREV[cur.round]
+  if (!prevRound) return []
+  const curList = finalsMatches
+    .filter(m => m.division_id === cur.division_id && m.round === cur.round)
+    .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+  const myLocalIdx = curList.findIndex(m => m.id === matchId)
+  if (myLocalIdx < 0) return []
+  const prevList = finalsMatches
+    .filter(m => m.division_id === cur.division_id && m.round === prevRound)
+    .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+  const pm = abSlot === 'A' ? prevList[myLocalIdx * 2] : prevList[myLocalIdx * 2 + 1]
+  if (!pm) return []
+  const strip = (raw: string) => raw.split('/').map(p => p.replace(/\(.*?\)/g, '').trim()).join('/')
+  if (pm.status === 'FINISHED' && pm.winner_team_id) {
+    const w = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
+    return w && w !== 'TBD' ? [strip(w)] : []
+  }
+  const names: string[] = []
+  if (pm.team_a_name && pm.team_a_name !== 'TBD') names.push(strip(pm.team_a_name))
+  if (pm.team_b_name && pm.team_b_name !== 'TBD') names.push(strip(pm.team_b_name))
+  return names
+}
+
+function PinTeamName({ name, isMy, finalsMatches, matchId, abSlot }: {
+  name: string; isMy: boolean
+  finalsMatches: FinalsMatch[]; matchId: string; abSlot: 'A' | 'B'
 }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs text-gray-500 w-12">{label}</span>
-      <div className="flex items-center gap-1 flex-1">
-        <div className="flex-1 text-center">
-          <div className="text-[10px] text-gray-400 mb-0.5">{clubA?.slice(0,5)}</div>
-          <input type="number" min="0" max="7" value={aVal} onChange={e => setA(e.target.value)}
-            className="w-full border-2 rounded-lg px-2 py-2 text-center text-lg focus:border-blue-500 outline-none" />
-        </div>
-        <span className="text-gray-400 font-bold">:</span>
-        <div className="flex-1 text-center">
-          <div className="text-[10px] text-gray-400 mb-0.5">{clubB?.slice(0,5)}</div>
-          <input type="number" min="0" max="7" value={bVal} onChange={e => setB(e.target.value)}
-            className="w-full border-2 rounded-lg px-2 py-2 text-center text-lg focus:border-blue-500 outline-none" />
-        </div>
+  const isTbd = !name || name === 'TBD'
+  if (isTbd) {
+    const candidates = getTbdCandidates(finalsMatches, matchId, abSlot)
+    return (
+      <div>
+        {candidates.length > 0 ? (
+          <div className="text-xs text-stone-400 leading-tight">
+            {candidates.map((c, i) => (
+              <span key={i}>{i > 0 && <span className="text-stone-200"> / </span>}{c}</span>
+            ))}
+          </div>
+        ) : (
+          <div className="text-sm text-stone-300 italic">TBD</div>
+        )}
       </div>
+    )
+  }
+  return (
+    <div>
+      <div className={`text-sm ${isMy ? 'text-[#2d5016]' : 'text-stone-700'}`}>{name}</div>
+      {isMy && <span className="text-xs text-[#2d5016]/70 font-medium">← 내 팀</span>}
+    </div>
+  )
+}
+
+function FinishedQueue({ items }: { items: CourtQueueMatch[] }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="border-t border-stone-100 pt-1.5 mt-0.5">
+      <button onClick={() => setOpen(!open)}
+        className="text-xs text-stone-400 hover:text-stone-600 flex items-center gap-1 w-full">
+        <span>{open ? '▲' : '▼'}</span>
+        <span>완료 {items.length}경기</span>
+      </button>
+      {open && (
+        <div className="space-y-1 mt-1.5">
+          {items.map(q => (
+            <div key={q.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-stone-300">
+              <span className="w-4">✓</span>
+              <span className="flex-1 truncate line-through">{q.team_a_name} vs {q.team_b_name}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CourtQueue({ queue, myMatchId, court }: {
+  queue: CourtQueueMatch[]; myMatchId: string; court: string
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  const liveIdx = queue.findIndex(m => m.status === 'IN_PROGRESS')
+  const pendIdx = queue.findIndex(m => m.status === 'PENDING')
+  const curIdx  = liveIdx >= 0 ? liveIdx : pendIdx
+  const myIdx   = queue.findIndex(m => m.id === myMatchId)
+  const remaining = curIdx >= 0 && myIdx >= 0 ? Math.max(0, myIdx - curIdx) : 0
+
+  const iAmLive = liveIdx >= 0 && myIdx === liveIdx
+  const cfg =
+    iAmLive         ? { bg: 'bg-red-50',   text: 'text-red-700',   emoji: '🟥', label: '지금 경기 中!' } :
+    remaining === 0 && liveIdx < 0
+                    ? { bg: 'bg-red-50',   text: 'text-red-700',   emoji: '🟥', label: '지금 바로 이동!' } :
+    remaining === 0 && liveIdx >= 0
+                    ? { bg: 'bg-amber-50', text: 'text-amber-700', emoji: '🟨', label: '다음 경기 준비해주세요!' } :
+    remaining === 1 ? { bg: 'bg-amber-50', text: 'text-amber-700', emoji: '🟨', label: '다음 경기 준비해주세요!' } :
+    remaining === 2 ? { bg: 'bg-green-50', text: 'text-green-700', emoji: '🟩', label: `앞에 ${remaining}경기 남음` } :
+                     { bg: 'bg-stone-50', text: 'text-stone-500',  emoji: '⬜', label: `앞에 ${remaining}경기 남음` }
+
+  const currentMatch = curIdx >= 0 && !iAmLive ? queue[curIdx] : null
+
+  return (
+    <div className={`${cfg.bg} border-b border-stone-100`}>
+      <div className="px-4 py-2.5">
+        <div className="flex items-center justify-between">
+          <span className={`text-sm font-bold ${cfg.text}`}>{cfg.emoji} {cfg.label}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-stone-400">🎾 {court}</span>
+            <button onClick={() => setExpanded(!expanded)} className="text-xs text-stone-400 hover:text-stone-600">
+              {expanded ? '접기 ▲' : '펼치기 ▼'}
+            </button>
+          </div>
+        </div>
+        {currentMatch && remaining > 0 && (
+          <p className="text-xs text-stone-400 mt-0.5">
+            현재: {currentMatch.team_a_name} vs {currentMatch.team_b_name} ({currentMatch.division_name})
+          </p>
+        )}
+      </div>
+
+      {expanded && (
+        <div className="px-4 pb-3 space-y-1.5">
+          {queue.filter(q => q.status !== 'FINISHED').map((q, i) => {
+            const isLive = q.status === 'IN_PROGRESS'
+            const isMe   = q.id === myMatchId
+            const origIdx = queue.indexOf(q)
+            const badge  = isLive ? '🟥' : origIdx === curIdx ? '🟥' : origIdx === curIdx + 1 ? '🟨' : origIdx === curIdx + 2 ? '🟩' : ''
+            return (
+              <div key={q.id} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs ${
+                isMe   ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200' :
+                isLive ? 'bg-red-50 text-red-700' :
+                         'text-stone-500'
+              }`}>
+                <span className="w-4">{badge}</span>
+                <span className="flex-1 truncate">{q.team_a_name} vs {q.team_b_name}</span>
+                {isMe && <span className="text-blue-500 flex-shrink-0 font-bold">← 내 경기</span>}
+              </div>
+            )
+          })}
+          {queue.filter(q => q.status === 'FINISHED').length > 0 && (
+            <FinishedQueue items={queue.filter(q => q.status === 'FINISHED')} />
+          )}
+        </div>
+      )}
     </div>
   )
 }
