@@ -3,6 +3,7 @@
 // ✅ TeamBracketView: 가로 브래킷 형태로 교체 (운영자와 동일)
 // ✅ preparing 상태 대회 잠금 처리
 // ✅ ResultsView: 조별 순위 + 경기결과 목록 추가
+// ✅ [FIX] LIVE 배너 + TeamMatchesView 코트명: court_number 숫자 → venues short_name-N 변환
 // ============================================================
 'use client'
 import React from 'react'
@@ -19,6 +20,22 @@ import type { Club, TieWithClubs, StandingWithClub, EventTeamConfig } from '@/ty
 type Mode = 'individual' | 'team'
 type IndividualTab = 'groups' | 'tournament' | 'results' | 'courts'
 type TeamTab = 'standings' | 'matches' | 'bracket' | 'courts'
+
+// ✅ [FIX] court_number → short_name-N 변환 (timetable/page.tsx 동일 로직)
+interface Venue { id: string; name: string; short_name: string; court_count: number }
+function courtNumToName(courtNumber: number | null | undefined, venues: Venue[]): string {
+  if (!courtNumber) return ''
+  if (venues.length === 0) return `코트-${courtNumber}`
+  if (venues.length === 1) return `${venues[0].short_name || venues[0].name}-${courtNumber}`
+  let offset = 0
+  for (const v of venues) {
+    const count = v.court_count || 0
+    if (courtNumber <= offset + count) return `${v.short_name || v.name}-${courtNumber - offset}`
+    offset += count
+  }
+  const last = venues[venues.length - 1]
+  return `${last.short_name || last.name}-${courtNumber}`
+}
 
 // ─── 공통 헬퍼: "전태홍(제주하나)/강기호(행복배틀)" → [{ name, club }] ───
 function parsePlayers(raw: string): { name: string; club: string }[] {
@@ -89,6 +106,8 @@ export default function EventDetailPage() {
 
   const [teamDivisions, setTeamDivisions] = useState<Division[]>([])
   const [selectedTeamDiv, setSelectedTeamDiv] = useState<string>('')
+  // ✅ [FIX] venues — 코트명 변환에 필요
+  const [venues, setVenues] = useState<Venue[]>([])
 
   useEffect(() => {
     (async () => {
@@ -133,13 +152,16 @@ export default function EventDetailPage() {
 
   const loadTeamData = useCallback(async (divisionId?: string) => {
     const divId = divisionId || selectedTeamDiv || undefined
-    const [cfg, clubList, tieList] = await Promise.all([
+    const [cfg, clubList, tieList, venueRes] = await Promise.all([
       fetchEventTeamConfig(eventId),
       fetchClubs(eventId, divId || null),
       fetchTies(eventId),
+      // ✅ [FIX] venues 로드 — 코트명 변환용
+      supabase.from('venues').select('id, name, short_name, court_count').eq('event_id', eventId).order('created_at'),
     ])
     setTeamConfig(cfg)
     setClubs(clubList)
+    setVenues((venueRes.data || []) as Venue[])
     const filteredTies = divId ? tieList.filter((t: any) => (t as any).division_id === divId) : tieList
     setTies(filteredTies)
 
@@ -326,7 +348,7 @@ export default function EventDetailPage() {
                       </div>
                       {tie.court_number && (
                         <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded mt-1 inline-block">
-                          코트 {tie.court_number}
+                          {courtNumToName(tie.court_number, venues)}
                         </span>
                       )}
                     </div>
@@ -340,7 +362,7 @@ export default function EventDetailPage() {
           )}
 
           {tTab === 'standings' && <TeamStandingsView standingsMap={standingsMap} groups={groups} />}
-          {tTab === 'matches'   && <TeamMatchesView ties={ties} />}
+          {tTab === 'matches'   && <TeamMatchesView ties={ties} venues={venues} />}
           {tTab === 'bracket'   && <TeamBracketView ties={ties} />}
           {tTab === 'courts'    && <CourtBoard eventId={eventId} initialDate={dateFilter ?? undefined} />}
 
@@ -695,7 +717,7 @@ function TeamStandingsView({ standingsMap, groups }: { standingsMap: Record<stri
   )
 }
 
-function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
+function TeamMatchesView({ ties, venues }: { ties: TieWithClubs[]; venues: Venue[] }) {
   if (ties.length === 0) return <div className="text-center text-gray-400 py-8">타이가 없습니다.</div>
   return (
     <div className="space-y-2">
@@ -728,7 +750,8 @@ function TeamMatchesView({ ties }: { ties: TieWithClubs[] }) {
               </span>
             </div>
           </div>
-          {tie.court_number && <div className="text-xs text-center text-green-600 mt-2">코트 {tie.court_number}</div>}
+          {/* ✅ [FIX] court_number → venues 기반 코트명 변환 */}
+          {tie.court_number && <div className="text-xs text-center text-green-600 mt-2">{courtNumToName(tie.court_number, venues)}</div>}
           {tie.status === 'lineup_phase' && (
             <div className="text-xs text-center text-yellow-600 mt-2">
               라인업: {tie.club_a_lineup_submitted ? '✅' : '⏳'} {tie.club_a?.name}
@@ -852,3 +875,4 @@ function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
     </div>
   )
 }
+
