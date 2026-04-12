@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useEventId, useDivisions } from '@/components/useDashboard'
@@ -891,7 +891,7 @@ export default function CourtsPage() {
 
                 {notifyMsg[court] && <div className="px-3 py-1 text-xs bg-amber-50 text-amber-800 border-b">{notifyMsg[court]}</div>}
 
-                <div className="p-1.5 space-y-1 max-h-[60vh] overflow-y-auto">
+                <div className="p-1.5 space-y-1 max-h-[600px] overflow-y-auto">
                   {courtItems.filter(m=>m.status!=='FINISHED').map((m) => {
                     const allIdx = courtItems.indexOf(m)
                     let badge = ''
@@ -1200,7 +1200,7 @@ function UnassignedColumn({ unassigned, divColors, touchOver, onDragOver, onDrop
           <span className="text-white/60 text-xs lg:hidden">{open ? '▲' : '▼'}</span>
         </button>
         {open && (
-          <div className="p-1.5 space-y-1 max-h-[40vh] lg:max-h-[70vh] overflow-y-auto">
+          <div className="p-1.5 space-y-1 max-h-[400px] lg:max-h-[700px] overflow-y-auto">
             {unassigned.map(m => (
               <MatchChip key={m.id} m={m} divColor={divColors[m.division_id]}
                 onDragStart={onDragStart} onClickScore={() => onClickScore(m)}

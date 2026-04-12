@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 import React from 'react'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
@@ -60,6 +60,8 @@ export default function PinMatchesPage() {
 
   const [notifAllowed, setNotifAllowed]     = useState(false)
   const [notifRequested, setNotifRequested] = useState(false)
+  const notifAllowedRef = useRef(false)  // ✅ loadData 재생성 없이 최신값 참조
+  const loadDataRef = useRef<((s: any) => Promise<void>) | null>(null)  // ✅ 인터벌에서 최신 loadData 참조
   const prevWaitRef = useRef<Map<string, number>>(new Map())
   const errorCountRef = useRef(0)
 
@@ -101,7 +103,9 @@ export default function PinMatchesPage() {
     loadData(s)
     if ('Notification' in window) {
       const perm = Notification.permission
-      setNotifAllowed(perm === 'granted')
+      const allowed = perm === 'granted'
+      setNotifAllowed(allowed)
+      notifAllowedRef.current = allowed
       setNotifRequested(perm !== 'default')
     }
     autoResubscribe()
@@ -118,9 +122,15 @@ export default function PinMatchesPage() {
     return () => navigator.serviceWorker.removeEventListener('message', handler)
   }, [showInAppNotif])
 
+  // ✅ loadData가 재생성될 때마다 ref 업데이트
+  useEffect(() => {
+    loadDataRef.current = loadData
+  }, [loadData])
+
   useEffect(() => {
     if (!session) return
-    const iv = setInterval(() => loadData(session), 15000)
+    // ✅ ref를 통해 항상 최신 loadData 호출 → 클로저 문제 해결
+    const iv = setInterval(() => loadDataRef.current?.(session), 15000)
     return () => clearInterval(iv)
   }, [session])
 
@@ -207,7 +217,7 @@ export default function PinMatchesPage() {
           const myIdx   = queue.findIndex(q => q.id === m.id)
           const remaining = curIdx >= 0 && myIdx >= 0 ? Math.max(0, myIdx - curIdx) : 0
 
-          if (notifAllowed && remaining === 1) {
+          if (notifAllowedRef.current && remaining === 1) {
             const prev = prevWaitRef.current.get(m.court) ?? 99
             if (prev > 1) {
               showInAppNotif('🎾 준비하세요!', `${m.court}에서 다음 경기로 이동해주세요.`)
@@ -250,7 +260,7 @@ export default function PinMatchesPage() {
       // ✅ 에러/예외/정상 모든 경우에 반드시 로딩 해제
       setLoading(false)
     }
-  }, [notifAllowed, showInAppNotif])
+  }, [showInAppNotif])  // ✅ notifAllowed는 ref로 관리하므로 의존성 제거
 
   function sendBrowserNotif(court: string) {
     if (!('Notification' in window) || Notification.permission !== 'granted') return
@@ -266,7 +276,9 @@ export default function PinMatchesPage() {
     if (!('Notification' in window)) { alert('이 브라우저는 알림을 지원하지 않습니다.'); return }
     try {
       const perm = await Notification.requestPermission()
-      setNotifAllowed(perm === 'granted')
+      const granted = perm === 'granted'
+      setNotifAllowed(granted)
+      notifAllowedRef.current = granted
       if (perm === 'granted') {
         showInAppNotif('🎾 알림 활성화', '경기 알림이 설정되었습니다.')
         const pin = session?.pin || sessionStorage.getItem('venue_pin') || session?.token
@@ -351,6 +363,7 @@ export default function PinMatchesPage() {
     const loser  = loserScores[matchId]?.trim()
     if (!loser)  { setMsg('상대팀 점수를 입력해주세요. (예: 4)'); return }
     if (!/^\d+$/.test(loser)) { setMsg('숫자만 입력해주세요.'); return }
+    if (parseInt(loser) > 5) { setMsg('패자 점수는 5점 이하여야 합니다.'); return }
     const score = winner === 'A' ? `6:${loser}` : `${loser}:6`
     setSubmitting(matchId); setMsg('')
 
@@ -606,8 +619,17 @@ export default function PinMatchesPage() {
                                     <input
                                       type="number" inputMode="numeric" min="0" max="5" placeholder="0~5"
                                       value={loser}
-                                      onChange={e => setLoserScores(prev => ({ ...prev, [m.id]: e.target.value }))}
+                                      onChange={e => {
+                                        const v = e.target.value
+                                        // 6점 이상 입력 차단
+                                        if (v !== '' && parseInt(v) > 5) return
+                                        setLoserScores(prev => ({ ...prev, [m.id]: v }))
+                                      }}
                                       onKeyDown={e => e.key === 'Enter' && submitScore(m.id, m)}
+                                      onFocus={e => {
+                                        // 모바일 키보드 올라올 때 해당 경기 카드가 뷰에 유지되도록
+                                        setTimeout(() => e.target.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300)
+                                      }}
                                       className="flex-1 border-2 border-amber-300 rounded-xl px-4 py-3 text-center text-2xl font-bold focus:outline-none focus:border-amber-500"
                                     />
                                     <button
