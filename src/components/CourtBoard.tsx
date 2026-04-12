@@ -11,8 +11,35 @@ interface CourtMatch {
   winner_team_id: string | null; is_team_tie?: boolean
 }
 
+interface Venue {
+  id: string; name: string; short_name: string; court_count: number
+}
+
+// ✅ [FIX-①] court_number(숫자) → short_name-N 형식 변환
+// timetable/page.tsx 와 동일한 로직
+function courtNumToName(courtNumber: number, venues: Venue[]): string {
+  if (venues.length === 0) return `코트-${courtNumber}`
+  if (venues.length === 1) {
+    const v = venues[0]
+    return `${v.short_name || v.name}-${courtNumber}`
+  }
+  let offset = 0
+  for (const v of venues) {
+    const count = v.court_count || 0
+    if (courtNumber <= offset + count) {
+      const localNum = courtNumber - offset
+      return `${v.short_name || v.name}-${localNum}`
+    }
+    offset += count
+  }
+  const last = venues[venues.length - 1]
+  return `${last.short_name || last.name}-${courtNumber}`
+}
+
 export default function CourtBoard({ eventId, initialDate }: { eventId: string; initialDate?: string }) {
   const [matches, setMatches]       = useState<CourtMatch[]>([])
+  const [venues, setVenues]         = useState<Venue[]>([])           // ✅ [FIX-①] venues 상태 추가
+  const venuesRef                   = useRef<Venue[]>([])             // ✅ loadData 클로저에서 최신값 참조용
   const [loading, setLoading]       = useState(true)
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date())
 
@@ -27,10 +54,29 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
   const inputRef = useRef<HTMLInputElement>(null)
   const suggRef  = useRef<HTMLDivElement>(null)
 
-  // ✅ Fix: matches + ties + divisions 3개 쿼리를 Promise.all로 병렬화
-  //    기존: await matches → await ties (순차, 2 round-trip)
-  //    수정: Promise.all([matches, ties, divisions]) (병렬, 1 round-trip)
-  const loadData = useCallback(async () => {
+  // ✅ [FIX-①] venues ref 동기화
+  useEffect(() => { venuesRef.current = venues }, [venues])
+
+  // ✅ [FIX-①] venues 먼저 로드 → loadData에서 코트명 변환에 활용
+  const loadVenues = useCallback(async () => {
+    if (!eventId) return [] as Venue[]
+    const { data } = await supabase
+      .from('venues')
+      .select('id, name, short_name, court_count')
+      .eq('event_id', eventId)
+      .order('created_at')
+    const list = (data || []) as Venue[]
+    setVenues(list)
+    venuesRef.current = list
+    return list
+  }, [eventId])
+
+  // ✅ [FIX-①] [FIX-②] venues + matches + ties + divisions 병렬 로드
+  // [FIX-①] 단체전 코트명: '코트 N' 하드코딩 → courtNumToName() 사용
+  // [FIX-②] 단체전 court_order: '100 + tie_order' 하드코딩 → DB 실제값 사용
+  const loadData = useCallback(async (venueList?: Venue[]) => {
+    const currentVenues = venueList ?? venuesRef.current
+
     const sMap: Record<string, string> = {
       pending: 'PENDING', lineup_phase: 'PENDING',
       in_progress: 'IN_PROGRESS', completed: 'FINISHED',
@@ -52,8 +98,10 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
 
     const tieMatches: CourtMatch[] = ((tieRes.data as any[]) || []).filter(t => !t.is_bye).map(t => ({
       id: 'tie_' + t.id, match_num: 'T#' + t.tie_order,
-      court: '코트 ' + t.court_number,
-      court_order: 100 + (t.tie_order || 0),
+      // ✅ [FIX-①] '코트 N' → venues 기반 'shortName-N' 형식으로 통일
+      court: courtNumToName(t.court_number, currentVenues),
+      // ✅ [FIX-②] DB 실제 court_order 사용 (100+tie_order 하드코딩 제거)
+      court_order: t.court_order ?? t.tie_order ?? 999,
       stage: 'TEAM', round: t.round || 'group',
       status: sMap[t.status] || 'PENDING',
       score: (t.status === 'completed' || t.status === 'in_progress')
@@ -77,11 +125,19 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     setLastUpdate(new Date())
   }, [eventId])
 
+  // ✅ 초기 로드: venues 먼저 → loadData에 넘겨서 바로 코트명 변환
   useEffect(() => {
-    loadData()
-    const i = setInterval(loadData, 15000)
-    return () => clearInterval(i)
-  }, [loadData])
+    let cancelled = false
+    async function init() {
+      const venueList = await loadVenues()
+      if (!cancelled) {
+        await loadData(venueList)
+      }
+    }
+    init()
+    const i = setInterval(() => loadData(), 15000)
+    return () => { cancelled = true; clearInterval(i) }
+  }, [loadData, loadVenues])
 
   // ✅ 첫 번째 날짜 자동 선택
   useEffect(() => {
@@ -108,6 +164,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     const divIds = Object.entries(divMatchDates)
       .filter(([, d]) => d === dateFilter).map(([id]) => id)
     if (divIds.length === 0) return []
+    // 단체전(is_team_tie)은 날짜 필터에서 항상 표시 (division_id 기반 날짜가 없음)
     return matches.filter(m => m.is_team_tie || divIds.includes(m.division_id))
   }, [matches, dateFilter, divMatchDates])
 
@@ -197,7 +254,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
         <h3 className="font-bold text-lg">🎾 코트 현황</h3>
         <div className="flex items-center gap-2">
           <span className="text-xs text-stone-400">🔄 {lastUpdate.toLocaleTimeString('ko-KR')} 업데이트</span>
-          <button onClick={loadData} className="text-xs px-2 py-1 bg-stone-100 rounded-lg hover:bg-stone-200">새로고침</button>
+          <button onClick={() => loadData()} className="text-xs px-2 py-1 bg-stone-100 rounded-lg hover:bg-stone-200">새로고침</button>
         </div>
       </div>
 

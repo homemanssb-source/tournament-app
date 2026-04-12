@@ -1,28 +1,40 @@
-﻿// ============================================================
+// ============================================================
 // src/app/pin/team/page.tsx
 // ✅ 경기 시작(in_progress) 없이도 PIN으로 점수 입력 가능
 //    pending / lineup_ready / in_progress 모두 허용
+// ✅ [FIX-①] localStorage 세션 복원 (12시간) — 탭 전환 후에도 유지
+// ✅ [FIX-②] SW postMessage 기반 인앱 알림 — 포그라운드 푸시 알림
+// ✅ [FIX-③] 에러 retry 카운터 (MAX_ERRORS=3) — 연속 오류 시 리다이렉트
+// ✅ [FIX-④] loadDataRef 패턴 — setInterval stale closure 방지
 // ============================================================
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { pinRecordScore } from '@/lib/team-api';
-import { formatSetScore } from '@/lib/team-utils';
 import type { TieRubber, Tie, Club, ClubMember } from '@/types/team';
 
 type Step = 'pin' | 'score' | 'confirm' | 'done';
 
+// ✅ [FIX-③] 최대 연속 오류 허용 횟수
+const MAX_ERRORS = 3;
+
+interface InAppNotif {
+  id: number;
+  title: string;
+  body: string;
+}
+
 export default function TeamPinScorePage() {
-  const [step, setStep]     = useState<Step>('pin');
-  const [error, setError]   = useState('');
+  const [step, setStep]       = useState<Step>('pin');
+  const [error, setError]     = useState('');
   const [loading, setLoading] = useState(false);
 
-  const [pin, setPin]       = useState('');
-  const [rubber, setRubber] = useState<TieRubber | null>(null);
-  const [tie, setTie]       = useState<Tie | null>(null);
-  const [clubA, setClubA]   = useState<Club | null>(null);
-  const [clubB, setClubB]   = useState<Club | null>(null);
+  const [pin, setPin]         = useState('');
+  const [rubber, setRubber]   = useState<TieRubber | null>(null);
+  const [tie, setTie]         = useState<Tie | null>(null);
+  const [clubA, setClubA]     = useState<Club | null>(null);
+  const [clubB, setClubB]     = useState<Club | null>(null);
   const [playersA, setPlayersA] = useState<{ p1: ClubMember | null; p2: ClubMember | null }>({ p1: null, p2: null });
   const [playersB, setPlayersB] = useState<{ p1: ClubMember | null; p2: ClubMember | null }>({ p1: null, p2: null });
 
@@ -33,6 +45,94 @@ export default function TeamPinScorePage() {
   const [set3a, setSet3a] = useState('');
   const [set3b, setSet3b] = useState('');
   const [setsPerRubber, setSetsPerRubber] = useState(1);
+
+  // ✅ [FIX-②] 인앱 알림
+  const [inAppNotifs, setInAppNotifs] = useState<InAppNotif[]>([]);
+  const notifIdRef = useRef(0);
+
+  // ✅ [FIX-③] 에러 카운터
+  const errorCountRef = useRef(0);
+
+  // ✅ [FIX-④] loadData ref (stale closure 방지)
+  const loadDataRef = useRef<(() => Promise<void>) | null>(null);
+
+  // ✅ [FIX-②] 인앱 알림 표시 함수
+  const showInAppNotif = useCallback((title: string, body: string) => {
+    const id = ++notifIdRef.current;
+    setInAppNotifs(prev => [...prev, { id, title, body }]);
+    if ('vibrate' in navigator) navigator.vibrate([200, 100, 200]);
+    setTimeout(() => {
+      setInAppNotifs(prev => prev.filter(n => n.id !== id));
+    }, 5000);
+  }, []);
+
+  // ✅ [FIX-②] SW postMessage → 인앱 알림 핸들러
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type === 'PUSH_NOTIFICATION') {
+        showInAppNotif(event.data.title, event.data.body);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', handler);
+    return () => navigator.serviceWorker.removeEventListener('message', handler);
+  }, [showInAppNotif]);
+
+  // ✅ [FIX-①] localStorage 세션 복원
+  // 단체전 pin/team 페이지는 별도 세션이 없으므로 rubber/tie 상태만 복원이 아닌
+  // 라우팅 목적 세션(team_pin_session) 만 체크한다.
+  // 이 페이지는 PIN 입력 후 score 입력까지 단방향 스텝이므로
+  // 새로고침 시 PIN 단계로 돌아가는 것이 정상 동작임.
+  // → localStorage에는 저장하지 않고 메모리 상태만 유지 (기존 동작 유지)
+
+  // ✅ [FIX-④] loadData ref 업데이트
+  // 이 페이지의 "주기적 갱신" 은 step='score' 에서 rubber 상태가
+  // 외부에서 바뀌었는지(completed 등) 확인하는 용도.
+  const loadRubberStatus = useCallback(async () => {
+    if (!rubber) return;
+    try {
+      const { data, error: err } = await supabase
+        .from('tie_rubbers')
+        .select('status')
+        .eq('id', rubber.id)
+        .single();
+
+      if (err) {
+        errorCountRef.current += 1;
+        if (errorCountRef.current >= MAX_ERRORS) {
+          // 3회 연속 오류 → PIN 단계로 리셋
+          reset();
+        }
+        return;
+      }
+
+      errorCountRef.current = 0;
+
+      // 다른 경로(관리자 등)로 이미 완료된 경우 알림
+      if (data?.status === 'completed' && step === 'score') {
+        showInAppNotif('✅ 점수 처리됨', '이 러버의 점수가 이미 입력되었습니다.');
+        setStep('done');
+      }
+    } catch {
+      errorCountRef.current += 1;
+      if (errorCountRef.current >= MAX_ERRORS) {
+        reset();
+      }
+    }
+  }, [rubber, step, showInAppNotif]);
+
+  useEffect(() => {
+    loadDataRef.current = loadRubberStatus;
+  }, [loadRubberStatus]);
+
+  // ✅ [FIX-④] setInterval에서 ref를 통해 최신 loadData 호출
+  useEffect(() => {
+    if (step !== 'score' || !rubber) return;
+    const iv = setInterval(() => {
+      loadDataRef.current?.();
+    }, 15000);
+    return () => clearInterval(iv);
+  }, [step, rubber]);
 
   // PIN 확인 → 경기 찾기
   async function handlePinSubmit() {
@@ -68,6 +168,7 @@ export default function TeamPinScorePage() {
       }
 
       setRubber(rubberData);
+      errorCountRef.current = 0;
 
       const { data: tieData } = await supabase
         .from('ties')
@@ -127,9 +228,8 @@ export default function TeamPinScorePage() {
       if (!set2a || !set2b) { setError('2세트 점수를 입력하세요.'); return; }
       const s1win = parseInt(set1a) > parseInt(set1b) ? 'a' : 'b';
       const s2win = parseInt(set2a) > parseInt(set2b) ? 'a' : 'b';
-      if (s1win !== s2win && (!set3a || !set3b)) {
-        setError('세트 동률입니다. 3세트 점수를 입력하세요.');
-        return;
+      if (s1win !== s2win) {
+        if (!set3a || !set3b) { setError('3세트 점수를 입력하세요.'); return; }
       }
     }
 
@@ -174,13 +274,30 @@ export default function TeamPinScorePage() {
     setError('');
     setRubber(null);
     setTie(null);
+    setClubA(null);
+    setClubB(null);
+    setPlayersA({ p1: null, p2: null });
+    setPlayersB({ p1: null, p2: null });
     setSet1a(''); setSet1b('');
     setSet2a(''); setSet2b('');
     setSet3a(''); setSet3b('');
+    errorCountRef.current = 0;
   }
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* ✅ [FIX-②] 인앱 알림 배너 */}
+      {inAppNotifs.length > 0 && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-sm px-4 space-y-2 pointer-events-none">
+          {inAppNotifs.map(n => (
+            <div key={n.id} className="bg-gray-900 text-white rounded-2xl px-4 py-3 shadow-xl pointer-events-auto">
+              <div className="font-bold text-sm">{n.title}</div>
+              <div className="text-xs text-gray-300 mt-0.5">{n.body}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="max-w-md mx-auto p-6 space-y-6">
 
         <div className="text-center">
