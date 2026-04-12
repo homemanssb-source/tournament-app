@@ -122,18 +122,6 @@ export default function PinMatchesPage() {
     return () => navigator.serviceWorker.removeEventListener('message', handler)
   }, [showInAppNotif])
 
-  // ✅ loadData가 재생성될 때마다 ref 업데이트
-  useEffect(() => {
-    loadDataRef.current = loadData
-  }, [loadData])
-
-  useEffect(() => {
-    if (!session) return
-    // ✅ ref를 통해 항상 최신 loadData 호출 → 클로저 문제 해결
-    const iv = setInterval(() => loadDataRef.current?.(session), 15000)
-    return () => clearInterval(iv)
-  }, [session])
-
   const loadData = useCallback(async (s: any) => {
     try {
       const { data, error } = await supabase.rpc('rpc_pin_list_matches', { p_token: s.token })
@@ -261,6 +249,18 @@ export default function PinMatchesPage() {
       setLoading(false)
     }
   }, [showInAppNotif])  // ✅ notifAllowed는 ref로 관리하므로 의존성 제거
+
+  // ✅ loadData가 재생성될 때마다 ref 업데이트 (loadData 선언 이후에 위치해야 함)
+  useEffect(() => {
+    loadDataRef.current = loadData
+  }, [loadData])
+
+  useEffect(() => {
+    if (!session) return
+    // ✅ ref를 통해 항상 최신 loadData 호출 → 클로저 문제 해결
+    const iv = setInterval(() => loadDataRef.current?.(session), 15000)
+    return () => clearInterval(iv)
+  }, [session])
 
   function sendBrowserNotif(court: string) {
     if (!('Notification' in window) || Notification.permission !== 'granted') return
