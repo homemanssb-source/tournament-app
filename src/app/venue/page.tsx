@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -23,8 +23,12 @@ export default function VenueLoginPage() {
       .then(({ data }) => {
         if (!data || data.length === 0) return
         const today = new Date().toISOString().split('T')[0]
-        const upcoming = data.filter(e => e.date >= today)
-        const best = upcoming[0] ?? data[data.length - 1]
+        // 오늘 날짜와 절댓값 기준 가장 가까운 대회 선택 (과거 포함)
+        const best = data.reduce((prev, curr) => {
+          const prevDiff = Math.abs(new Date(prev.date).getTime() - new Date(today).getTime())
+          const currDiff = Math.abs(new Date(curr.date).getTime() - new Date(today).getTime())
+          return currDiff < prevDiff ? curr : prev
+        })
         if (best?.id) setSelectedEvent(best.id)
       })
   }, [])
@@ -77,3 +81,5 @@ export default function VenueLoginPage() {
     </div>
   )
 }
+
+
