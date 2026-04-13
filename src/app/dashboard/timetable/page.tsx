@@ -215,7 +215,7 @@ export default function TimetablePage() {
 
   function fmt(d: Date | null) {
     if (!d) return '-'
-    return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+    return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Seoul' })
   }
   function fmtDuration(start: string, end?: string | null) {
     const mins = Math.round(((end ? new Date(end) : new Date()).getTime() - new Date(start).getTime()) / 60000)

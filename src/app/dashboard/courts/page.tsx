@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useEventId, useDivisions } from '@/components/useDashboard'
@@ -564,6 +564,7 @@ export default function CourtsPage() {
         } else { setMsg('❌ ' + rpcError.message); return }
       } else {
         setMsg('✅ 결과 저장됨')
+        await supabase.from('matches').update({ ended_at: new Date().toISOString() }).eq('id', editMatch.id)
         if (editMatch.court) sendCourtNotify(editMatch.court, 'finished')
       }
       setEditMatch(null)
@@ -573,7 +574,7 @@ export default function CourtsPage() {
 
   async function startMatch(matchId: string) {
     if (matchId.startsWith('tie_')) return
-    await supabase.from('matches').update({ status:'IN_PROGRESS' }).eq('id', matchId); loadMatches()
+    await supabase.from('matches').update({ status:'IN_PROGRESS', started_at: new Date().toISOString() }).eq('id', matchId); loadMatches()
   }
 
   function handleDragOver(e: React.DragEvent) { e.preventDefault() }

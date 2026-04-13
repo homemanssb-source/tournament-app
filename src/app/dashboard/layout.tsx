@@ -190,7 +190,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
           <hr className="my-2" />
           {navLink('/dashboard/courts',    '코트 배정',  '🏟')}
-          {navLink('/dashboard/timetable', '타임테이블', '⏱')}
           {navLink('/dashboard/sync',      '앱A 연동',   '🔄')}
           {/* ✅ [FIX] label에서 이모지 제거 → emoji 파라미터와 중복 방지 */}
           {navLink('/dashboard/push-logs', '알림 로그',  '📡')}

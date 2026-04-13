@@ -272,7 +272,7 @@ export default function TiesPage() {
 
   function formatTime(isoStr: string | null | undefined): string {
     if (!isoStr) return '';
-    return new Date(isoStr).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+    return new Date(isoStr).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Seoul' });
   }
 
   function calcDuration(start?: string | null, end?: string | null): string {
