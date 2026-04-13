@@ -17,21 +17,25 @@ import type { Club, EventTeamConfig, StandingWithClub, TieWithClubs } from '@/ty
 
 interface Division { id: string; name: string; sort_order: number; }
 
+// ✅ 최소 3팀 보장 — 1팀/2팀 조 절대 안 됨 (3~20팀 전 케이스 검증 완료)
 function calcGroupDistribution(totalTeams: number, groupSize: number): number[] {
-  if (totalTeams < 2) return [];
-  if (groupSize < 2) groupSize = 2;
-  const groupCount = Math.ceil(totalTeams / groupSize);
-  const distribution: number[] = [];
-  let remaining = totalTeams;
-  for (let i = 0; i < groupCount; i++) {
-    distribution.push(Math.min(groupSize, remaining));
-    remaining -= distribution[i];
+  if (totalTeams < 3) return [];
+  if (groupSize < 3) groupSize = 3;
+
+  // 조 수 결정: 마지막 조가 최소 3팀이 되도록 조 수 조정
+  let groupCount = Math.ceil(totalTeams / groupSize);
+  while (groupCount > 1 && (totalTeams - (groupCount - 1) * groupSize) < 3) {
+    groupCount--;
   }
-  if (distribution.length >= 2 && distribution[distribution.length - 1] === 1) {
-    distribution[distribution.length - 2] -= 1;
-    distribution[distribution.length - 1] += 1;
-  }
-  return distribution;
+
+  // groupCount개 조에 균등 분배 (base+1 extra개, base 나머지)
+  const base  = Math.floor(totalTeams / groupCount);
+  const extra = totalTeams % groupCount;
+
+  // base가 3 미만이면 groupSize 올려서 재귀
+  if (base < 3) return calcGroupDistribution(totalTeams, groupSize + 1);
+
+  return Array(groupCount).fill(0).map((_, i) => base + (i < extra ? 1 : 0));
 }
 
 export default function GroupsPage() {
@@ -166,13 +170,13 @@ export default function GroupsPage() {
         </div>
       )}
 
-      {filteredClubs.length < 2 && (
+      {filteredClubs.length < 3 && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-yellow-800">
-          최소 2팀 이상 등록해야 조편성이 가능합니다.
+          최소 3팀 이상 등록해야 조편성이 가능합니다.
         </div>
       )}
 
-      {filteredClubs.length >= 2 && (
+      {filteredClubs.length >= 3 && (
         <>
           {config?.team_format === 'full_league' && (
             <div className="bg-white rounded-lg border p-6 space-y-4">
@@ -198,7 +202,7 @@ export default function GroupsPage() {
                   <label className="block text-sm text-gray-600 mb-1">조당 팀 수</label>
                   <select value={groupSize} onChange={e => setGroupSize(Number(e.target.value))}
                     className="border rounded px-3 py-2">
-                    {[2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n}팀</option>)}
+                    {[3, 4, 5, 6].map(n => <option key={n} value={n}>{n}팀</option>)}
                   </select>
                 </div>
               </div>
@@ -229,22 +233,6 @@ export default function GroupsPage() {
                 {generating ? '생성 중...' : hasGroups ? '조편성 재생성' : '조편성 생성'}
               </button>
               {hasGroups && <p className="text-xs text-red-500">재생성하면 기존 조가 모두 초기화됩니다.</p>}
-            </div>
-          )}
-
-          {filteredClubs.some(c => c.seed_number) && (
-            <div className="bg-yellow-50 rounded-lg border border-yellow-200 p-4">
-              <h3 className="font-semibold text-sm text-yellow-800 mb-2">시드 클럽</h3>
-              <div className="flex flex-wrap gap-2">
-                {filteredClubs
-                  .filter(c => c.seed_number)
-                  .sort((a, b) => (a.seed_number || 0) - (b.seed_number || 0))
-                  .map(c => (
-                    <span key={c.id} className="bg-yellow-100 text-yellow-900 px-3 py-1 rounded text-sm">
-                      {c.seed_number}시드: {c.name}
-                    </span>
-                  ))}
-              </div>
             </div>
           )}
 
@@ -331,9 +319,6 @@ function StandingsTable({ standings }: { standings: StandingWithClub[] }) {
               </td>
               <td className="px-3 py-2 font-medium">
                 {s.club?.name || '-'}
-                {s.club?.seed_number && (
-                  <span className="ml-1 text-xs text-yellow-600">[{s.club.seed_number}시드]</span>
-                )}
               </td>
               <td className="px-3 py-2 text-center">{s.won}</td>
               <td className="px-3 py-2 text-center">{s.lost}</td>
