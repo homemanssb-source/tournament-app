@@ -36,7 +36,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
       in_progress: 'IN_PROGRESS', completed: 'FINISHED',
     }
 
-    const [matchRes, tieRes, divRes] = await Promise.all([
+    const [matchRes, tieRes, divRes, venueRes] = await Promise.all([
       supabase.from('v_matches_with_teams').select('*')
         .eq('event_id', eventId).not('court', 'is', null)
         .order('court').order('court_order'),
@@ -45,15 +45,26 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
         .eq('event_id', eventId).not('court_number', 'is', null)
         .order('court_number').order('tie_order'),
       supabase.from('divisions').select('id, match_date').eq('event_id', eventId),
+      supabase.from('venues').select('id, short_name, name, court_count').eq('event_id', eventId).order('created_at'),
     ])
+
+    // court_number(글로벌 인덱스) → "제대-N" 변환
+    const venueList = (venueRes.data || []) as { short_name: string; name: string; court_count: number }[]
+    const allCourtNames: string[] = venueList.flatMap(v =>
+      Array.from({ length: v.court_count || 0 }, (_, i) => `${v.short_name || v.name}-${i + 1}`)
+    )
+    function courtNumToName(n: number): string {
+      if (allCourtNames.length > 0 && n >= 1 && n <= allCourtNames.length) return allCourtNames[n - 1]
+      return `코트-${n}`
+    }
 
     const indivMatches: CourtMatch[] = ((matchRes.data as any[]) || [])
       .filter(m => m.score !== 'BYE').map(m => ({ ...m, is_team_tie: false }))
 
     const tieMatches: CourtMatch[] = ((tieRes.data as any[]) || []).filter(t => !t.is_bye).map(t => ({
       id: 'tie_' + t.id, match_num: 'T#' + t.tie_order,
-      court: '코트 ' + t.court_number,
-      court_order: 100 + (t.tie_order || 0),
+      court: courtNumToName(t.court_number),
+      court_order: (t as any).court_order ?? (100 + (t.tie_order || 0)),
       stage: 'TEAM', round: t.round || 'group',
       status: sMap[t.status] || 'PENDING',
       score: (t.status === 'completed' || t.status === 'in_progress')
