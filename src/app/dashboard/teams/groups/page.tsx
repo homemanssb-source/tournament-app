@@ -17,25 +17,23 @@ import type { Club, EventTeamConfig, StandingWithClub, TieWithClubs } from '@/ty
 
 interface Division { id: string; name: string; sort_order: number; }
 
-// ✅ 최소 3팀 보장 — 1팀/2팀 조 절대 안 됨 (3~20팀 전 케이스 검증 완료)
+// 개인전과 동일한 로직 — 1팀 조만 방지 (2팀 조는 허용)
 function calcGroupDistribution(totalTeams: number, groupSize: number): number[] {
-  if (totalTeams < 3) return [];
-  if (groupSize < 3) groupSize = 3;
-
-  // 조 수 결정: 마지막 조가 최소 3팀이 되도록 조 수 조정
-  let groupCount = Math.ceil(totalTeams / groupSize);
-  while (groupCount > 1 && (totalTeams - (groupCount - 1) * groupSize) < 3) {
-    groupCount--;
+  if (totalTeams < 2) return [];
+  if (groupSize < 2) groupSize = 2;
+  const groupCount = Math.ceil(totalTeams / groupSize);
+  const distribution: number[] = [];
+  let remaining = totalTeams;
+  for (let i = 0; i < groupCount; i++) {
+    distribution.push(Math.min(groupSize, remaining));
+    remaining -= distribution[i];
   }
-
-  // groupCount개 조에 균등 분배 (base+1 extra개, base 나머지)
-  const base  = Math.floor(totalTeams / groupCount);
-  const extra = totalTeams % groupCount;
-
-  // base가 3 미만이면 groupSize 올려서 재귀
-  if (base < 3) return calcGroupDistribution(totalTeams, groupSize + 1);
-
-  return Array(groupCount).fill(0).map((_, i) => base + (i < extra ? 1 : 0));
+  // 1팀 조 방지: 마지막 조가 1팀이면 앞 조에서 1팀 당겨옴
+  if (distribution.length >= 2 && distribution[distribution.length - 1] === 1) {
+    distribution[distribution.length - 2] -= 1;
+    distribution[distribution.length - 1] += 1;
+  }
+  return distribution;
 }
 
 export default function GroupsPage() {
@@ -170,13 +168,13 @@ export default function GroupsPage() {
         </div>
       )}
 
-      {filteredClubs.length < 3 && (
+      {filteredClubs.length < 2 && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-yellow-800">
-          최소 3팀 이상 등록해야 조편성이 가능합니다.
+          최소 2팀 이상 등록해야 조편성이 가능합니다.
         </div>
       )}
 
-      {filteredClubs.length >= 3 && (
+      {filteredClubs.length >= 2 && (
         <>
           {config?.team_format === 'full_league' && (
             <div className="bg-white rounded-lg border p-6 space-y-4">
@@ -202,7 +200,7 @@ export default function GroupsPage() {
                   <label className="block text-sm text-gray-600 mb-1">조당 팀 수</label>
                   <select value={groupSize} onChange={e => setGroupSize(Number(e.target.value))}
                     className="border rounded px-3 py-2">
-                    {[3, 4, 5, 6].map(n => <option key={n} value={n}>{n}팀</option>)}
+                    {[2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n}팀</option>)}
                   </select>
                 </div>
               </div>
