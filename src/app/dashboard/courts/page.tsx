@@ -401,10 +401,12 @@ export default function CourtsPage() {
     if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
     if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
 
-    // ✅ 해당 부서의 단체전 ties 확인 (division_id 기준)
+    // ✅ 해당 부서의 단체전 ties 확인 (division_id 기준, null 포함 방어)
     const divTies = ties.filter(t =>
-      !t.is_bye && !(t as any).court_number && t.status !== 'completed' &&
-      t.division_id === autoDiv
+      !t.is_bye &&
+      !(t as any).court_number &&
+      t.status !== 'completed' &&
+      String(t.division_id) === String(autoDiv)
     )
 
     if (divTies.length > 0) {
@@ -699,8 +701,10 @@ export default function CourtsPage() {
     ? null
     : Object.entries(divMatchDates).filter(([, d]) => d === dateFilter).map(([id]) => id)
 
+  // 단체전 ties가 있는 부서 ID 목록
+  const teamDivIds = new Set(ties.filter(t => !t.is_bye).map(t => t.division_id).filter(Boolean))
   const filteredDivisions = dateDivIds
-    ? divisions.filter(d => dateDivIds.includes(d.id))
+    ? divisions.filter(d => dateDivIds.includes(d.id) || teamDivIds.has(d.id))
     : divisions
   const dateFilteredItems = dateDivIds
     ? allItems.filter(m => dateDivIds.includes(m.division_id) || m.is_team_tie)
@@ -710,7 +714,7 @@ export default function CourtsPage() {
   for (const name of filteredCourtNames) byCourt.set(name, [])
   for (const m of dateFilteredItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
 
-  const filteredAll = viewFilter==='ALL' ? dateFilteredItems : viewFilter==='TEAM' ? dateFilteredItems.filter(m=>m.is_team_tie) : dateFilteredItems.filter(m=>m.division_id===viewFilter)
+  const filteredAll = viewFilter==='ALL' ? dateFilteredItems : dateFilteredItems.filter(m=>m.division_id===viewFilter)
   const unassigned  = filteredAll
     .filter(m => !m.court && m.status !== 'FINISHED')
     .sort((a,b) => (a.match_num || '').localeCompare(b.match_num || ''))
@@ -770,15 +774,14 @@ export default function CourtsPage() {
             </select>
           </div>
           {autoDiv && (() => {
-            // 해당 부서 단체전 ties 있으면 스테이지 탭 숨김 (단체전은 스테이지 없음)
-            const hasDivTies = ties.some(t => t.division_id === autoDiv && !t.is_bye)
-            if (hasDivTies) return null
+            // 해당 부서에 개인전 matches가 있으면 스테이지 탭 표시
+            const hasIndivMatches = matches.some(m => m.division_id === autoDiv)
+            if (!hasIndivMatches) return null
             return (
             <div>
               <label className="text-xs text-stone-500 block mb-1">스테이지</label>
               <div className="flex flex-wrap gap-1">
                 {(() => {
-                  // 해당 부문의 실제 존재하는 본선 라운드만 추출
                   const existingRounds = new Set(
                     matches
                       .filter(m => m.division_id === autoDiv && m.stage === 'FINALS')
@@ -874,7 +877,6 @@ export default function CourtsPage() {
           <div className="flex gap-1 bg-stone-100 rounded-lg p-0.5">
             <button onClick={() => setViewFilter('ALL')} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter==='ALL'?'bg-white shadow-sm':''}`}>전체</button>
             {filteredDivisions.map(d => <button key={d.id} onClick={() => setViewFilter(d.id)} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter===d.id?'bg-white shadow-sm':''}`}>{d.name}</button>)}
-            {hasTeamTies && <button onClick={() => setViewFilter('TEAM')} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter==='TEAM'?'bg-white shadow-sm':''}`}>단체전</button>}
           </div>
           <div className="ml-auto flex gap-2">
             {autoDiv && <button onClick={() => clearDivisionAssignments(autoDiv)} className="text-xs text-stone-400 hover:text-red-500 border border-stone-200 px-2 py-1 rounded-lg">{divisions.find(d=>d.id===autoDiv)?.name} 초기화</button>}
