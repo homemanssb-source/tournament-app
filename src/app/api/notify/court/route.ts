@@ -11,7 +11,8 @@ function savePushLog(
   supabaseAdmin: ReturnType<typeof getServiceClient>,
   data: Record<string, any>
 ) {
-  supabaseAdmin.from('push_logs').insert(data).then(() => {}).catch(() => {})
+  // ✅ Promise.resolve()로 감싸서 .catch() 타입 오류 방지
+  Promise.resolve(supabaseAdmin.from('push_logs').insert(data)).catch(() => {})
 }
 
 export async function POST(req: NextRequest) {
