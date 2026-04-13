@@ -40,6 +40,8 @@ function getRoundBadge(round: string, groupLabel: string | null, divisionName: s
     'GROUP': '예선', 'R32': '32강', 'R16': '16강', 'QF': '8강', 'SF': '4강', 'F': '결승',
     '128강': '128강', '64강': '64강', '32강': '32강', '16강': '16강', '8강': '8강', '4강': '4강', '결승': '결승',
     'group': '예선', 'full_league': '리그',
+    // 단체전 라운드
+    'round_of_16': '16강', 'quarter': '8강', 'semi': '4강', 'final': '결승',
   }
   const roundLabel = roundMap[round] || round
   const label = groupLabel ? `${roundLabel} ${groupLabel}` : roundLabel
@@ -245,25 +247,29 @@ export default function CourtsPage() {
     if (!eventId) return
     if (showLoading) setLoading(true)
     try {
-      const [matchRes, tieRes] = await Promise.all([
+      const [matchRes, tieRes, grpRes] = await Promise.all([
         supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
           .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true }),
-        supabase.from('ties')
-          .select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*), group:groups(id,group_label,group_num)')
+        supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)')
           .eq('event_id', eventId).order('tie_order', { ascending:true, nullsFirst:false }),
+        supabase.from('groups').select('id, group_label, group_num').eq('event_id', eventId),
       ])
+      // ✅ groups → grpMap 매핑
+      const grpMap: Record<string, string> = {}
+      for (const g of grpRes.data || []) { grpMap[g.id] = g.group_label || `${g.group_num}조` }
+
       const matchList = (matchRes.data || [])
         .filter((m: any) => m.score !== 'BYE')
         .sort((a: any, b: any) => {
-          // court 없는 것은 뒤로
           if ((a.court ?? '') !== (b.court ?? '')) return (a.court ?? '').localeCompare(b.court ?? '')
-          // court_order 오름차순, null → 9999
           const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)
           if (od !== 0) return od
-          // 동점 시 match_num으로 안정 정렬 (모바일 매 폴링 순서 고정)
           return (a.match_num || '').localeCompare(b.match_num || '')
         }) as MatchSlim[]
-      const tieList   = (tieRes.data  || []) as TieWithClubs[]
+      // ✅ 각 tie에 _group_label 주입
+      const tieList = ((tieRes.data || []) as any[]).map(t => ({
+        ...t, _group_label: t.group_id ? (grpMap[t.group_id] || null) : null,
+      })) as TieWithClubs[]
       setMatches(matchList); matchesRef.current = matchList
       setTies(tieList);      tiesRef.current    = tieList
       syncCourtOrderRef(matchList, tieList)
@@ -322,10 +328,18 @@ export default function CourtsPage() {
   }
   async function loadTies() {
     if (!eventId) return
-    const { data } = await supabase.from('ties')
-      .select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*), group:groups(id,group_label,group_num)')
-      .eq('event_id', eventId).order('tie_order', { ascending:true, nullsFirst:false })
-    const list = (data || []) as TieWithClubs[]
+    const [tieRes, grpRes] = await Promise.all([
+      supabase.from('ties')
+        .select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)')
+        .eq('event_id', eventId).order('tie_order', { ascending:true, nullsFirst:false }),
+      supabase.from('groups').select('id, group_label, group_num').eq('event_id', eventId),
+    ])
+    const grpMap: Record<string, string> = {}
+    for (const g of grpRes.data || []) { grpMap[g.id] = g.group_label || `${g.group_num}조` }
+    // ✅ 각 tie에 _group_label 주입
+    const list = ((tieRes.data || []) as any[]).map(t => ({
+      ...t, _group_label: t.group_id ? (grpMap[t.group_id] || null) : null,
+    })) as TieWithClubs[]
     setTies(list); tiesRef.current = list
     syncCourtOrderRef(matchesRef.current, list)
   }
@@ -386,24 +400,26 @@ export default function CourtsPage() {
   async function autoAssignByDivision() {
     if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
     if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
-    if (autoDiv === 'TEAM') {
-      const divTies = ties.filter(t => !t.is_bye && !(t as any).court_number && t.status !== 'completed')
-      if (divTies.length === 0) { setMsg('배정할 단체전 경기가 없습니다.'); return }
+
+    // ✅ 해당 부서의 단체전 ties 확인 (division_id 기준)
+    const divTies = ties.filter(t =>
+      !t.is_bye && !(t as any).court_number && t.status !== 'completed' &&
+      t.division_id === autoDiv
+    )
+
+    if (divTies.length > 0) {
+      // 단체전 — 조별로 묶어서 같은 코트에 배정
       setAssigning(true)
       try {
-        // ✅ 개인전처럼 조별로 묶어서 같은 코트에 배정
-        // group_label 기준으로 그룹핑, 없으면 tie_order 순
         const byGroup = new Map<string, TieWithClubs[]>()
         for (const t of divTies) {
-          const key = (t as any).group?.group_label || (t as any).group_id || 'none'
+          const key = (t as any)._group_label || (t as any).group_id || 'none'
           if (!byGroup.has(key)) byGroup.set(key, [])
           byGroup.get(key)!.push(t)
         }
-        // 경기 많은 조부터 배정 (개인전 assignGroup과 동일)
         const groups = [...byGroup.entries()].sort((a, b) => b[1].length - a[1].length)
         const updates: { id: string; courtNum: number; courtName: string; order: number }[] = []
         for (const [, groupTies] of groups) {
-          // 해당 조 전체를 같은 코트에 배정
           const court = getLeastLoaded(autoCourts)
           const courtNum = getGlobalCourtNumber(court, allCourtNames)
           for (const t of groupTies) {
@@ -415,16 +431,19 @@ export default function CourtsPage() {
         for (const u of updates) {
           await supabase.from('ties').update({ court_number: u.courtNum, court_order: u.order }).eq('id', u.id)
         }
+        const divName = divisions.find(d => d.id === autoDiv)?.name || ''
         const summary = autoCourts.map(c => {
           const cnt = updates.filter(u => u.courtName === c).length
           return cnt > 0 ? `${c}:${cnt}경기` : ''
         }).filter(Boolean).join(' | ')
-        setMsg(`✅ [단체전] ${updates.length}경기 배정 완료 — ${summary}`)
+        setMsg(`✅ [${divName}] ${updates.length}경기 배정 완료 — ${summary}`)
         sendBulkNotify(updates.map(u => u.courtName))
         loadTies()
       } finally { setAssigning(false) }
       return
     }
+
+    // 개인전 배정
     setAssigning(true); setMsg('')
     try {
       if      (autoStage === 'GROUP')       await assignGroup()
@@ -540,13 +559,18 @@ export default function CourtsPage() {
   }
 
   async function clearDivisionAssignments(divId: string) {
-    if (divId === 'TEAM') {
-      if (!confirm('[단체전] 코트 배정을 모두 초기화하시겠습니까?')) return
-      for (const t of ties.filter(t => t.court_number))
-        await supabase.from('ties').update({ court_number:null, court_order:null }).eq('id', t.id)
-      courtOrderRef.current = {}; setMsg('✅ [단체전] 초기화 완료'); loadTies(); return
-    }
     const divName = divisions.find(d => d.id === divId)?.name || ''
+    // ✅ 해당 부서의 단체전 ties 확인
+    const divTies = ties.filter(t => t.division_id === divId && t.court_number)
+    if (divTies.length > 0) {
+      if (!confirm(`[${divName}] 단체전 코트 배정을 모두 초기화하시겠습니까?`)) return
+      for (const t of divTies)
+        await supabase.from('ties').update({ court_number:null, court_order:null }).eq('id', t.id)
+      // 개인전도 같이 초기화
+      const divMatches = matches.filter(m => m.division_id === divId && m.court)
+      for (const m of divMatches) await supabase.from('matches').update({ court:null, court_order:null }).eq('id', m.id)
+      courtOrderRef.current = {}; setMsg(`✅ [${divName}] 초기화 완료`); loadTies(); loadMatches(); return
+    }
     if (!confirm(`[${divName}] 코트 배정을 모두 초기화하시겠습니까?`)) return
     const divMatches = matches.filter(m => m.division_id === divId && m.court)
     for (const m of divMatches) await supabase.from('matches').update({ court:null, court_order:null }).eq('id', m.id)
@@ -639,8 +663,8 @@ export default function CourtsPage() {
         courtName = globalCourtNumToName(cn, allCourtNames, venuesRef.current)
       }
       const statusMap: Record<string,string> = { pending:'PENDING', lineup_phase:'PENDING', lineup_ready:'PENDING', in_progress:'IN_PROGRESS', completed:'FINISHED' }
-      // ✅ group 조 라벨 추출
-      const groupLabel = (t as any).group?.group_label || null
+      // ✅ loadAll/loadTies에서 주입된 _group_label 사용
+      const groupLabel = (t as any)._group_label || null
       return {
         id:`tie_${t.id}`, match_num:`T#${t.tie_order}`, stage:'TEAM', round:t.round||'group',
         team_a_name:t.club_a?.name||'TBD', team_b_name:t.club_b?.name||'TBD',
@@ -650,10 +674,9 @@ export default function CourtsPage() {
         status:statusMap[t.status]||'PENDING',
         score:(t.status==='completed'||t.status==='in_progress') ? `${t.club_a_rubbers_won ?? 0}-${t.club_b_rubbers_won ?? 0}` : null,
         winner_team_id:t.winning_club_id||null,
-        division_name:'단체전', division_id:t.division_id||'TEAM',
-        locked_by_participant:false,
-        group_label: groupLabel,  // ✅ 조 라벨 반영
-        is_team_tie:true,
+        division_name: divisions.find(d => d.id === t.division_id)?.name || '단체전',
+        division_id: t.division_id || '',
+        locked_by_participant:false, group_label: groupLabel, is_team_tie:true,
       }
     })
   }
@@ -744,10 +767,13 @@ export default function CourtsPage() {
             <select value={autoDiv} onChange={e => setAutoDiv(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[140px]">
               <option value="">부문 선택</option>
               {filteredDivisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              {hasTeamTies && <option value="TEAM">🏆 단체전</option>}
             </select>
           </div>
-          {autoDiv && autoDiv !== 'TEAM' && (
+          {autoDiv && (() => {
+            // 해당 부서 단체전 ties 있으면 스테이지 탭 숨김 (단체전은 스테이지 없음)
+            const hasDivTies = ties.some(t => t.division_id === autoDiv && !t.is_bye)
+            if (hasDivTies) return null
+            return (
             <div>
               <label className="text-xs text-stone-500 block mb-1">스테이지</label>
               <div className="flex flex-wrap gap-1">
@@ -772,7 +798,8 @@ export default function CourtsPage() {
                 })()}
               </div>
             </div>
-          )}
+            )
+          })()}
         </div>
 
         <div>
@@ -796,7 +823,7 @@ export default function CourtsPage() {
         <div className="flex items-center gap-3 flex-wrap">
           <button onClick={autoAssignByDivision} disabled={!autoDiv || autoCourts.length===0 || assigning}
             className="bg-tennis-600 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-tennis-700 disabled:opacity-50 flex items-center gap-2">
-            {assigning ? <><span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />배정 중...</> : `🎯 ${autoDiv && autoDiv!=='TEAM' ? STAGE_LABEL[autoStage] : ''} 자동 배정`}
+            {assigning ? <><span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />배정 중...</> : `🎯 ${ties.some(t => t.division_id === autoDiv && !t.is_bye) ? '' : STAGE_LABEL[autoStage] + ' '}자동 배정`}
           </button>
         </div>
 
@@ -850,7 +877,7 @@ export default function CourtsPage() {
             {hasTeamTies && <button onClick={() => setViewFilter('TEAM')} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter==='TEAM'?'bg-white shadow-sm':''}`}>단체전</button>}
           </div>
           <div className="ml-auto flex gap-2">
-            {autoDiv && <button onClick={() => clearDivisionAssignments(autoDiv)} className="text-xs text-stone-400 hover:text-red-500 border border-stone-200 px-2 py-1 rounded-lg">{autoDiv==='TEAM'?'단체전':divisions.find(d=>d.id===autoDiv)?.name} 초기화</button>}
+            {autoDiv && <button onClick={() => clearDivisionAssignments(autoDiv)} className="text-xs text-stone-400 hover:text-red-500 border border-stone-200 px-2 py-1 rounded-lg">{divisions.find(d=>d.id===autoDiv)?.name} 초기화</button>}
             <button onClick={clearAllAssignments} className="text-xs text-stone-400 hover:text-red-500 border border-stone-200 px-2 py-1 rounded-lg">전체 초기화</button>
           </div>
         </div>
@@ -888,7 +915,7 @@ export default function CourtsPage() {
             const currentIdx = activeIdx>=0?activeIdx:pendingIdx
             const isLive     = activeIdx>=0
             const hasPending = courtItems.some(m=>m.status==='PENDING')
-            const zoneDiv = autoDiv && autoDiv!=='TEAM' ? (() => {
+            const zoneDiv = autoDiv ? (() => {
               const z = courtZones[autoDiv]; if (!z) return null
               if (z.finals?.includes(court)) return { label:'본선', color:divColors[autoDiv] }
               if (z.group?.includes(court))  return { label:'예선', color:divColors[autoDiv]+'99' }
@@ -1129,14 +1156,17 @@ function MatchChip({ m, badge, divColor, isCurrentSlot, allMatches, onDragStart,
           {onClickUnassign && <button onClick={e=>{e.stopPropagation();onClickUnassign()}} className="text-stone-300 hover:text-red-400">✕</button>}
         </div>
       </div>
-      {/* 2줄: 부서명(truncate) + 라운드뱃지(항상 보임) */}
-      {!isTeam && (() => {
+      {/* 2줄: 부서명(truncate) + 라운드뱃지(항상 보임) — 개인전/단체전 공통 */}
+      {(() => {
         const { round: rLabel } = getRoundBadge(m.round, m.group_label, m.division_name)
+        const divLabel = isTeam
+          ? (divisions.find(d => d.id === m.division_id)?.name || '단체전')
+          : m.division_name
         return (
           <div className="flex items-center gap-1 mt-0.5 mb-1 min-w-0">
-            <span className="text-[10px] text-stone-400 truncate flex-1 min-w-0">{m.division_name}</span>
+            <span className="text-[10px] text-stone-400 truncate flex-1 min-w-0">{divLabel}</span>
             <span className={`text-[10px] font-bold flex-shrink-0 whitespace-nowrap px-1.5 py-0.5 rounded ${
-              rLabel === '예선' || rLabel.includes('조')
+              rLabel === '예선' || rLabel.includes('조') || rLabel === '리그'
                 ? 'bg-stone-100 text-stone-600'
                 : 'bg-amber-100 text-amber-800'
             }`}>{rLabel}</span>
