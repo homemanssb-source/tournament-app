@@ -1,14 +1,11 @@
 'use client'
 // ============================================================
 // src/hooks/usePushSubscription.ts
-// ✅ 알림 자꾸 꺼지는 버그 수정
-//    원인1: 기존 구독 재사용 → endpoint 만료돼도 갱신 안 됨
-//    원인2: iOS PWA 재실행 시 구독 초기화
-//    원인3: 서버 DB에 구독 없어도 클라이언트는 모름
-//
-//    해결: 항상 unsubscribe 후 새로 구독 + autoResubscribe 훅
+// ✅ [FIX] visibilitychange 이벤트에 autoResubscribe 연결
+//    앱이 백그라운드 → 포그라운드로 돌아올 때마다 구독 상태 체크
+//    iOS PWA 재실행 시 구독 초기화 문제 해결
 // ============================================================
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || ''
 
@@ -121,8 +118,7 @@ export function usePushSubscription() {
     }
   }, [])
 
-  // ── 자동 재구독 (pin/matches 페이지 진입 시 호출) ─────────────
-  // 권한은 있는데 구독이 없거나 만료된 경우 자동으로 재등록
+  // ── 자동 재구독 (pin/matches 페이지 진입 시 + 포그라운드 복귀 시 호출) ──
   const autoResubscribe = useCallback(async (): Promise<void> => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
     if (!VAPID_PUBLIC_KEY) return
@@ -168,6 +164,18 @@ export function usePushSubscription() {
       console.warn('[Push] autoResubscribe error:', err)
     }
   }, [])
+
+  // ✅ [FIX] visibilitychange: 앱이 포그라운드로 돌아올 때마다 구독 상태 재확인
+  //    iOS PWA에서 홈버튼 → 재진입 시 구독이 초기화되는 경우를 커버
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        autoResubscribe()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [autoResubscribe])
 
   return { status, message, subscribeWithPin, autoResubscribe }
 }
