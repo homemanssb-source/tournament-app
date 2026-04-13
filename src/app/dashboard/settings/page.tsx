@@ -115,6 +115,25 @@ export default function SettingsPage() {
     setStatusMsg(newStatus === 'active' ? '✅ 대회가 공개되었습니다.' : '✅ 대회가 비공개로 변경되었습니다.')
   }
 
+  async function completeEvent() {
+    if (!confirm('대회를 완료 처리하시겠습니까?\n완료 후에는 선수들이 대회를 볼 수 없게 됩니다.')) return
+    setStatusLoading(true); setStatusMsg('')
+    const { error } = await supabase.from('events').update({ status: 'completed' }).eq('id', eventId)
+    setStatusLoading(false)
+    if (error) { setStatusMsg('❌ ' + error.message); return }
+    setEventStatus('completed')
+    setStatusMsg('✅ 대회가 완료 처리되었습니다.')
+  }
+
+  async function reopenEvent() {
+    setStatusLoading(true); setStatusMsg('')
+    const { error } = await supabase.from('events').update({ status: 'active' }).eq('id', eventId)
+    setStatusLoading(false)
+    if (error) { setStatusMsg('❌ ' + error.message); return }
+    setEventStatus('active')
+    setStatusMsg('✅ 대회가 다시 공개되었습니다.')
+  }
+
   // ✅ 대회 시작시간 저장
   async function saveStartTime() {
     setStartTimeSaving(true); setStartTimeMsg('')
@@ -239,19 +258,44 @@ export default function SettingsPage() {
           <h2 className="font-bold text-lg">대회 공개 설정</h2>
           {eventStatus === 'active'
             ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">공개중</span>
+            : eventStatus === 'completed'
+            ? <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">대회 완료</span>
             : <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">비공개</span>}
         </div>
         <p className="text-xs text-stone-400">공개 상태일 때만 선수들이 대회 목록에서 이 대회를 볼 수 있습니다.</p>
-        <div className={`rounded-xl p-4 flex items-center justify-between ${eventStatus === 'active' ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'}`}>
-          <div>
-            <p className="font-medium text-sm">{eventStatus === 'active' ? '🔓 현재 공개 상태' : '🔒 현재 비공개 상태'}</p>
-            <p className="text-xs text-stone-500 mt-0.5">{eventStatus === 'active' ? '선수들이 대회 목록에서 이 대회를 볼 수 있어요.' : '선수들에게 대회가 보이지 않아요.'}</p>
+        {eventStatus === 'completed' ? (
+          <div className="rounded-xl p-4 bg-blue-50 border border-blue-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium text-sm text-blue-800">🏁 대회가 완료되었습니다</p>
+                <p className="text-xs text-blue-600 mt-0.5">선수들이 대회 목록에서 이 대회를 볼 수 없어요.</p>
+              </div>
+              <button onClick={reopenEvent} disabled={statusLoading}
+                className="px-4 py-2 rounded-xl text-sm font-bold bg-green-500 text-white hover:bg-green-600 disabled:opacity-50 transition-all">
+                {statusLoading ? '변경 중...' : '🔓 다시 공개'}
+              </button>
+            </div>
           </div>
-          <button onClick={toggleEventStatus} disabled={statusLoading}
-            className={`px-4 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 ${eventStatus === 'active' ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-green-500 text-white hover:bg-green-600'}`}>
-            {statusLoading ? '변경 중...' : eventStatus === 'active' ? '🔒 비공개로 변경' : '🔓 대회 오픈하기'}
-          </button>
-        </div>
+        ) : (
+          <div className={`rounded-xl p-4 flex items-center justify-between ${eventStatus === 'active' ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'}`}>
+            <div>
+              <p className="font-medium text-sm">{eventStatus === 'active' ? '🔓 현재 공개 상태' : '🔒 현재 비공개 상태'}</p>
+              <p className="text-xs text-stone-500 mt-0.5">{eventStatus === 'active' ? '선수들이 대회 목록에서 이 대회를 볼 수 있어요.' : '선수들에게 대회가 보이지 않아요.'}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={toggleEventStatus} disabled={statusLoading}
+                className={`px-4 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 ${eventStatus === 'active' ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-green-500 text-white hover:bg-green-600'}`}>
+                {statusLoading ? '변경 중...' : eventStatus === 'active' ? '🔒 비공개로 변경' : '🔓 대회 오픈하기'}
+              </button>
+              {eventStatus === 'active' && (
+                <button onClick={completeEvent} disabled={statusLoading}
+                  className="px-4 py-2 rounded-xl text-sm font-bold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-all">
+                  🏁 대회 완료
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {statusMsg && <p className={`text-sm ${statusMsg.startsWith('✅') ? 'text-green-600' : 'text-red-500'}`}>{statusMsg}</p>}
       </div>
 
@@ -542,3 +586,4 @@ export default function SettingsPage() {
     </div>
   )
 }
+
