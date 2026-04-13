@@ -401,13 +401,17 @@ export default function CourtsPage() {
     if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
     if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
     const _isTeamDiv = ties.some(t => t.division_id === autoDiv && !t.is_bye)
+    console.log('[배정] autoDiv:', autoDiv, 'autoStage:', autoStage, 'ties:', ties.length, '_isTeamDiv:', _isTeamDiv, 'autoCourts:', autoCourts)
+    console.log('[배정] ties sample:', ties.slice(0,3).map(t => ({ id:t.id, div:t.division_id, round:t.round, is_bye:t.is_bye, court:(t as any).court_number })))
     if (autoDiv === 'TEAM' || _isTeamDiv) {
       const selectedRound = TEAM_STAGE_TABS.find(t => t.key === autoStage)?.round || 'group'
+      console.log('[배정] selectedRound:', selectedRound)
       const divTies = ties.filter(t =>
         !t.is_bye && !(t as any).court_number && t.status !== 'completed' &&
         (autoDiv === 'TEAM' ? true : t.division_id === autoDiv) &&
         t.round === selectedRound
       )
+      console.log('[배정] divTies:', divTies.length)
       if (divTies.length === 0) { setMsg('배정할 경기가 없습니다.'); return }
       setAssigning(true)
       try {
