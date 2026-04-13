@@ -248,8 +248,9 @@ export default function CourtsPage() {
       const [matchRes, tieRes] = await Promise.all([
         supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
           .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true }),
-        supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)')
-          .eq('event_id', eventId).order('court_order', { ascending:true, nullsFirst:false }),
+        supabase.from('ties')
+          .select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*), group:groups(id,group_label,group_num)')
+          .eq('event_id', eventId).order('tie_order', { ascending:true, nullsFirst:false }),
       ])
       const matchList = (matchRes.data || [])
         .filter((m: any) => m.score !== 'BYE')
@@ -321,7 +322,9 @@ export default function CourtsPage() {
   }
   async function loadTies() {
     if (!eventId) return
-    const { data } = await supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)').eq('event_id', eventId).order('court_order', { ascending:true, nullsFirst:false })
+    const { data } = await supabase.from('ties')
+      .select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*), group:groups(id,group_label,group_num)')
+      .eq('event_id', eventId).order('tie_order', { ascending:true, nullsFirst:false })
     const list = (data || []) as TieWithClubs[]
     setTies(list); tiesRef.current = list
     syncCourtOrderRef(matchesRef.current, list)
@@ -388,16 +391,36 @@ export default function CourtsPage() {
       if (divTies.length === 0) { setMsg('배정할 단체전 경기가 없습니다.'); return }
       setAssigning(true)
       try {
-        // ✅ [FIX-②] 글로벌 court_number: allCourtNames 배열 인덱스(1-based) 사용
-        // 베뉴A 3코트 + 베뉴B 3코트 → 한라-1=1,한라-2=2,한라-3=3,제주-1=4,제주-2=5,제주-3=6
-        for (let i = 0; i < divTies.length; i++) {
-          const court = autoCourts[i % autoCourts.length]
-          const courtNum = getGlobalCourtNumber(court, allCourtNames)
-          const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
-          await supabase.from('ties').update({ court_number:courtNum, court_order:nextOrder }).eq('id', divTies[i].id)
+        // ✅ 개인전처럼 조별로 묶어서 같은 코트에 배정
+        // group_label 기준으로 그룹핑, 없으면 tie_order 순
+        const byGroup = new Map<string, TieWithClubs[]>()
+        for (const t of divTies) {
+          const key = (t as any).group?.group_label || (t as any).group_id || 'none'
+          if (!byGroup.has(key)) byGroup.set(key, [])
+          byGroup.get(key)!.push(t)
         }
-        setMsg(`✅ [단체전] ${divTies.length}경기 배정 완료`)
-        sendBulkNotify(divTies.map((_, i) => autoCourts[i % autoCourts.length]))
+        // 경기 많은 조부터 배정 (개인전 assignGroup과 동일)
+        const groups = [...byGroup.entries()].sort((a, b) => b[1].length - a[1].length)
+        const updates: { id: string; courtNum: number; courtName: string; order: number }[] = []
+        for (const [, groupTies] of groups) {
+          // 해당 조 전체를 같은 코트에 배정
+          const court = getLeastLoaded(autoCourts)
+          const courtNum = getGlobalCourtNumber(court, allCourtNames)
+          for (const t of groupTies) {
+            const nextOrder = (courtOrderRef.current[court] || 0) + 1
+            courtOrderRef.current[court] = nextOrder
+            updates.push({ id: t.id, courtNum, courtName: court, order: nextOrder })
+          }
+        }
+        for (const u of updates) {
+          await supabase.from('ties').update({ court_number: u.courtNum, court_order: u.order }).eq('id', u.id)
+        }
+        const summary = autoCourts.map(c => {
+          const cnt = updates.filter(u => u.courtName === c).length
+          return cnt > 0 ? `${c}:${cnt}경기` : ''
+        }).filter(Boolean).join(' | ')
+        setMsg(`✅ [단체전] ${updates.length}경기 배정 완료 — ${summary}`)
+        sendBulkNotify(updates.map(u => u.courtName))
         loadTies()
       } finally { setAssigning(false) }
       return
@@ -613,22 +636,24 @@ export default function CourtsPage() {
       const cn = (t as any).court_number
       let courtName: string | null = null
       if (cn != null) {
-        // ✅ [FIX-①②] 글로벌 court_number → courtName 역변환 (short_name-N 포맷 통일)
         courtName = globalCourtNumToName(cn, allCourtNames, venuesRef.current)
       }
       const statusMap: Record<string,string> = { pending:'PENDING', lineup_phase:'PENDING', lineup_ready:'PENDING', in_progress:'IN_PROGRESS', completed:'FINISHED' }
+      // ✅ group 조 라벨 추출
+      const groupLabel = (t as any).group?.group_label || null
       return {
         id:`tie_${t.id}`, match_num:`T#${t.tie_order}`, stage:'TEAM', round:t.round||'group',
         team_a_name:t.club_a?.name||'TBD', team_b_name:t.club_b?.name||'TBD',
         team_a_id:t.club_a_id||'', team_b_id:t.club_b_id||'',
         court:courtName,
-        // ✅ [FIX-⑤] DB 실제 court_order 사용 (100+tie_order 하드코딩 제거)
         court_order:cn ? ((t as any).court_order ?? t.tie_order ?? 999) : null,
         status:statusMap[t.status]||'PENDING',
         score:(t.status==='completed'||t.status==='in_progress') ? `${t.club_a_rubbers_won ?? 0}-${t.club_b_rubbers_won ?? 0}` : null,
         winner_team_id:t.winning_club_id||null,
         division_name:'단체전', division_id:t.division_id||'TEAM',
-        locked_by_participant:false, group_label:null, is_team_tie:true,
+        locked_by_participant:false,
+        group_label: groupLabel,  // ✅ 조 라벨 반영
+        is_team_tie:true,
       }
     })
   }
