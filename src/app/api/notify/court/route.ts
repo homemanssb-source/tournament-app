@@ -1,19 +1,44 @@
 // src/app/api/notify/court/route.ts
 // ✅ urgency: 'high' + TTL: 60
 // ✅ tag에 timestamp → 연속 알림 덮어쓰기 방지
-// ✅ push_logs 테이블에 발송 결과 저장
-// ✅ [FIX] push_logs INSERT를 fire-and-forget → 응답 지연 방지
+// ✅ push_logs 테이블에 발송 결과 저장 (fire-and-forget)
+// ✅ 일시적 실패 시 3초 후 1회 자동 재시도
+//    [FIX] setTimeout 대신 await sleep → Vercel 서버리스에서 실행 보장
 import { NextRequest, NextResponse } from 'next/server'
 import { getServiceClient } from '@/lib/supabase'
 
-// push_logs에 fire-and-forget으로 저장 (await하지 않음 → 응답 속도 영향 없음)
+type SubRow = { endpoint: string; p256dh: string; auth: string; team_id: string }
+
+// push_logs에 fire-and-forget으로 저장
 function savePushLog(
   supabaseAdmin: ReturnType<typeof getServiceClient>,
   data: Record<string, any>
 ) {
-  // ✅ Promise.resolve()로 감싸서 .catch() 타입 오류 방지
   Promise.resolve(supabaseAdmin.from('push_logs').insert(data)).catch(() => {})
 }
+
+// 단건 발송 헬퍼
+async function sendOne(
+  webpush: any,
+  sub: SubRow,
+  payload: string,
+  pushOptions: object
+): Promise<'ok' | 'expired' | 'retry'> {
+  try {
+    await webpush.sendNotification(
+      { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+      payload,
+      pushOptions
+    )
+    return 'ok'
+  } catch (err: any) {
+    if (err.statusCode === 410 || err.statusCode === 404) return 'expired'
+    return 'retry'
+  }
+}
+
+// 대기 헬퍼
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export async function POST(req: NextRequest) {
   let logData: Record<string, any> = {}
@@ -139,7 +164,6 @@ export async function POST(req: NextRequest) {
     logData = { ...logData, team_a_name: teamAName, team_b_name: teamBName, division_name: divisionName }
 
     if (!teamAId && !teamBId) {
-      // ✅ fire-and-forget: 응답 지연 없음
       savePushLog(supabaseAdmin, { ...logData, sent: 0, failed: 0, no_sub: true })
       return NextResponse.json({ sent: 0, message: '대기 중인 경기가 없습니다' })
     }
@@ -174,37 +198,51 @@ export async function POST(req: NextRequest) {
 
     let sent = 0
     let failed = 0
-    const failedEndpoints: string[] = []
+    const expiredEndpoints: string[] = []
+    const retryTargets: SubRow[] = []
 
+    // ── 1차 발송 ──────────────────────────────────────────────
     await Promise.all(
-      subscriptions.map(async (sub) => {
-        try {
-          await webpush.sendNotification(
-            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-            payload,
-            pushOptions
-          )
-          sent++
-        } catch (err: any) {
-          failed++
-          if (err.statusCode === 410 || err.statusCode === 404) {
-            failedEndpoints.push(sub.endpoint)
-          }
-        }
+      (subscriptions as SubRow[]).map(async (sub) => {
+        const result = await sendOne(webpush, sub, payload, pushOptions)
+        if (result === 'ok')           { sent++ }
+        else if (result === 'expired') { failed++; expiredEndpoints.push(sub.endpoint) }
+        else                           { retryTargets.push(sub) }
       })
     )
 
-    if (failedEndpoints.length > 0) {
-      // 만료 구독 삭제도 fire-and-forget (응답 지연 방지)
+    // 만료 구독 삭제 (fire-and-forget)
+    if (expiredEndpoints.length > 0) {
       Promise.resolve(
-        supabaseAdmin.from('push_subscriptions').delete().in('endpoint', failedEndpoints)
+        supabaseAdmin.from('push_subscriptions').delete().in('endpoint', expiredEndpoints)
       ).catch(() => {})
     }
 
-    // ✅ fire-and-forget: 로그 저장이 응답을 block하지 않음
+    // ── 2차 발송: 재시도 대상 있으면 3초 대기 후 재시도 ────────
+    // ✅ [FIX] setTimeout 대신 await sleep
+    //    Vercel 서버리스는 return 이후 실행을 보장하지 않으므로
+    //    return 전에 await로 완료해야 재시도가 실제로 실행됨
+    if (retryTargets.length > 0) {
+      await sleep(3000)
+      await Promise.all(
+        retryTargets.map(async (sub) => {
+          const result = await sendOne(webpush, sub, payload, pushOptions)
+          if (result === 'ok')           { sent++ }
+          else if (result === 'expired') { failed++; expiredEndpoints.push(sub.endpoint) }
+          else                           { failed++ }
+        })
+      )
+    }
+
+    // 최종 결과 로그 저장 (fire-and-forget)
     savePushLog(supabaseAdmin, { ...logData, sent, failed, no_sub: false })
 
-    return NextResponse.json({ sent, failed, match: { court, team_a: teamAName, team_b: teamBName } })
+    return NextResponse.json({
+      sent,
+      retried: retryTargets.length,
+      failed,
+      match: { court, team_a: teamAName, team_b: teamBName },
+    })
 
   } catch (err: any) {
     console.error('[notify/court]', err)
