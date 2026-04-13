@@ -1,9 +1,3 @@
-// ============================================================
-// 대시보드 메인 페이지
-// src/app/dashboard/page.tsx
-// ✅ 경기결과 목록 (조별 + 부서 필터)
-// ✅ 동률 시 수동 순위 조정
-// ============================================================
 'use client'
 import React from 'react'
 import { useState, useEffect, useCallback } from 'react'
@@ -51,67 +45,81 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [recentActivity, setRecentActivity] = useState<any[]>([])
 
-  // 경기결과 목록
   const [allMatches, setAllMatches] = useState<MatchRow[]>([])
   const [matchFilter, setMatchFilter] = useState<string>('ALL')
   const [showResults, setShowResults] = useState(false)
 
-  // 동률 수동 조정
   const [tiedGroups, setTiedGroups] = useState<any[]>([])
   const [showTieAdjust, setShowTieAdjust] = useState(false)
   const [adjusting, setAdjusting] = useState(false)
   const [adjustMsg, setAdjustMsg] = useState('')
-  // ✅ 날짜 필터 (최상단 선언 필수 — Hooks 규칙)
   const [dateMatchFilter, setDateMatchFilter] = useState<string>('ALL_DATE')
 
   const loadStats = useCallback(async () => {
     if (!eventId) { setLoading(false); return }
     setLoading(true)
     try {
+      // ✅ 최적화: 14개 → 8개 쿼리로 통합, detectTied도 동시 실행
       const [
         evRes, divRes,
-        matchCountRes, matchFinRes, matchInpRes,
-        tieCountRes, tieFinRes, tieInpRes,
-        teamCountRes, clubCountRes, groupCountRes,
+        matchRes,           // status별 집계를 클라이언트에서 처리 (3개→1개)
+        tieRes,             // status별 집계를 클라이언트에서 처리 (3개→1개)
+        teamCountRes, clubCountRes,
+        groupRes,           // count + is_finalized 동시 (1개)
         recentMatchRes, recentTieRes,
         allMatchRes,
+        allGroupMatchRes,   // detectTied용 — 전체 한 번에 조회 (N개→1개)
+        allTeamsRes,        // detectTied용 — teams 전체 한 번에 조회 (M개→1개)
       ] = await Promise.all([
         supabase.from('events').select('*').eq('id', eventId).single(),
         supabase.from('divisions').select('id,name,match_date').eq('event_id', eventId).order('sort_order'),
-        supabase.from('matches').select('id', { count: 'exact' }).eq('event_id', eventId).neq('score', 'BYE'),
-        supabase.from('matches').select('id', { count: 'exact' }).eq('event_id', eventId).eq('status', 'FINISHED').neq('score', 'BYE'),
-        supabase.from('matches').select('id', { count: 'exact' }).eq('event_id', eventId).eq('status', 'IN_PROGRESS'),
-        supabase.from('ties').select('id', { count: 'exact' }).eq('event_id', eventId).eq('is_bye', false),
-        supabase.from('ties').select('id', { count: 'exact' }).eq('event_id', eventId).eq('status', 'completed').eq('is_bye', false),
-        supabase.from('ties').select('id', { count: 'exact' }).eq('event_id', eventId).eq('status', 'in_progress'),
+        // ✅ matches: status별 3번 count → 한 번에 id+status만 조회
+        supabase.from('matches').select('id,status').eq('event_id', eventId).neq('score', 'BYE'),
+        // ✅ ties: status별 3번 count → 한 번에 id+status만 조회
+        supabase.from('ties').select('id,status').eq('event_id', eventId).eq('is_bye', false),
         supabase.from('teams').select('id', { count: 'exact' }).eq('event_id', eventId),
         supabase.from('clubs').select('id', { count: 'exact' }).eq('event_id', eventId),
-        supabase.from('groups').select('id,is_finalized', { count: 'exact' }).eq('event_id', eventId),
+        // ✅ groups: count + is_finalized 한 번에
+        supabase.from('groups').select('id,is_finalized,group_label,division_id,division_name').eq('event_id', eventId),
         supabase.from('v_matches_with_teams').select('team_a_name,team_b_name,score,division_name,updated_at').eq('event_id', eventId).eq('status', 'FINISHED').order('updated_at', { ascending: false }).limit(5),
         supabase.from('ties').select('*, updated_at, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name)').eq('event_id', eventId).eq('status', 'completed').order('updated_at', { ascending: false }).limit(5),
-        // 전체 완료 경기 (결과 목록용)
         supabase.from('v_matches_with_teams')
           .select('id,match_num,division_name,division_id,group_label,stage,round,team_a_name,team_b_name,team_a_id,team_b_id,winner_team_id,score,court,status,updated_at')
           .eq('event_id', eventId).eq('status', 'FINISHED').neq('score', 'BYE')
           .order('updated_at', { ascending: false }).limit(200),
+        // ✅ detectTied용: group_id 있는 완료 경기 전체를 한 번에
+        supabase.from('v_matches_with_teams')
+          .select('team_a_id,team_b_id,team_a_name,team_b_name,winner_team_id,score,group_id')
+          .eq('event_id', eventId).eq('status', 'FINISHED').neq('score', 'BYE')
+          .not('group_id', 'is', null),
+        // ✅ detectTied용: teams 전체를 한 번에
+        supabase.from('teams').select('id,team_name,manual_rank').eq('event_id', eventId),
       ])
 
-      const groups = groupCountRes.data || []
+      // ✅ matches status 집계 — 클라이언트에서 처리
+      const matchList = matchRes.data || []
+      const totalMatches    = matchList.length
+      const finishedMatches = matchList.filter((m: any) => m.status === 'FINISHED').length
+      const inProgressMatches = matchList.filter((m: any) => m.status === 'IN_PROGRESS').length
+
+      // ✅ ties status 집계 — 클라이언트에서 처리
+      const tieList = tieRes.data || []
+      const totalTies    = tieList.length
+      const finishedTies = tieList.filter((t: any) => t.status === 'completed').length
+      const inProgressTies = tieList.filter((t: any) => t.status === 'in_progress').length
+
+      const groups = groupRes.data || []
       const completedGroups = groups.filter((g: any) => g.is_finalized).length
 
       setStats({
         event: evRes.data,
         divisions: divRes.data || [],
-        totalMatches: matchCountRes.count || 0,
-        finishedMatches: matchFinRes.count || 0,
-        inProgressMatches: matchInpRes.count || 0,
-        totalTies: tieCountRes.count || 0,
-        finishedTies: tieFinRes.count || 0,
-        inProgressTies: tieInpRes.count || 0,
+        totalMatches, finishedMatches, inProgressMatches,
+        totalTies, finishedTies, inProgressTies,
         totalTeams: teamCountRes.count || 0,
         totalClubs: clubCountRes.count || 0,
         completedGroups,
-        totalGroups: groupCountRes.count || 0,
+        totalGroups: groups.length,
       })
 
       const recentMatches = (recentMatchRes.data || []).map((m: any) => ({
@@ -132,58 +140,49 @@ export default function DashboardPage() {
       setRecentActivity(combined)
       setAllMatches((allMatchRes.data || []) as MatchRow[])
 
-      // 동률 감지 — 조별 예선 완료된 그룹 중 동률 팀 있는 것
-      await detectTied(eventId, divRes.data || [])
+      // ✅ detectTied 인라인 처리 — 별도 await 없이 동시에 받은 데이터로 계산
+      const groupMatchData = allGroupMatchRes.data || []
+      const teamsData = allTeamsRes.data || []
+      const rankMap = Object.fromEntries(teamsData.map((r: any) => [r.id, r.manual_rank]))
+
+      // group_id별로 경기 분류
+      const matchesByGroup = new Map<string, any[]>()
+      for (const m of groupMatchData) {
+        if (!m.group_id) continue
+        if (!matchesByGroup.has(m.group_id)) matchesByGroup.set(m.group_id, [])
+        matchesByGroup.get(m.group_id)!.push(m)
+      }
+
+      const tiedList: any[] = []
+      for (const g of groups) {
+        const gMatches = matchesByGroup.get(g.id) || []
+        if (!gMatches.length) continue
+
+        const teamWins: Record<string, { name: string; id: string; wins: number; diff: number; manualRank?: number }> = {}
+        for (const m of gMatches) {
+          if (!teamWins[m.team_a_id]) teamWins[m.team_a_id] = { name: m.team_a_name, id: m.team_a_id, wins: 0, diff: 0 }
+          if (!teamWins[m.team_b_id]) teamWins[m.team_b_id] = { name: m.team_b_name, id: m.team_b_id, wins: 0, diff: 0 }
+          const [sa, sb] = (m.score || '0:0').split(':').map(Number)
+          if (m.winner_team_id === m.team_a_id) { teamWins[m.team_a_id].wins++; teamWins[m.team_a_id].diff += (sa - sb) }
+          else if (m.winner_team_id === m.team_b_id) { teamWins[m.team_b_id].wins++; teamWins[m.team_b_id].diff += (sb - sa) }
+        }
+
+        const teams = Object.values(teamWins)
+        const winCounts = teams.map(t => t.wins)
+        const hasTie = winCounts.some((w, i) => winCounts.findIndex(x => x === w) !== i ||
+          (winCounts.filter(x => x === w).length > 1))
+
+        if (hasTie) {
+          teams.forEach(t => { t.manualRank = rankMap[t.id] ?? null })
+          tiedList.push({ ...g, teams: teams.sort((a, b) => b.wins - a.wins || b.diff - a.diff) })
+        }
+      }
+      setTiedGroups(tiedList)
+
     } finally {
       setLoading(false)
     }
   }, [eventId])
-
-  // ── 동률 감지 ─────────────────────────────────────────────
-  async function detectTied(eid: string, divs: any[]) {
-    const { data: grpData } = await supabase
-      .from('groups').select('id,group_label,division_id,division_name').eq('event_id', eid)
-
-    if (!grpData?.length) return
-
-    const tiedList: any[] = []
-    for (const g of grpData) {
-      const { data: mData } = await supabase
-        .from('v_matches_with_teams').select('*')
-        .eq('event_id', eid).eq('group_id', g.id)
-        .eq('status', 'FINISHED').neq('score', 'BYE')
-
-      if (!mData?.length) continue
-
-      // 팀별 승수 집계
-      const teamWins: Record<string, { name: string; id: string; wins: number; diff: number; manualRank?: number }> = {}
-      for (const m of mData) {
-        if (!teamWins[m.team_a_id]) teamWins[m.team_a_id] = { name: m.team_a_name, id: m.team_a_id, wins: 0, diff: 0 }
-        if (!teamWins[m.team_b_id]) teamWins[m.team_b_id] = { name: m.team_b_name, id: m.team_b_id, wins: 0, diff: 0 }
-        const [sa, sb] = (m.score || '0:0').split(':').map(Number)
-        if (m.winner_team_id === m.team_a_id) { teamWins[m.team_a_id].wins++; teamWins[m.team_a_id].diff += (sa - sb) }
-        else if (m.winner_team_id === m.team_b_id) { teamWins[m.team_b_id].wins++; teamWins[m.team_b_id].diff += (sb - sa) }
-      }
-
-      const teams = Object.values(teamWins)
-      // 승수가 같은 팀이 있으면 동률
-      const winCounts = teams.map(t => t.wins)
-      const hasTie = winCounts.some((w, i) => winCounts.findIndex(x => x === w) !== i ||
-        (winCounts.filter(x => x === w).length > 1))
-
-      if (hasTie) {
-        // 기존 manual_rank 조회
-        const { data: rankData } = await supabase
-          .from('teams').select('id,team_name,manual_rank')
-          .in('id', teams.map(t => t.id))
-        const rankMap = Object.fromEntries((rankData || []).map(r => [r.id, r.manual_rank]))
-        teams.forEach(t => { t.manualRank = rankMap[t.id] ?? null })
-
-        tiedList.push({ ...g, teams: teams.sort((a, b) => b.wins - a.wins || b.diff - a.diff) })
-      }
-    }
-    setTiedGroups(tiedList)
-  }
 
   // ── 수동 순위 저장 ─────────────────────────────────────────
   async function saveManualRank(teamId: string, rank: number | null) {
@@ -191,7 +190,6 @@ export default function DashboardPage() {
     const { error } = await supabase.from('teams').update({ manual_rank: rank }).eq('id', teamId)
     setAdjusting(false)
     if (error) {
-      // manual_rank 컬럼이 없을 수 있음 → 안내
       if (error.message.includes('column')) {
         setAdjustMsg('⚠️ teams 테이블에 manual_rank 컬럼이 없습니다. SQL 추가 필요:\nALTER TABLE teams ADD COLUMN IF NOT EXISTS manual_rank int;')
       } else {
@@ -199,7 +197,7 @@ export default function DashboardPage() {
       }
     } else {
       setAdjustMsg('✅ 저장됐습니다.')
-      await detectTied(eventId, stats?.divisions || [])
+      await loadStats()
     }
   }
 
@@ -218,7 +216,7 @@ export default function DashboardPage() {
   if (loading) return <div className="p-6 text-center text-gray-400">불러오는 중...</div>
   if (!stats)  return <div className="p-6 text-center text-gray-400">데이터 없음</div>
 
-  const totalAll   = stats.totalMatches + stats.totalTies
+  const totalAll    = stats.totalMatches + stats.totalTies
   const finishedAll = stats.finishedMatches + stats.finishedTies
   const progressPct = totalAll > 0 ? Math.round(finishedAll / totalAll * 100) : 0
   const matchProgressPct = stats.totalMatches > 0 ? Math.round(stats.finishedMatches / stats.totalMatches * 100) : 0
@@ -231,10 +229,9 @@ export default function DashboardPage() {
     return 'bg-orange-500'
   }
   function formatTime(iso: string) {
-    return new Date(iso).toLocaleString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+    return new Date(iso).toLocaleString('ko-KR', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Seoul' })
   }
 
-  // 경기결과 필터
   const divisions = stats.divisions
   const uniqueDates = [...new Set(divisions.map((d: any) => d.match_date).filter(Boolean))].sort() as string[]
 
@@ -415,7 +412,6 @@ export default function DashboardPage() {
 
         {showResults && (
           <div className="border-t">
-            {/* 부서 필터 */}
             <div className="flex gap-2 px-4 py-3 overflow-x-auto border-b bg-stone-50">
               {uniqueDates.length > 0 && (
                 <>
@@ -447,7 +443,6 @@ export default function DashboardPage() {
               })}
             </div>
 
-            {/* 경기 목록 */}
             {filteredMatches.length === 0 ? (
               <div className="text-center py-8 text-stone-400 text-sm">완료된 경기가 없습니다.</div>
             ) : (
