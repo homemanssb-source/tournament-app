@@ -400,7 +400,8 @@ export default function CourtsPage() {
   async function autoAssignByDivision() {
     if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
     if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
-    if (autoDiv === 'TEAM' || teamDivIds.has(autoDiv)) {
+    const _isTeamDiv = ties.some(t => t.division_id === autoDiv && !t.is_bye)
+    if (autoDiv === 'TEAM' || _isTeamDiv) {
       const selectedRound = TEAM_STAGE_TABS.find(t => t.key === autoStage)?.round || 'group'
       const divTies = ties.filter(t =>
         !t.is_bye && !(t as any).court_number && t.status !== 'completed' &&
@@ -754,7 +755,12 @@ export default function CourtsPage() {
         <div className="flex flex-wrap gap-3 items-start">
           <div>
             <label className="text-xs text-stone-500 block mb-1">부문</label>
-            <select value={autoDiv} onChange={e => setAutoDiv(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[140px]">
+            <select value={autoDiv} onChange={e => {
+              const divId = e.target.value
+              setAutoDiv(divId)
+              const _isTeam = ties.some(t => t.division_id === divId && !t.is_bye)
+              setAutoStage(_isTeam ? 'group' : 'GROUP')
+            }} className="border rounded-lg px-3 py-2 text-sm min-w-[140px]">
               <option value="">부문 선택</option>
               {filteredDivisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
