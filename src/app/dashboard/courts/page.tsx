@@ -1159,12 +1159,9 @@ function MatchChip({ m, badge, divColor, isCurrentSlot, allMatches, onDragStart,
       {/* 2줄: 부서명(truncate) + 라운드뱃지(항상 보임) — 개인전/단체전 공통 */}
       {(() => {
         const { round: rLabel } = getRoundBadge(m.round, m.group_label, m.division_name)
-        const divLabel = isTeam
-          ? (divisions.find(d => d.id === m.division_id)?.name || '단체전')
-          : m.division_name
         return (
           <div className="flex items-center gap-1 mt-0.5 mb-1 min-w-0">
-            <span className="text-[10px] text-stone-400 truncate flex-1 min-w-0">{divLabel}</span>
+            <span className="text-[10px] text-stone-400 truncate flex-1 min-w-0">{m.division_name}</span>
             <span className={`text-[10px] font-bold flex-shrink-0 whitespace-nowrap px-1.5 py-0.5 rounded ${
               rLabel === '예선' || rLabel.includes('조') || rLabel === '리그'
                 ? 'bg-stone-100 text-stone-600'
