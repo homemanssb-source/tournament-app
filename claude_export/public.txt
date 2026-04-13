@@ -1,5 +1,38 @@
+============================================================
+FILE: public\manifest.json
+============================================================
+{
+  "name": "제주시 테니스 대회",
+  "short_name": "테니스대회",
+  "description": "제주시 테니스 대회 운영 시스템",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a2744",
+  "theme_color": "#1a2744",
+  "orientation": "portrait",
+  "lang": "ko",
+  "icons": [
+    { "src": "/icon-72x72.png",   "sizes": "72x72",   "type": "image/png" },
+    { "src": "/icon-96x96.png",   "sizes": "96x96",   "type": "image/png" },
+    { "src": "/icon-128x128.png", "sizes": "128x128", "type": "image/png" },
+    { "src": "/icon-144x144.png", "sizes": "144x144", "type": "image/png" },
+    { "src": "/icon-152x152.png", "sizes": "152x152", "type": "image/png" },
+    { "src": "/icon-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-384x384.png", "sizes": "384x384", "type": "image/png" },
+    { "src": "/icon-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "대회 보기",  "url": "/events",    "icons": [{ "src": "/icon-96x96.png", "sizes": "96x96" }] },
+    { "name": "대시보드",   "url": "/dashboard", "icons": [{ "src": "/icon-96x96.png", "sizes": "96x96" }] }
+  ]
+}
+
+
+============================================================
+FILE: public\sw.js
+============================================================
 // JTA 제주테니스 Service Worker
-const CACHE_NAME = 'jta-ranking-v9';
+const CACHE_NAME = 'jta-ranking-v7';
 const STATIC_ASSETS = ['/icon-192x192.png', '/icon-512x512.png', '/manifest.json'];
 
 self.addEventListener('install', e => {
@@ -21,9 +54,16 @@ self.addEventListener('fetch', e => {
 
   const url = new URL(e.request.url);
 
+  // ✅ Supabase API 요청 — SW 개입 금지
   if (url.hostname.includes('supabase')) return;
+
+  // ✅ Next.js 내부 요청 (_next/) — SW 개입 금지
   if (url.pathname.startsWith('/_next/')) return;
+
+  // ✅ 네비게이션 요청 (HTML 페이지) — SW 개입 금지
   if (e.request.mode === 'navigate') return;
+
+  // ✅ API 라우트 — SW 개입 금지
   if (url.pathname.startsWith('/api/')) return;
 
   // 이미지 캐시
@@ -34,7 +74,7 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // manifest.json 캐시
+  // manifest.json 캐시 — clone 올바르게 처리
   if (url.pathname === '/manifest.json') {
     e.respondWith(
       caches.match(e.request).then(cached => {
@@ -53,45 +93,37 @@ self.addEventListener('fetch', e => {
 });
 
 self.addEventListener('push', e => {
-  // ✅ [FIX] JSON 파싱 실패 시 crash 방지 → try-catch로 감싸기
-  let d = {};
-  try {
-    d = e.data?.json() || {};
-  } catch {
-    d = {};
-  }
-
-  // ✅ tag에 timestamp 추가 → 같은 코트 연속 알림이 덮어씌워지지 않음
-  const uniqueTag = (d.tag || 'jta-notification') + '-' + Date.now();
+  const d = e.data?.json() || {};
 
   e.waitUntil(
+    // ✅ 포그라운드 클라이언트에 먼저 메시지 전달 (인앱 알림)
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-      // 포그라운드 클라이언트에 인앱 배너 전달
+      // 포그라운드 클라이언트가 있으면 메시지 전달
       if (list.length > 0) {
         list.forEach(client => {
           client.postMessage({
             type: 'PUSH_NOTIFICATION',
             title: d.title || '🎾 JTA 제주테니스',
             body: d.body || '새로운 알림이 있습니다.',
-            tag: uniqueTag,
+            tag: d.tag || 'jta-notification',
             url: d.url || '/',
           });
         });
       }
 
-      // ✅ requireInteraction: false → OS가 즉시 표시 (지연 현상 감소)
+      // ✅ OS 알림은 항상 표시 (포그라운드 여부 무관)
+      // - 백그라운드: OS 시스템 알림으로 표시
+      // - 포그라운드: 인앱 배너 + OS 알림 둘 다 표시
       return self.registration.showNotification(d.title || '🎾 JTA 제주테니스', {
         body: d.body || '새로운 알림이 있습니다.',
         icon: '/icon-192x192.png',
         badge: '/icon-72x72.png',
-        vibrate: [300, 100, 300, 100, 500],
-        tag: uniqueTag,
+        vibrate: [200, 100, 200],
+        tag: d.tag || 'jta-notification',
         renotify: true,
-        requireInteraction: false,
-        silent: false,
-        data: { url: d.url || '/pin/matches' },
+        data: { url: d.url || '/' },
         actions: [
-          { action: 'open',  title: '✅ 확인하기' },
+          { action: 'open',  title: '확인하기' },
           { action: 'close', title: '닫기' }
         ]
       });
@@ -112,3 +144,5 @@ self.addEventListener('notificationclick', e => {
     })
   );
 });
+
+

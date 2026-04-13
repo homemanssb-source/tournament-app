@@ -1,0 +1,1416 @@
+============================================================
+FILE: src\app\api\notify\court\route.ts
+============================================================
+// src/app/api/notify/court/route.ts
+// ✅ [FIX-⑥] courtNum 파싱: replace(/[^0-9]/g,'') → split('-').pop() 방식으로 개선
+//    "한라-2" → 2, "제주A-10" → 10 (숫자가 여러 개 섞인 short_name 안전)
+import { NextRequest, NextResponse } from 'next/server'
+import { getServiceClient } from '@/lib/supabase'
+
+export async function POST(req: NextRequest) {
+  try {
+    // ✅ VAPID 키 없으면 조용히 skip (빌드 안전)
+    if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+      return NextResponse.json({ sent: 0, message: 'VAPID not configured' })
+    }
+
+    // ✅ web-push를 dynamic import로 런타임에만 로드 (빌드 시 VAPID 검증 우회)
+    const webpush = (await import('web-push')).default
+    webpush.setVapidDetails(
+      'mailto:admin@jeju-tournament.com',
+      process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+      process.env.VAPID_PRIVATE_KEY
+    )
+
+    const supabaseAdmin = getServiceClient()
+    const { event_id, court, match_id, trigger } = await req.json()
+
+    if (!event_id || !court) {
+      return NextResponse.json({ error: 'event_id, court 필수' }, { status: 400 })
+    }
+
+    // ✅ [FIX-⑥] 코트명 마지막 숫자 파싱 (short_name-N 포맷 대응)
+    // "한라-2" → split('-') → ['한라','2'] → pop() → '2' → parseInt → 2
+    // "제주A-10" → pop() → '10' → 10
+    // "코트-1" → pop() → '1' → 1
+    // 단, short_name 자체에 숫자가 없는 경우 대비: fallback으로 전체에서 숫자 추출
+    const lastPart = court.split('-').pop() || ''
+    const courtNum = /^\d+$/.test(lastPart)
+      ? parseInt(lastPart, 10)
+      : parseInt(court.replace(/[^0-9]/g, ''), 10) || 0
+
+    let teamAId: string | null = null
+    let teamBId: string | null = null
+    let teamAName = ''
+    let teamBName = ''
+    let divisionName = ''
+    let targetId = ''
+
+    if (match_id) {
+      const { data } = await supabaseAdmin
+        .from('v_matches_with_teams')
+        .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name')
+        .eq('id', match_id)
+        .single()
+      if (data) {
+        teamAId = data.team_a_id
+        teamBId = data.team_b_id
+        teamAName = data.team_a_name
+        teamBName = data.team_b_name
+        divisionName = data.division_name
+        targetId = data.id
+      }
+    } else {
+      // 단체전 ties 먼저 확인
+      const { data: tieList } = await supabaseAdmin
+        .from('ties')
+        .select('id, club_a_id, club_b_id, status, tie_order')
+        .eq('event_id', event_id)
+        .eq('court_number', courtNum)
+        .neq('status', 'completed')
+        .order('tie_order')
+
+      if (tieList && tieList.length > 0) {
+        const activeTie = tieList.find(t => t.status === 'in_progress') || tieList[0]
+        teamAId = activeTie.club_a_id
+        teamBId = activeTie.club_b_id
+        targetId = activeTie.id
+        divisionName = '단체전'
+
+        const [{ data: clubA }, { data: clubB }] = await Promise.all([
+          supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_a_id).single(),
+          supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_b_id).single(),
+        ])
+        teamAName = clubA?.name || ''
+        teamBName = clubB?.name || ''
+      } else {
+        // 개인전 matches
+        const { data: courtMatches } = await supabaseAdmin
+          .from('v_matches_with_teams')
+          .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status, score')
+          .eq('event_id', event_id)
+          .eq('court', court)
+          .order('court_order')
+
+        // ✅ BYE 제외 클라이언트 필터 (NULL score 포함)
+        const filteredMatches = (courtMatches || []).filter((m: any) => m.score !== 'BYE')
+
+        if (filteredMatches && filteredMatches.length > 0) {
+          const activeIdx = filteredMatches.findIndex(m => m.status === 'IN_PROGRESS')
+          const searchFrom = activeIdx >= 0 ? activeIdx + 1 : 0
+          const target = filteredMatches.slice(searchFrom).find(m => m.status === 'PENDING')
+            ?? filteredMatches.find(m => m.status === 'PENDING')
+
+          if (target) {
+            teamAId = target.team_a_id
+            teamBId = target.team_b_id
+            teamAName = target.team_a_name
+            teamBName = target.team_b_name
+            divisionName = target.division_name
+            targetId = target.id
+          }
+        }
+      }
+    }
+
+    if (!teamAId && !teamBId) {
+      return NextResponse.json({ sent: 0, message: '대기 중인 경기가 없습니다' })
+    }
+
+    const teamIds = [teamAId, teamBId].filter(Boolean) as string[]
+    const { data: subscriptions, error: subError } = await supabaseAdmin
+      .from('push_subscriptions')
+      .select('endpoint, p256dh, auth')
+      .in('team_id', teamIds)
+
+    if (subError) return NextResponse.json({ error: subError.message }, { status: 500 })
+    if (!subscriptions?.length) {
+      return NextResponse.json({ sent: 0, message: '구독자가 없습니다' })
+    }
+
+    const triggerLabel = trigger === 'court_changed' ? '코트가 변경되었습니다!' : '경기 준비하세요!'
+    const payload = JSON.stringify({
+      title: `🎾 ${court} - ${triggerLabel}`,
+      body: `${teamAName} vs ${teamBName} (${divisionName})`,
+      icon: '/icon-192x192.png',
+      tag: `court-${court}-${targetId}`,
+      data: { court, match_id: targetId },
+    })
+
+    let sent = 0
+    const failedEndpoints: string[] = []
+
+    await Promise.all(
+      subscriptions.map(async (sub) => {
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            payload
+          )
+          sent++
+        } catch (err: any) {
+          if (err.statusCode === 410 || err.statusCode === 404) {
+            failedEndpoints.push(sub.endpoint)
+          }
+        }
+      })
+    )
+
+    if (failedEndpoints.length > 0) {
+      await supabaseAdmin.from('push_subscriptions').delete().in('endpoint', failedEndpoints)
+    }
+
+    return NextResponse.json({
+      sent,
+      match: { court, team_a: teamAName, team_b: teamBName },
+    })
+  } catch (err: any) {
+    console.error('[notify/court]', err)
+    return NextResponse.json({ error: err.message }, { status: 500 })
+  }
+}
+
+
+============================================================
+FILE: src\app\api\push\check\route.ts
+============================================================
+// ============================================================
+// src/app/api/push/check/route.ts
+// endpoint가 서버 DB에 존재하는지 확인
+// autoResubscribe에서 사용
+// ============================================================
+import { NextRequest, NextResponse } from 'next/server'
+import { getServiceClient } from '@/lib/supabase'
+
+export async function POST(req: NextRequest) {
+  try {
+    const { endpoint } = await req.json()
+    if (!endpoint) {
+      return NextResponse.json({ exists: false })
+    }
+
+    const supabase = getServiceClient()
+    const { data, error } = await supabase
+      .from('push_subscriptions')
+      .select('id')
+      .eq('endpoint', endpoint)
+      .limit(1)
+      .maybeSingle()
+
+    if (error) {
+      console.error('[Push Check]', error.message)
+      return NextResponse.json({ exists: false })
+    }
+
+    return NextResponse.json({ exists: !!data })
+  } catch (err) {
+    return NextResponse.json({ exists: false })
+  }
+}
+
+============================================================
+FILE: src\app\api\push\subscribe\route.ts
+============================================================
+// src/app/api/push/subscribe/route.ts
+// 선수가 PIN 입력 → 구독 정보 저장 API
+// ★ 수정: 개인전(teams.pin_plain) + 단체전(clubs.captain_pin) 둘 다 지원
+
+import { NextRequest, NextResponse } from 'next/server'
+import { getServiceClient } from '@/lib/supabase'
+
+export async function POST(req: NextRequest) {
+  try {
+    const { pin, subscription } = await req.json()
+
+    if (!pin || !subscription?.endpoint) {
+      return NextResponse.json({ error: 'PIN과 구독 정보가 필요합니다.' }, { status: 400 })
+    }
+
+    const supabase = getServiceClient()
+
+    let teamId: string | null = null
+    let teamName: string | null = null
+
+    // 1. 개인전: teams.pin_plain 조회
+    const { data: team } = await supabase
+      .from('teams')
+      .select('id, team_name')
+      .eq('pin_plain', pin)
+      .maybeSingle()
+
+    if (team) {
+      teamId = team.id
+      teamName = team.team_name
+    }
+
+    // 2. 단체전: clubs.captain_pin 조회 (개인전에서 못 찾은 경우)
+    if (!teamId) {
+      const { data: club } = await supabase
+        .from('clubs')
+        .select('id, name')
+        .eq('captain_pin', pin)
+        .maybeSingle()
+
+      if (club) {
+        teamId = club.id
+        teamName = club.name
+      }
+    }
+
+    if (!teamId) {
+      return NextResponse.json({ error: 'PIN이 올바르지 않습니다.' }, { status: 404 })
+    }
+
+    // push_subscriptions 테이블에 저장 (중복이면 업데이트)
+    const { error: upsertErr } = await supabase
+      .from('push_subscriptions')
+      .upsert({
+        team_id:  teamId,
+        endpoint: subscription.endpoint,
+        p256dh:   subscription.keys.p256dh,
+        auth:     subscription.keys.auth,
+      }, {
+        onConflict: 'team_id,endpoint'
+      })
+
+    if (upsertErr) {
+      console.error('[push/subscribe] upsert error:', upsertErr)
+      return NextResponse.json({ error: '저장 실패' }, { status: 500 })
+    }
+
+    return NextResponse.json({ ok: true, team_name: teamName })
+
+  } catch (err) {
+    console.error('[push/subscribe] error:', err)
+    return NextResponse.json({ error: '서버 오류' }, { status: 500 })
+  }
+}
+
+============================================================
+FILE: src\app\api\sync\pull-events\route.ts
+============================================================
+// ============================================================
+// [앱B] 앱A 대회 목록 + 부서 가져오기 API
+// src/app/api/sync/pull-events/route.ts
+//
+// 앱A events → 앱B events 동기화
+// 앱A event_divisions → 앱B divisions 동기화
+// ★ 수정: team_match_type 동기화 추가
+// ============================================================
+
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+export async function OPTIONS() {
+  return NextResponse.json({}, { headers: corsHeaders });
+}
+
+function getAppAClient() {
+  const url = process.env.APP_A_SUPABASE_URL!;
+  const key = process.env.APP_A_ANON_KEY;
+  if (!key) throw new Error('APP_A_ANON_KEY not set');
+  return createClient(url, key);
+}
+
+function getAppBServiceClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) throw new Error('SUPABASE_SERVICE_ROLE_KEY not set');
+  return createClient(url, key);
+}
+
+function mapStatus(appAStatus: string): string {
+  const s = (appAStatus || '').toUpperCase();
+  if (s === 'OPEN' || s === 'ACTIVE') return 'active';
+  if (s === 'CLOSED' || s === 'COMPLETED') return 'completed';
+  return 'draft';
+}
+
+// ★ 신규: team_match_type → rubber_count 매핑
+function getRubberCount(teamMatchType: string | null): number {
+  if (teamMatchType === '5_doubles') return 5;
+  return 3; // 기본값
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const appA = getAppAClient();
+    const appB = getAppBServiceClient();
+
+    // 1. 앱A에서 대회 목록 조회
+    const { data: appAEvents, error: fetchErr } = await appA
+      .from('events')
+      .select('event_id, event_name, event_date, event_type, status, description, team_member_limit, team_match_type')
+      .order('event_date', { ascending: false });
+
+    if (fetchErr) {
+      return NextResponse.json(
+        { success: false, error: '앱A 대회 조회 실패: ' + fetchErr.message },
+        { status: 500, headers: corsHeaders },
+      );
+    }
+
+    if (!appAEvents || appAEvents.length === 0) {
+      return NextResponse.json(
+        { success: true, message: '앱A에 대회가 없습니다.', synced: 0, skipped: 0 },
+        { headers: corsHeaders },
+      );
+    }
+
+    // 2. 앱B에서 이미 연결된 대회 조회
+    const { data: existingEvents } = await appB
+      .from('events')
+      .select('id, app_a_event_id, name');
+
+    const existingMap = new Map(
+      (existingEvents || [])
+        .filter(e => e.app_a_event_id)
+        .map(e => [e.app_a_event_id, e])
+    );
+
+    let syncedCount = 0;
+    let skippedCount = 0;
+    let updatedCount = 0;
+    let divisionsSynced = 0;
+    const errors: string[] = [];
+
+    for (const ae of appAEvents) {
+      try {
+        const existing = existingMap.get(ae.event_id);
+        let appBEventId: string;
+
+        if (existing) {
+          appBEventId = existing.id;
+          // ★ 수정: team_match_type, team_rubber_count 업데이트 추가
+          const { error: updateErr } = await appB
+            .from('events')
+            .update({
+              name: ae.event_name,
+              date: ae.event_date,
+              event_type: ae.event_type || 'individual',
+              status: mapStatus(ae.status),
+              team_match_type: ae.team_match_type || null,
+              team_rubber_count: getRubberCount(ae.team_match_type),
+            })
+            .eq('id', existing.id);
+
+          if (updateErr) {
+            errors.push(`${ae.event_name}: 업데이트 실패 - ${updateErr.message}`);
+            continue;
+          }
+          updatedCount++;
+        } else {
+          // ★ 수정: team_match_type, team_rubber_count 삽입 추가
+          const { data: newEvent, error: insertErr } = await appB
+            .from('events')
+            .insert({
+              name: ae.event_name,
+              date: ae.event_date,
+              event_type: ae.event_type || 'individual',
+              status: mapStatus(ae.status),
+              location: '',
+              app_a_event_id: ae.event_id,
+              app_a_connected: true,
+              team_match_type: ae.team_match_type || null,
+              team_rubber_count: getRubberCount(ae.team_match_type),
+            })
+            .select('id')
+            .single();
+
+          if (insertErr || !newEvent) {
+            errors.push(`${ae.event_name}: 추가 실패 - ${insertErr?.message}`);
+            continue;
+          }
+          appBEventId = newEvent.id;
+          syncedCount++;
+        }
+
+        // 3. 해당 대회의 부서(divisions) 동기화
+        const { data: appADivs } = await appA
+          .from('event_divisions')
+          .select('division_id, division_name')
+          .eq('event_id', ae.event_id)
+          .order('created_at');
+
+        if (appADivs && appADivs.length > 0) {
+          // 앱B에 이미 있는 부서 조회
+          const { data: existingDivs } = await appB
+            .from('divisions')
+            .select('id, name')
+            .eq('event_id', appBEventId);
+
+          const existingDivNames = new Set(
+            (existingDivs || []).map(d => d.name)
+          );
+
+          for (let i = 0; i < appADivs.length; i++) {
+            const div = appADivs[i];
+            if (existingDivNames.has(div.division_name)) continue;
+
+            const { error: divErr } = await appB
+              .from('divisions')
+              .insert({
+                event_id: appBEventId,
+                name: div.division_name,
+                sort_order: i + 1,
+              });
+
+            if (divErr) {
+              errors.push(`${ae.event_name} 부서 ${div.division_name}: ${divErr.message}`);
+            } else {
+              divisionsSynced++;
+            }
+          }
+        }
+
+      } catch (e: any) {
+        errors.push(`${ae.event_name}: ${e.message}`);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      synced: syncedCount,
+      updated: updatedCount,
+      skipped: skippedCount,
+      divisionsSynced,
+      total: appAEvents.length,
+      errors: errors.length > 0 ? errors : undefined,
+    }, { headers: corsHeaders });
+
+  } catch (err: any) {
+    return NextResponse.json(
+      { success: false, error: err.message },
+      { status: 500, headers: corsHeaders },
+    );
+  }
+}
+
+============================================================
+FILE: src\app\api\sync\pull-individual\route.ts
+============================================================
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+
+function getAppAClient() {
+  const url = process.env.APP_A_SUPABASE_URL!;
+  const key = process.env.APP_A_ANON_KEY;
+  if (!key) throw new Error('APP_A_ANON_KEY not set');
+  return createClient(url, key);
+}
+function getAppBServiceClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) throw new Error('SUPABASE_SERVICE_ROLE_KEY not set');
+  return createClient(url, key);
+}
+
+function generatePin(): string {
+  return String(100000 + Math.floor(Math.random() * 900000));
+}
+
+// 클럽명 축약: "제주하나클럽" → "제주하나"
+function shortenClub(club: string | null | undefined): string {
+  if (!club) return '';
+  return club.replace(/테니스클럽$/, '').replace(/클럽$/, '').replace(/테니스$/, '').trim();
+}
+
+// "홍길동(제주하나)/홍길금(제주아라)" 형식 생성
+function buildTeamName(p1Name: string, p1Club: string | null, p2Name: string, p2Club: string | null): string {
+  const p1 = p1Name ? (p1Club ? `${p1Name}(${p1Club})` : p1Name) : '';
+  const p2 = p2Name ? (p2Club ? `${p2Name}(${p2Club})` : p2Name) : '';
+  if (p1 && p2) return `${p1}/${p2}`;
+  return p1 || p2;
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const { event_id, app_a_event_id } = await request.json();
+    if (!event_id || !app_a_event_id) {
+      return NextResponse.json({ success: false, error: 'event_id와 app_a_event_id 필요' }, { status: 400 });
+    }
+
+    const appA = getAppAClient();
+    const appB = getAppBServiceClient();
+
+    // 1. 앱B divisions 로드
+    const { data: appBDivisions, error: divErr } = await appB
+      .from('divisions')
+      .select('id, name')
+      .eq('event_id', event_id);
+    if (divErr || !appBDivisions) {
+      return NextResponse.json({ success: false, error: 'appB divisions 조회 실패: ' + divErr?.message }, { status: 500 });
+    }
+
+    // 2. 앱A event_divisions 로드
+    const { data: appADivisions, error: aDivErr } = await appA
+      .from('event_divisions')
+      .select('division_id, division_name')
+      .eq('event_id', app_a_event_id);
+    if (aDivErr || !appADivisions) {
+      return NextResponse.json({ success: false, error: 'appA divisions 조회 실패: ' + aDivErr?.message }, { status: 500 });
+    }
+
+    // 3. 앱A division_id -> 앱B division_id 매핑 (이름 기준)
+    const divisionMap: Record<string, string> = {};
+    for (const aDiv of appADivisions) {
+      const aName = (aDiv.division_name || '').trim().replace(/\s+/g, ' ');
+      const matched = appBDivisions.find(b => (b.name || '').trim().replace(/\s+/g, ' ') === aName);
+      if (matched) divisionMap[aDiv.division_id] = matched.id;
+    }
+
+    // 4. 앱A event_entries 가져오기
+    //    entry_status = '신청' 이고 cancelled_at IS NULL 인 것만
+    const { data: allEntries, error: entErr } = await appA
+      .from('event_entries')
+      .select('*, team:teams(*)')
+      .eq('event_id', app_a_event_id)
+      .eq('entry_status', '신청')
+      .is('cancelled_at', null);
+    if (entErr) {
+      return NextResponse.json({ success: false, error: 'appA entries 조회 실패: ' + entErr.message }, { status: 500 });
+    }
+    if (!allEntries || allEntries.length === 0) {
+      return NextResponse.json({ success: true, message: '동기화할 데이터 없음', synced: 0, total: 0 });
+    }
+
+    // 5. 필요한 member_id 목록 수집 → 한 번에 조회
+    const memberIds = new Set<string>();
+    for (const entry of allEntries) {
+      if (entry.team?.member1_id) memberIds.add(entry.team.member1_id);
+      if (entry.team?.member2_id) memberIds.add(entry.team.member2_id);
+    }
+    const memberMap: Record<string, any> = {};
+    if (memberIds.size > 0) {
+      const { data: membersData } = await appA
+        .from('members')
+        .select('member_id, name, pin_code, grade, club')
+        .in('member_id', [...memberIds]);
+      for (const m of (membersData || [])) {
+        memberMap[m.member_id] = m;
+      }
+    }
+
+    // 6. 앱B 기존 sync_log 한 번에 로드 → Set으로 빠른 중복 체크
+    const { data: existingLogs } = await appB
+      .from('sync_log')
+      .select('app_a_record_id')
+      .eq('event_id', event_id)
+      .eq('sync_type', 'individual');
+    const syncedIds = new Set((existingLogs || []).map((l: any) => l.app_a_record_id));
+
+    // 7. 앱B 기존 teams 한 번에 로드 → player1+player2+division 기준 중복 체크
+    const { data: existingTeams } = await appB
+      .from('teams')
+      .select('player1_name, player2_name, division_id')
+      .eq('event_id', event_id);
+    const existingTeamKeys = new Set(
+      (existingTeams || []).map((t: any) => `${t.division_id}|${t.player1_name}|${t.player2_name}`)
+    );
+
+    let syncedCount = 0;
+    let skippedCount = 0;
+    let duplicateCount = 0;
+    const errors: string[] = [];
+    const unmatched: string[] = [];
+
+    for (const entry of allEntries) {
+      try {
+        const recordId = entry.entry_id || entry.id || entry.team?.team_id;
+
+        // sync_log 기반 중복 체크
+        if (syncedIds.has(recordId)) { skippedCount++; continue; }
+
+        const team = entry.team;
+        if (!team) { skippedCount++; continue; }
+
+        // division_id 매핑
+        const appBDivisionId = entry.division_id ? divisionMap[entry.division_id] : null;
+        if (!appBDivisionId) {
+          const divName = appADivisions.find(d => d.division_id === entry.division_id)?.division_name || entry.division_id || 'unknown';
+          unmatched.push(`부서 매핑 실패: "${divName}" (${team.team_name || ''})`);
+          continue;
+        }
+
+        const divisionName = appBDivisions.find(d => d.id === appBDivisionId)?.name || '';
+
+        // 선수 정보
+        const member1 = team.member1_id ? memberMap[team.member1_id] : null;
+        const member2 = team.member2_id ? memberMap[team.member2_id] : null;
+
+        const p1Name = member1?.name || '';
+        const p2Name = member2?.name || '';
+        const p1Club = shortenClub(member1?.club) || null;
+        const p2Club = shortenClub(member2?.club) || null;
+        const teamName = buildTeamName(p1Name, p1Club, p2Name, p2Club);
+        const pinPlain = member1?.pin_code ? String(member1.pin_code) : generatePin();
+        const p1Grade = member1?.grade || null;
+        const p2Grade = member2?.grade || null;
+
+        // teams 테이블 기반 중복 체크
+        const teamKey = `${appBDivisionId}|${p1Name}|${p2Name}`;
+        if (existingTeamKeys.has(teamKey)) {
+          duplicateCount++;
+          await appB.from('sync_log').insert({
+            event_id, sync_type: 'individual',
+            app_a_record_id: recordId, app_b_record_id: null,
+            app_b_table: 'teams', status: 'duplicate',
+          });
+          continue;
+        }
+
+        // 앱B teams insert
+        const { data: newTeam, error: teamErr } = await appB
+          .from('teams')
+          .insert({
+            event_id, division_id: appBDivisionId, division_name: divisionName,
+            team_name: teamName, player1_name: p1Name, player2_name: p2Name,
+            p1_club: p1Club, p2_club: p2Club, pin_plain: pinPlain,
+            p1_grade: p1Grade, p2_grade: p2Grade, group_id: null,
+          })
+          .select('id')
+          .single();
+
+        if (teamErr) { errors.push(`팀 생성 실패: ${teamErr.message}`); continue; }
+
+        await appB.from('sync_log').insert({
+          event_id, sync_type: 'individual',
+          app_a_record_id: recordId, app_b_record_id: newTeam.id,
+          app_b_table: 'teams', status: 'synced',
+        });
+
+        existingTeamKeys.add(teamKey);
+        syncedCount++;
+
+      } catch (e: any) {
+        errors.push(e.message);
+      }
+    }
+
+    return NextResponse.json({
+      success:   true,
+      synced:    syncedCount,
+      skipped:   skippedCount,
+      duplicate: duplicateCount,
+      total:     allEntries.length,
+      unmatched: unmatched.length > 0 ? unmatched : undefined,
+      errors:    errors.length > 0 ? errors : undefined,
+    });
+
+  } catch (err: any) {
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  }
+}
+
+
+============================================================
+FILE: src\app\api\sync\pull-team\route.ts
+============================================================
+// ============================================================
+// 앱A → 앱B 단체전 데이터 Pull API
+// src/app/api/sync/pull-team/route.ts
+//
+// 앱A의 team_event_entries + team_event_members를
+// 앱B의 clubs + club_members에 동기화
+// - 클럽 매칭: name + division_id 기준 (부서별 분리)
+// ★ 수정: team_match_type 기반 rubber_count 동기화
+// ============================================================
+
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+export async function OPTIONS() {
+  return NextResponse.json({}, { headers: corsHeaders });
+}
+
+function getAppAClient() {
+  const url = process.env.APP_A_SUPABASE_URL!;
+  const key = process.env.APP_A_ANON_KEY;
+  if (!key) throw new Error('APP_A_ANON_KEY not set');
+  return createClient(url, key);
+}
+
+function getAppBServiceClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) throw new Error('SUPABASE_SERVICE_ROLE_KEY not set');
+  return createClient(url, key);
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const { event_id, app_a_event_id } = await request.json();
+    if (!event_id || !app_a_event_id) {
+      return NextResponse.json({ success: false, error: 'event_id와 app_a_event_id가 필요합니다.' }, { status: 400, headers: corsHeaders });
+    }
+
+    const appA = getAppAClient();
+    const appB = getAppBServiceClient();
+
+    // ★ 신규: 앱A에서 해당 대회의 경기방식 조회
+    const { data: appAEvent } = await appA
+      .from('events')
+      .select('team_match_type')
+      .eq('event_id', app_a_event_id)
+      .single();
+
+    const teamMatchType = appAEvent?.team_match_type || '3_doubles';
+    const rubberCount = teamMatchType === '5_doubles' ? 5 : 3;
+
+    // ★ 신규: 앱B events 테이블에 team_match_type, team_rubber_count 업데이트
+    await appB.from('events').update({
+      team_match_type: teamMatchType,
+      team_rubber_count: rubberCount,
+    }).eq('id', event_id);
+
+    // 앱A에서 단체전 엔트리 가져오기
+    const { data: entries, error: entriesErr } = await appA
+      .from('team_event_entries')
+      .select('*')
+      .eq('event_id', app_a_event_id)
+      .in('status', ['pending', 'confirmed']);
+
+    if (entriesErr) {
+      return NextResponse.json({ success: false, error: '앱A 데이터 조회 실패: ' + entriesErr.message }, { status: 500, headers: corsHeaders });
+    }
+
+    if (!entries || entries.length === 0) {
+      return NextResponse.json({
+        success: true,
+        message: '동기화할 데이터가 없습니다.',
+        synced: 0,
+        team_match_type: teamMatchType,
+        rubber_count: rubberCount,
+      }, { headers: corsHeaders });
+    }
+
+    // 앱A 부서 정보 조회
+    const { data: appADivisions } = await appA
+      .from('event_divisions')
+      .select('division_id, division_name')
+      .eq('event_id', app_a_event_id);
+
+    const divMap = new Map(
+      (appADivisions || []).map(d => [d.division_id, d.division_name])
+    );
+
+    // 앱B 부서 조회 (매칭용)
+    const { data: appBDivisions } = await appB
+      .from('divisions')
+      .select('id, name')
+      .eq('event_id', event_id);
+
+    // 앱A division_name → 앱B division_id 매핑
+    const appBDivByName = new Map(
+      (appBDivisions || []).map(d => [d.name, d.id])
+    );
+
+    let syncedCount = 0;
+    let skippedCount = 0;
+    const errors: string[] = [];
+
+    for (const entry of entries) {
+      try {
+        // 이미 동기화 확인
+        const { data: existingLog } = await appB
+          .from('sync_log')
+          .select('id')
+          .eq('event_id', event_id)
+          .eq('app_a_record_id', entry.id)
+          .eq('sync_type', 'team')
+          .limit(1);
+
+        if (existingLog && existingLog.length > 0) {
+          skippedCount++;
+          continue;
+        }
+
+        // 부서 정보 결정
+        const appADivName = entry.division_name || (entry.division_id ? divMap.get(entry.division_id) : null) || null;
+        const appBDivId = appADivName ? appBDivByName.get(appADivName) : null;
+
+        // 클럽 upsert (이름 + 부서 기준)
+        let clubQuery = appB
+          .from('clubs')
+          .select('id')
+          .eq('event_id', event_id)
+          .eq('name', entry.club_name);
+
+        if (appBDivId) {
+          clubQuery = clubQuery.eq('division_id', appBDivId);
+        } else if (appADivName) {
+          clubQuery = clubQuery.is('division_id', null);
+        }
+
+        const { data: existingClub } = await clubQuery.limit(1);
+
+        let clubId: string;
+
+        if (existingClub && existingClub.length > 0) {
+          clubId = existingClub[0].id;
+          await appB.from('clubs').update({
+            captain_name: entry.captain_name,
+            captain_pin: entry.captain_pin,
+            division_id: appBDivId || undefined,
+          }).eq('id', clubId);
+        } else {
+          const insertData: any = {
+            event_id,
+            name: entry.club_name,
+            captain_name: entry.captain_name,
+            captain_pin: entry.captain_pin,
+          };
+          if (appBDivId) insertData.division_id = appBDivId;
+
+          const { data: newClub, error: clubErr } = await appB
+            .from('clubs')
+            .insert(insertData)
+            .select('id')
+            .single();
+
+          if (clubErr) {
+            errors.push(`${entry.club_name}${appADivName ? ' (' + appADivName + ')' : ''}: ${clubErr.message}`);
+            continue;
+          }
+          clubId = newClub.id;
+        }
+
+        // 멤버 가져오기
+        const { data: members, error: membersErr } = await appA
+          .from('team_event_members')
+          .select('*')
+          .eq('entry_id', entry.id)
+          .order('member_order');
+
+        if (membersErr) {
+          errors.push(`${entry.club_name} members: ${membersErr.message}`);
+        }
+
+        // 기존 멤버 삭제 후 재삽입
+        await appB.from('club_members').delete().eq('club_id', clubId);
+
+        if (members && members.length > 0) {
+          const toGender = (g: string | null | undefined): string | null => {
+            if (!g) return null;
+            if (g === '남' || g.toUpperCase() === 'M' || g.toLowerCase() === 'male') return 'M';
+            if (g === '여' || g.toUpperCase() === 'F' || g.toLowerCase() === 'female') return 'F';
+            return null;
+          };
+
+          const rows = members.map((m: any, idx: number) => ({
+            club_id: clubId,
+            name: m.member_name,
+            gender: toGender(m.gender),
+            grade: m.grade || null,
+            is_captain: m.member_name === entry.captain_name,
+            member_order: m.member_order || idx + 1,
+          }));
+
+          const { error: insertErr } = await appB.from('club_members').insert(rows);
+          if (insertErr) {
+            errors.push(`${entry.club_name} insert: ${insertErr.message}`);
+          }
+        }
+
+        // 동기화 로그
+        await appB.from('sync_log').insert({
+          event_id,
+          sync_type: 'team',
+          app_a_record_id: entry.id,
+          app_b_record_id: clubId,
+          app_b_table: 'clubs',
+          status: 'synced',
+        });
+
+        syncedCount++;
+      } catch (err: any) {
+        errors.push(`${entry.club_name}: ${err.message}`);
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      synced: syncedCount,
+      skipped: skippedCount,
+      total: entries.length,
+      team_match_type: teamMatchType,   // ★ 응답에 경기방식 포함
+      rubber_count: rubberCount,        // ★ 응답에 rubber_count 포함
+      errors: errors.length > 0 ? errors : undefined,
+    }, { headers: corsHeaders });
+
+  } catch (err: any) {
+    return NextResponse.json({ success: false, error: err.message }, { status: 500, headers: corsHeaders });
+  }
+}
+
+============================================================
+FILE: src\app\api\sync\push-results\route.ts
+============================================================
+// ============================================================
+// [앱B] 개인전 본선 결과 → 앱A 전송 API
+// src/app/api/sync/push-results/route.ts
+//
+// 앱B의 FINALS 경기 결과를 앱A의 tournament_results에 전송
+// - 토너먼트 라운드로 순위 자동 계산
+// - 복식 팀 2명 각각 개별 포인트 부여
+// - 이름 + 클럽으로 앱A member 매칭
+// ★ 수정: p1_club / p2_club 개별 조회로 동명이인 오매칭 방지
+// ============================================================
+
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+export async function OPTIONS() {
+  return NextResponse.json({}, { headers: corsHeaders });
+}
+
+function getAppAClient() {
+  const url = process.env.APP_A_SUPABASE_URL!;
+  const key = process.env.APP_A_ANON_KEY;
+  if (!key) throw new Error('APP_A_ANON_KEY not set');
+  return createClient(url, key);
+}
+
+function getAppBServiceClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) throw new Error('SUPABASE_SERVICE_ROLE_KEY not set');
+  return createClient(url, key);
+}
+
+// ── 토너먼트 라운드 → 순위 매핑 ──
+function getRankFromRound(round: string, isWinner: boolean): string {
+  const r = round.toUpperCase().replace(/\s/g, '');
+
+  if (r === 'F' || r === 'FINAL' || r === '결승') {
+    return isWinner ? '우승' : '준우승';
+  }
+  if (r === 'SF' || r === 'SEMIFINAL' || r === '4강' || r === 'R4') {
+    return '4강';
+  }
+  if (r === 'QF' || r === 'QUARTERFINAL' || r === '8강' || r === 'R8') {
+    return '8강';
+  }
+  if (r === 'R16' || r === '16강') {
+    return '16강';
+  }
+  if (r === 'R32' || r === '32강') {
+    return '32강';
+  }
+  return '참가';
+}
+
+// ── 각 팀의 최고 순위만 유지 ──
+const RANK_PRIORITY: Record<string, number> = {
+  '우승': 1, '준우승': 2, '4강': 3, '8강': 4, '16강': 5, '32강': 6, '참가': 7,
+};
+
+// ── 앱A에서 이름+클럽으로 회원 매칭 ──
+async function findMemberByNameAndClub(
+  appA: any,
+  playerName: string,
+  clubName: string | null,
+): Promise<{ member_id: string; name: string } | null> {
+  // 1차: 이름 + 클럽 매칭
+  if (clubName) {
+    const { data } = await appA
+      .from('members')
+      .select('member_id, name, display_name')
+      .eq('name', playerName)
+      .eq('club', clubName)
+      .neq('status', '삭제')
+      .limit(1);
+
+    if (data && data.length === 1) {
+      return { member_id: data[0].member_id, name: data[0].display_name || data[0].name };
+    }
+
+    // display_name으로도 시도
+    const { data: data2 } = await appA
+      .from('members')
+      .select('member_id, name, display_name')
+      .eq('display_name', playerName)
+      .eq('club', clubName)
+      .neq('status', '삭제')
+      .limit(1);
+
+    if (data2 && data2.length === 1) {
+      return { member_id: data2[0].member_id, name: data2[0].display_name || data2[0].name };
+    }
+  }
+
+  // 2차: 이름만으로 매칭 (1명만 있을 때)
+  const { data: byName } = await appA
+    .from('members')
+    .select('member_id, name, display_name')
+    .or(`name.eq.${playerName},display_name.eq.${playerName}`)
+    .neq('status', '삭제');
+
+  if (byName && byName.length === 1) {
+    return { member_id: byName[0].member_id, name: byName[0].display_name || byName[0].name };
+  }
+
+  // 매칭 실패
+  return null;
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const { event_id, app_a_event_id, tournament_name, tournament_date } = await request.json();
+
+    if (!event_id || !app_a_event_id) {
+      return NextResponse.json(
+        { success: false, error: 'event_id와 app_a_event_id가 필요합니다.' },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+
+    const appA = getAppAClient();
+    const appB = getAppBServiceClient();
+
+    // ── 1. 앱B에서 본선 경기 조회 ──
+    const { data: matches, error: matchErr } = await appB
+      .from('matches')
+      .select('id, round, status, score, team_a_id, team_b_id, winner_team_id, division_id')
+      .eq('event_id', event_id)
+      .eq('stage', 'FINALS')
+      .eq('status', 'FINISHED');
+
+    if (matchErr) {
+      return NextResponse.json(
+        { success: false, error: '앱B 경기 조회 실패: ' + matchErr.message },
+        { status: 500, headers: corsHeaders },
+      );
+    }
+
+    if (!matches || matches.length === 0) {
+      return NextResponse.json(
+        { success: true, message: '전송할 본선 결과가 없습니다.', synced: 0 },
+        { headers: corsHeaders },
+      );
+    }
+
+    // ── 2. 관련 팀 정보 조회 ──
+    // ★ 수정: p1_club, p2_club 추가 조회
+    const teamIds = [...new Set(matches.flatMap(m => [m.team_a_id, m.team_b_id].filter(Boolean)))];
+    const { data: teamsData } = await appB
+      .from('teams')
+      .select('id, player1_name, player2_name, division_name, club_name, p1_club, p2_club')
+      .in('id', teamIds);
+
+    const teamMap = new Map((teamsData || []).map(t => [t.id, t]));
+
+    // ── 3. 부서 정보 조회 ──
+    const divIds = [...new Set(matches.map(m => m.division_id).filter(Boolean))];
+    const { data: divsData } = await appB
+      .from('divisions')
+      .select('id, name')
+      .in('id', divIds);
+
+    const divMap = new Map((divsData || []).map(d => [d.id, d.name]));
+
+    // ── 4. 각 팀의 최고 순위 계산 ──
+    const teamBestRank = new Map<string, { rank: string; divisionName: string }>();
+
+    for (const match of matches) {
+      if (!match.round || !match.winner_team_id) continue;
+
+      const loserId = match.team_a_id === match.winner_team_id ? match.team_b_id : match.team_a_id;
+      const divName = divMap.get(match.division_id) || '';
+
+      // 승자 순위
+      const winnerRank = getRankFromRound(match.round, true);
+      const existing = teamBestRank.get(match.winner_team_id);
+      if (!existing || RANK_PRIORITY[winnerRank] < RANK_PRIORITY[existing.rank]) {
+        teamBestRank.set(match.winner_team_id, { rank: winnerRank, divisionName: divName });
+      }
+
+      // 패자 순위
+      if (loserId) {
+        const loserRank = getRankFromRound(match.round, false);
+        const existingLoser = teamBestRank.get(loserId);
+        if (!existingLoser || RANK_PRIORITY[loserRank] < RANK_PRIORITY[existingLoser.rank]) {
+          teamBestRank.set(loserId, { rank: loserRank, divisionName: divName });
+        }
+      }
+    }
+
+    // ── 5. 앱A에 포인트 규정 조회 ──
+    const { data: pointRules } = await appA.from('point_rules').select('*');
+    const RANK_MAP: Record<string, string> = {
+      '우승': 'points_1', '준우승': 'points_2', '4강': 'points_3',
+      '8강': 'points_4', '16강': 'points_5', '32강': 'points_6', '참가': 'points_7',
+    };
+
+    function calcPoints(division: string, rank: string): number {
+      if (!pointRules) return 0;
+      const rule = pointRules.find((r: any) => r.division === division);
+      if (!rule) return 0;
+      const col = RANK_MAP[rank];
+      return col ? (rule[col] || 0) : 0;
+    }
+
+    // ── 6. 앱B 이벤트 정보 (대회명, 날짜) ──
+    const { data: eventData } = await appB.from('events').select('name, date').eq('id', event_id).single();
+    const tourName = tournament_name || eventData?.name || '대회';
+    const tourDate = tournament_date || eventData?.date || new Date().toISOString().slice(0, 10);
+    const seasonYear = parseInt(tourDate.substring(0, 4)) || new Date().getFullYear();
+
+    // ── 7. tournaments_master upsert (앱A) ──
+    const { data: existingTour } = await appA
+      .from('tournaments_master')
+      .select('tournament_id')
+      .eq('tournament_name', tourName)
+      .limit(1);
+
+    if (!existingTour || existingTour.length === 0) {
+      await appA.from('tournaments_master').insert({
+        tournament_name: tourName,
+        date: tourDate,
+        year: tourDate.substring(0, 4),
+      });
+    }
+
+    // ── 8. 각 팀의 각 선수를 앱A에 결과 전송 ──
+    let syncedCount = 0;
+    let skippedCount = 0;
+    const errors: string[] = [];
+    const unmatchedPlayers: string[] = [];
+
+    for (const [teamId, { rank, divisionName }] of teamBestRank) {
+      const team = teamMap.get(teamId);
+      if (!team) continue;
+
+      const points = calcPoints(divisionName, rank);
+      // ★ 수정: player1은 p1_club, player2는 p2_club 사용 (없으면 club_name 폴백)
+      const players = [
+        { name: team.player1_name, club: team.p1_club || team.club_name },
+        { name: team.player2_name, club: team.p2_club || team.club_name },
+      ];
+
+      for (const player of players) {
+        if (!player.name) continue;
+
+        try {
+          // 앱A에서 회원 매칭
+          const member = await findMemberByNameAndClub(appA, player.name, player.club);
+
+          if (!member) {
+            unmatchedPlayers.push(`${player.name} (${player.club || '클럽없음'}) - ${divisionName} ${rank}`);
+            continue;
+          }
+
+          // 중복 체크
+          const { data: dup } = await appA
+            .from('tournament_results')
+            .select('id')
+            .eq('member_id', member.member_id)
+            .eq('tournament_name', tourName)
+            .eq('division', divisionName)
+            .eq('season_year', seasonYear)
+            .limit(1);
+
+          if (dup && dup.length > 0) {
+            skippedCount++;
+            continue;
+          }
+
+          // 결과 삽입
+          const { error: insertErr } = await appA.from('tournament_results').insert({
+            member_id: member.member_id,
+            member_name: member.name,
+            tournament_name: tourName,
+            date: tourDate,
+            season_year: seasonYear,
+            division: divisionName,
+            rank: rank,
+            points: points,
+          });
+
+          if (insertErr) {
+            errors.push(`${player.name}: ${insertErr.message}`);
+          } else {
+            syncedCount++;
+          }
+        } catch (e: any) {
+          errors.push(`${player.name}: ${e.message}`);
+        }
+      }
+    }
+
+    // ── 9. 동기화 로그 (앱B) ──
+    await appB.from('sync_log').insert({
+      event_id,
+      sync_type: 'individual',
+      app_a_record_id: `push-results-${Date.now()}`,
+      app_b_record_id: null,
+      app_b_table: 'matches→tournament_results',
+      status: errors.length === 0 && unmatchedPlayers.length === 0 ? 'synced' : 'partial',
+    });
+
+    return NextResponse.json({
+      success: true,
+      synced: syncedCount,
+      skipped: skippedCount,
+      total: teamBestRank.size * 2,
+      unmatched: unmatchedPlayers.length > 0 ? unmatchedPlayers : undefined,
+      errors: errors.length > 0 ? errors : undefined,
+    }, { headers: corsHeaders });
+
+  } catch (err: any) {
+    return NextResponse.json(
+      { success: false, error: err.message },
+      { status: 500, headers: corsHeaders },
+    );
+  }
+}
+
+
+============================================================
+FILE: src\app\api\sync\update-clubs\route.ts
+============================================================
+// src/app/api/sync/update-clubs/route.ts
+// 기존에 sync된 팀들의 p1_club, p2_club, team_name을 앱A에서 가져와 업데이트
+
+import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+
+function getAppAClient() {
+  const url = process.env.APP_A_SUPABASE_URL!;
+  const key = process.env.APP_A_ANON_KEY;
+  if (!key) throw new Error('APP_A_ANON_KEY not set');
+  return createClient(url, key);
+}
+function getAppBServiceClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) throw new Error('SUPABASE_SERVICE_ROLE_KEY not set');
+  return createClient(url, key);
+}
+
+function shortenClub(club: string | null | undefined): string {
+  if (!club) return '';
+  return club.replace(/테니스클럽$/, '').replace(/클럽$/, '').replace(/테니스$/, '').trim();
+}
+
+function buildTeamName(p1Name: string, p1Club: string | null, p2Name: string, p2Club: string | null): string {
+  const p1 = p1Club ? `${p1Name}(${p1Club})` : p1Name;
+  const p2 = p2Name ? (p2Club ? `${p2Name}(${p2Club})` : p2Name) : '';
+  return p2 ? `${p1}/${p2}` : p1;
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const { event_id, app_a_event_id } = await request.json();
+    if (!event_id || !app_a_event_id) {
+      return NextResponse.json({ success: false, error: 'event_id와 app_a_event_id 필요' }, { status: 400 });
+    }
+
+    const appA = getAppAClient();
+    const appB = getAppBServiceClient();
+
+    // 1. 앱B에서 해당 대회의 모든 팀 조회
+    const { data: teams, error: teamsErr } = await appB
+      .from('teams')
+      .select('id, player1_name, player2_name, p1_club, p2_club')
+      .eq('event_id', event_id);
+
+    if (teamsErr) {
+      return NextResponse.json({ success: false, error: '팀 조회 실패: ' + teamsErr.message }, { status: 500 });
+    }
+    if (!teams || teams.length === 0) {
+      return NextResponse.json({ success: true, updated: 0, message: '팀이 없습니다.' });
+    }
+
+    // 2. 앱A에서 선수 이름으로 club 조회
+    const playerNames = [...new Set(
+      teams.flatMap(t => [t.player1_name, t.player2_name].filter(Boolean))
+    )];
+
+    const { data: membersData } = await appA
+      .from('members')
+      .select('member_id, name, club')
+      .in('name', playerNames);
+
+    // 이름 → club 매핑 (동명이인 있을 수 있으므로 첫 번째 매칭 사용)
+    const nameClubMap: Record<string, string> = {};
+    for (const m of (membersData || [])) {
+      if (m.name && !nameClubMap[m.name]) {
+        nameClubMap[m.name] = m.club || '';
+      }
+    }
+
+    // 3. 각 팀 업데이트
+    let updatedCount = 0;
+    let skippedCount = 0;
+    const errors: string[] = [];
+
+    for (const team of teams) {
+      // 이미 클럽 정보 있으면 스킵
+      if (team.p1_club || team.p2_club) {
+        skippedCount++;
+        continue;
+      }
+
+      const p1Club = shortenClub(nameClubMap[team.player1_name]) || null;
+      const p2Club = shortenClub(nameClubMap[team.player2_name]) || null;
+
+      // 클럽 정보가 없으면 스킵
+      if (!p1Club && !p2Club) {
+        skippedCount++;
+        continue;
+      }
+
+      const newTeamName = buildTeamName(
+        team.player1_name, p1Club,
+        team.player2_name, p2Club
+      );
+
+      const { error } = await appB
+        .from('teams')
+        .update({
+          p1_club:   p1Club,
+          p2_club:   p2Club,
+          team_name: newTeamName,
+        })
+        .eq('id', team.id);
+
+      if (error) {
+        errors.push(`${team.player1_name}/${team.player2_name}: ${error.message}`);
+      } else {
+        updatedCount++;
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      total:   teams.length,
+      updated: updatedCount,
+      skipped: skippedCount,
+      errors:  errors.length > 0 ? errors : undefined,
+    });
+
+  } catch (err: any) {
+    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  }
+}
+
+

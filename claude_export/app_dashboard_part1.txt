@@ -1,0 +1,3595 @@
+============================================================
+FILE: src\app\dashboard\courts\page.tsx
+============================================================
+'use client'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
+import { supabase } from '@/lib/supabase'
+import { useEventId, useDivisions } from '@/components/useDashboard'
+import type { TieWithClubs } from '@/types/team'
+
+interface MatchSlim {
+  id: string; match_num: string; stage: string; round: string
+  team_a_name: string; team_b_name: string; team_a_id: string; team_b_id: string
+  court: string | null; court_order: number | null
+  status: string; score: string | null; winner_team_id: string | null
+  division_name: string; division_id: string; locked_by_participant: boolean
+  group_label: string | null; is_team_tie?: boolean; slot?: number | null
+}
+interface Venue {
+  id: string; name: string; short_name: string
+  court_count: number; courts: string[]; pin_plain: string
+}
+type CourtZones = Record<string, { group: string[]; finals: string[] }>
+type StageKey = 'GROUP' | 'R32' | 'R16' | 'QF' | 'SF' | 'F' | 'ALL_FINALS' | '128강' | '64강' | '32강' | '16강' | '8강' | '4강' | '결승'
+
+const STAGE_TABS: { key: StageKey; label: string }[] = [
+  { key: 'GROUP',      label: '예선' },
+  { key: '128강',      label: '128강' },
+  { key: '64강',       label: '64강' },
+  { key: '32강',       label: '32강' },
+  { key: '16강',       label: '16강' },
+  { key: '8강',        label: '8강' },
+  { key: '4강',        label: '4강' },
+  { key: '결승',       label: '결승' },
+  { key: 'ALL_FINALS', label: '전체본선' },
+]
+const ROUND_TO_STAGE: Record<string, string> = { R32:'FINALS', R16:'FINALS', QF:'FINALS', SF:'FINALS', F:'FINALS', '128강':'FINALS', '64강':'FINALS', '32강':'FINALS', '16강':'FINALS', '8강':'FINALS', '4강':'FINALS', '결승':'FINALS' }
+const ZONE_FINALS = new Set(['R16','QF','SF','F','16강','8강','4강','결승','128강','64강','32강'])
+const STAGE_LABEL: Record<string, string> = { GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', ALL_FINALS:'전체본선', '128강':'128강', '64강':'64강', '32강':'32강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
+
+// round 값 → 짧은 표시 라벨
+function getRoundBadge(round: string, groupLabel: string | null, divisionName: string): { round: string; div: string } {
+  const roundMap: Record<string, string> = {
+    'GROUP': '예선', 'R32': '32강', 'R16': '16강', 'QF': '8강', 'SF': '4강', 'F': '결승',
+    '128강': '128강', '64강': '64강', '32강': '32강', '16강': '16강', '8강': '8강', '4강': '4강', '결승': '결승',
+    'group': '예선', 'full_league': '리그',
+  }
+  const roundLabel = roundMap[round] || round
+  const label = groupLabel ? `${roundLabel} ${groupLabel}` : roundLabel
+  // 부서명 짧게: '베테랑부' → '베테', '챌린저부' → '챌린', '루키부' → '루키'
+  const divShort = divisionName.length <= 3 ? divisionName : divisionName.slice(0, 3)
+  return { round: label, div: divShort }
+}
+
+// "전태홍(제주하나)/강기호(행복배틀)" → [{ name, club }]
+function parsePlayers(raw: string): { name: string; club: string }[] {
+  if (!raw || raw === 'TBD' || raw === 'BYE') return []
+  return raw.split('/').map(p => {
+    const m = p.trim().match(/^(.+?)\((.+)\)$/)
+    return m ? { name: m[1].trim(), club: m[2].trim() } : { name: p.trim(), club: '' }
+  })
+}
+
+function makeCourtNames(shortName: string, count: number): string[] {
+  const prefix = shortName?.trim() || '코트'
+  return Array.from({ length: count }, (_, i) => `${prefix}-${i + 1}`)
+}
+function sortGroupMatches(list: MatchSlim[]): MatchSlim[] {
+  const rem = [...list], sorted: MatchSlim[] = []
+  while (rem.length > 0) {
+    const prev = sorted[sorted.length - 1]
+    const idx = prev ? rem.findIndex(m =>
+      m.team_a_id !== prev.team_a_id && m.team_a_id !== prev.team_b_id &&
+      m.team_b_id !== prev.team_a_id && m.team_b_id !== prev.team_b_id) : 0
+    sorted.push(rem.splice(idx >= 0 ? idx : 0, 1)[0])
+  }
+  return sorted
+}
+
+// ✅ [FIX-②] 전체 코트 목록(courtNames 배열)에서 글로벌 인덱스로 court_number 계산
+// 베뉴A(한라-1,한라-2,한라-3) + 베뉴B(제주-1,제주-2,제주-3) →
+// 글로벌: 한라-1=1, 한라-2=2, 한라-3=3, 제주-1=4, 제주-2=5, 제주-3=6
+function getGlobalCourtNumber(court: string, allCourtNames: string[]): number {
+  const idx = allCourtNames.indexOf(court)
+  if (idx >= 0) return idx + 1
+  // fallback: 마지막 '-' 뒤 숫자
+  const last = court.split('-').pop() || '0'
+  return /^\d+$/.test(last) ? parseInt(last, 10) : 0
+}
+
+// ✅ [FIX-②] 글로벌 court_number → courtName 역변환
+function globalCourtNumToName(courtNumber: number, allCourtNames: string[], venueList: Venue[]): string {
+  // allCourtNames 배열이 있으면 인덱스로 직접 역변환
+  if (allCourtNames.length > 0 && courtNumber >= 1 && courtNumber <= allCourtNames.length) {
+    return allCourtNames[courtNumber - 1]
+  }
+  // fallback: 베뉴 없거나 범위 초과
+  if (venueList.length === 0) return `코트-${courtNumber}`
+  const last = venueList[venueList.length - 1]
+  return `${last.short_name || last.name}-${courtNumber}`
+}
+
+export default function CourtsPage() {
+  const eventId = useEventId()
+  const { divisions } = useDivisions(eventId)
+  const [matches, setMatches]             = useState<MatchSlim[]>([])
+  const [allFinalsMatches, setAllFinalsMatches] = useState<MatchSlim[]>([])
+  const [ties, setTies]       = useState<TieWithClubs[]>([])
+  const [loading, setLoading] = useState(true)
+  const [msg, setMsg]         = useState('')
+  const [venues, setVenues]   = useState<Venue[]>([])
+  const [selectedVenue, setSelectedVenue] = useState<string>('ALL')
+
+  const venuesRef  = useRef<Venue[]>([])
+  const matchesRef = useRef<MatchSlim[]>([])
+  const tiesRef    = useRef<TieWithClubs[]>([])
+
+  const courtNames = React.useMemo(() => {
+    if (selectedVenue === 'ALL') {
+      if (venues.length === 0) return Array.from({ length: 10 }, (_, i) => `코트-${i + 1}`)
+      return venues.flatMap(v => makeCourtNames(v.short_name || v.name, v.court_count || v.courts?.length || 0))
+    }
+    const venue = venues.find(v => v.id === selectedVenue)
+    if (!venue) return []
+    return makeCourtNames(venue.short_name || venue.name, venue.court_count || venue.courts?.length || 0)
+  }, [selectedVenue, venues])
+
+  // ✅ [FIX-②] 전체 베뉴 기준 글로벌 코트 목록 (베뉴 선택과 무관하게 항상 전체)
+  const allCourtNames = React.useMemo(() => {
+    if (venuesRef.current.length === 0) return courtNames
+    return venuesRef.current.flatMap(v =>
+      makeCourtNames(v.short_name || v.name, v.court_count || v.courts?.length || 0)
+    )
+  }, [venues]) // venues state 변경 시 재계산
+
+  const [autoDiv, setAutoDiv]       = useState('')
+  const [autoStage, setAutoStage]   = useState<StageKey>('GROUP')
+  const [autoCourts, setAutoCourts] = useState<string[]>([])
+  const [assigning, setAssigning]   = useState(false)
+  useEffect(() => { setAutoCourts([]) }, [selectedVenue])
+
+  const [courtZones, setCourtZones] = useState<CourtZones>({})
+  const [zoneTab, setZoneTab]       = useState<'group' | 'finals'>('group')
+  const [zoneOpen, setZoneOpen]     = useState(false)
+  const [zoneSaving, setZoneSaving] = useState(false)
+
+  const [dragMatch, setDragMatch]     = useState<string | null>(null)
+  const [touchDragId, setTouchDragId] = useState<string | null>(null)
+  const touchDragIdRef = useRef<string | null>(null)
+  const [touchOver, setTouchOver]     = useState<string | null>(null)
+  const courtOrderRef = useRef<Record<string, number>>({})
+
+  const [viewFilter, setViewFilter] = useState('ALL')
+  const [editMatch, setEditMatch]   = useState<MatchSlim | null>(null)
+  const [editScore, setEditScore]   = useState('')
+  const [editWinner, setEditWinner] = useState<'A' | 'B' | ''>('')
+  const [submitting, setSubmitting] = useState(false)
+  const [notifying, setNotifying]   = useState<string | null>(null)
+  const [notifyMsg, setNotifyMsg]   = useState<Record<string, string>>({})
+
+  const [startTime, setStartTime]             = useState<string>('')
+  const startTimeRef                          = useRef<string>('')
+  const venueStartTimesRef                    = useRef<Record<string, string>>({})
+  const [venueStartTimes, setVenueStartTimes] = useState<Record<string, string>>({})
+  const [divMatchDates, setDivMatchDates]     = useState<Record<string, string>>({})
+  const [dateFilter, setDateFilter]           = useState<string>('ALL')
+
+  const filteredCourtNames = courtNames
+
+  useEffect(() => {
+    if (Object.keys(divMatchDates).length === 0) return
+    const dates = [...new Set(Object.values(divMatchDates))].sort()
+    if (dates.length > 0 && dateFilter === 'ALL') {
+      setDateFilter(dates[0])
+    }
+  }, [divMatchDates])
+
+  useEffect(() => { venuesRef.current  = venues  }, [venues])
+  useEffect(() => { matchesRef.current = matches }, [matches])
+  useEffect(() => { tiesRef.current    = ties    }, [ties])
+  useEffect(() => { startTimeRef.current       = startTime       }, [startTime])
+  useEffect(() => { venueStartTimesRef.current = venueStartTimes }, [venueStartTimes])
+
+  // ✅ [FIX-②] syncCourtOrderRef: 글로벌 court_number → courtName 역변환
+  function syncCourtOrderRef(matchList: MatchSlim[], tieList: TieWithClubs[]) {
+    const counter: Record<string, number> = {}
+    for (const m of matchList) {
+      if (m.court && m.court_order) counter[m.court] = Math.max(counter[m.court] || 0, m.court_order)
+    }
+    // 전체 베뉴 기준 글로벌 코트 목록
+    const allCN = venuesRef.current.flatMap(v =>
+      makeCourtNames(v.short_name || v.name, v.court_count || v.courts?.length || 0)
+    )
+    for (const t of tieList) {
+      const cn = (t as any).court_number; if (!cn) continue
+      const court = globalCourtNumToName(cn, allCN, venuesRef.current)
+      const order = (t as any).court_order
+      if (order) counter[court] = Math.max(counter[court] || 0, order)
+    }
+    courtOrderRef.current = counter
+  }
+
+  async function sendCourtNotify(court: string, trigger: 'manual' | 'finished' | 'court_changed', matchId?: string) {
+    setNotifying(court)
+    try {
+      const res  = await fetch('/api/notify/court', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ event_id:eventId, court, match_id:matchId, trigger }) })
+      const json = await res.json()
+      const m = json.sent > 0 ? `✅ ${json.sent}명 알림 전송` : `ℹ️ ${json.message || '구독자 없음'}`
+      setNotifyMsg(prev => ({ ...prev, [court]: m }))
+      setTimeout(() => setNotifyMsg(prev => { const n = { ...prev }; delete n[court]; return n }), 3000)
+    } catch { setNotifyMsg(prev => ({ ...prev, [court]: '❌ 전송 실패' })) }
+    finally { setNotifying(null) }
+  }
+
+  async function loadVenues() {
+    if (!eventId) return
+    const { data } = await supabase.from('venues').select('id, name, short_name, court_count, courts, pin_plain, start_time').eq('event_id', eventId).order('created_at')
+    const list = (data || []) as (Venue & { start_time?: string })[]
+    setVenues(list as Venue[])
+    const vtMap: Record<string, string> = {}
+    list.forEach(v => { if (v.start_time) vtMap[v.id] = v.start_time.slice(0,5) })
+    setVenueStartTimes(vtMap)
+  }
+  async function loadCourtZones() {
+    if (!eventId) return
+    try {
+      const { data, error } = await supabase.from('events').select('court_zones').eq('id', eventId).single()
+      if (!error && data?.court_zones) setCourtZones(data.court_zones as CourtZones)
+    } catch {}
+  }
+
+  async function loadEventSchedule() {
+    if (!eventId) return
+    try {
+      const { data: ev } = await supabase.from('events').select('start_time').eq('id', eventId).single()
+      if (ev?.start_time) setStartTime(ev.start_time.slice(0, 5))
+    } catch {}
+    try {
+      const { data: divs } = await supabase.from('divisions').select('id, match_date').eq('event_id', eventId)
+      if (divs) {
+        const map: Record<string, string> = {}
+        divs.forEach(d => { if (d.match_date) map[d.id] = d.match_date })
+        setDivMatchDates(map)
+      }
+    } catch {}
+  }
+
+  const loadAll = useCallback(async (showLoading = false) => {
+    if (!eventId) return
+    if (showLoading) setLoading(true)
+    try {
+      const [matchRes, tieRes] = await Promise.all([
+        supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
+          .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true }),
+        supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)')
+          .eq('event_id', eventId).order('court_order', { ascending:true, nullsFirst:false }),
+      ])
+      const matchList = (matchRes.data || [])
+        .filter((m: any) => m.score !== 'BYE')
+        .sort((a: any, b: any) => {
+          // court 없는 것은 뒤로
+          if ((a.court ?? '') !== (b.court ?? '')) return (a.court ?? '').localeCompare(b.court ?? '')
+          // court_order 오름차순, null → 9999
+          const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)
+          if (od !== 0) return od
+          // 동점 시 match_num으로 안정 정렬 (모바일 매 폴링 순서 고정)
+          return (a.match_num || '').localeCompare(b.match_num || '')
+        }) as MatchSlim[]
+      const tieList   = (tieRes.data  || []) as TieWithClubs[]
+      setMatches(matchList); matchesRef.current = matchList
+      setTies(tieList);      tiesRef.current    = tieList
+      syncCourtOrderRef(matchList, tieList)
+
+      // TBD 후보용: matches 테이블 직접 조회 (뷰 NULL팀 누락 방지)
+      const { data: rawFinals } = await supabase
+        .from('matches')
+        .select('id, match_num, round, slot, stage, division_id, team_a_id, team_b_id, winner_team_id, status')
+        .eq('event_id', eventId)
+        .eq('stage', 'FINALS')
+        .order('slot', { ascending: true, nullsFirst: true })
+      // team_id → name 매핑 (이미 로드한 matchList에서 추출)
+      const tNameMap: Record<string, string> = {}
+      matchList.forEach(m => {
+        if (m.team_a_id && m.team_a_name) tNameMap[m.team_a_id] = m.team_a_name
+        if (m.team_b_id && m.team_b_name) tNameMap[m.team_b_id] = m.team_b_name
+      })
+      const finalsWithNames = (rawFinals || []).map((m: any) => ({
+        ...m,
+        team_a_name: m.team_a_id ? (tNameMap[m.team_a_id] || '') : '',
+        team_b_name: m.team_b_id ? (tNameMap[m.team_b_id] || '') : '',
+        court: null, court_order: null, score: null,
+        division_name: '', group_label: null, locked_by_participant: false,
+      })) as MatchSlim[]
+      setAllFinalsMatches(finalsWithNames)
+    } catch {}
+    finally { if (showLoading) setLoading(false) }
+  }, [eventId])
+
+  async function loadMatches() {
+    if (!eventId) return
+    const { data } = await supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
+      .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true })
+    const list = (data || [])
+      .filter((m: any) => m.score !== 'BYE')
+      .sort((a: any, b: any) => {
+        if ((a.court ?? '') !== (b.court ?? '')) return (a.court ?? '').localeCompare(b.court ?? '')
+        const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)
+        if (od !== 0) return od
+        return (a.match_num || '').localeCompare(b.match_num || '')
+      }) as MatchSlim[]
+    setMatches(list); matchesRef.current = list
+    syncCourtOrderRef(list, tiesRef.current)
+  }
+  async function loadTies() {
+    if (!eventId) return
+    const { data } = await supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)').eq('event_id', eventId).order('court_order', { ascending:true, nullsFirst:false })
+    const list = (data || []) as TieWithClubs[]
+    setTies(list); tiesRef.current = list
+    syncCourtOrderRef(matchesRef.current, list)
+  }
+
+  useEffect(() => { if (!eventId) return; loadAll(true); loadVenues(); loadCourtZones(); loadEventSchedule() }, [eventId, loadAll])
+  useEffect(() => { if (!eventId) return; const iv = setInterval(() => loadAll(false), 15000); return () => clearInterval(iv) }, [eventId, loadAll])
+
+  async function saveCourtZones() {
+    setZoneSaving(true)
+    const { error } = await supabase.from('events').update({ court_zones: courtZones }).eq('id', eventId)
+    setZoneSaving(false)
+    if (error) { setMsg('❌ 구역 저장 실패: ' + error.message); return }
+    setMsg('✅ 코트 구역 저장됨')
+  }
+  function toggleZoneCourt(divId: string, court: string) {
+    setCourtZones(prev => {
+      const existing = prev[divId] || { group:[], finals:[] }
+      const cur = existing[zoneTab] || []
+      const updated = cur.includes(court) ? cur.filter(c => c !== court) : [...cur, court]
+      return { ...prev, [divId]: { ...existing, [zoneTab]: updated } }
+    })
+  }
+
+  function getCourtPool(divId: string, round: string): string[] {
+    const zoneKey    = ZONE_FINALS.has(round) ? 'finals' : 'group'
+    const zoneCourts = courtZones[divId]?.[zoneKey] || []
+    const pool = zoneCourts.length > 0 ? autoCourts.filter(c => zoneCourts.includes(c)) : autoCourts
+    return pool.length > 0 ? pool : autoCourts
+  }
+  function getLeastLoaded(pool: string[]): string {
+    return pool.reduce((best, c) => (courtOrderRef.current[c] || 0) < (courtOrderRef.current[best] || 0) ? c : best, pool[0])
+  }
+
+  // ✅ 스마트 코트 선택: 1순위 빈코트, 2순위 대기 적은 코트
+  function getSmartCourt(pool: string[], matchList: MatchSlim[]): string {
+    const pendingCount: Record<string, number> = {}
+    for (const c of pool) pendingCount[c] = 0
+    for (const m of matchList) {
+      if (m.court && pool.includes(m.court) && m.status === 'PENDING' && m.score !== 'BYE') {
+        pendingCount[m.court] = (pendingCount[m.court] || 0) + 1
+      }
+    }
+    const hasLive: Record<string, boolean> = {}
+    for (const m of matchList) {
+      if (m.court && pool.includes(m.court) && m.status === 'IN_PROGRESS') {
+        hasLive[m.court] = true
+      }
+    }
+    // 1순위: 완전 빈 코트 (live 없고 pending 0)
+    const empty = pool.filter(c => !hasLive[c] && pendingCount[c] === 0)
+    if (empty.length > 0) return empty[0]
+    // 2순위: pending 가장 적은 코트
+    return pool.reduce((best, c) =>
+      (pendingCount[c] ?? 999) < (pendingCount[best] ?? 999) ? c : best
+    , pool[0])
+  }
+
+  async function autoAssignByDivision() {
+    if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
+    if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
+    if (autoDiv === 'TEAM') {
+      const divTies = ties.filter(t => !t.is_bye && !(t as any).court_number && t.status !== 'completed')
+      if (divTies.length === 0) { setMsg('배정할 단체전 경기가 없습니다.'); return }
+      setAssigning(true)
+      try {
+        // ✅ [FIX-②] 글로벌 court_number: allCourtNames 배열 인덱스(1-based) 사용
+        // 베뉴A 3코트 + 베뉴B 3코트 → 한라-1=1,한라-2=2,한라-3=3,제주-1=4,제주-2=5,제주-3=6
+        for (let i = 0; i < divTies.length; i++) {
+          const court = autoCourts[i % autoCourts.length]
+          const courtNum = getGlobalCourtNumber(court, allCourtNames)
+          const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
+          await supabase.from('ties').update({ court_number:courtNum, court_order:nextOrder }).eq('id', divTies[i].id)
+        }
+        setMsg(`✅ [단체전] ${divTies.length}경기 배정 완료`); loadTies()
+      } finally { setAssigning(false) }
+      return
+    }
+    setAssigning(true); setMsg('')
+    try {
+      if      (autoStage === 'GROUP')       await assignGroup()
+      else if (autoStage === 'ALL_FINALS')  await assignAllFinals()
+      else                                  await assignFinals(autoStage)
+    } finally { setAssigning(false) }
+  }
+
+  async function assignGroup() {
+    const targets = matches.filter(m => m.division_id === autoDiv && m.stage === 'GROUP' && !m.court && m.status !== 'FINISHED')
+    if (targets.length === 0) { setMsg('배정할 예선 경기가 없습니다.'); return }
+    const pool = getCourtPool(autoDiv, 'group')
+    const byGroup = new Map<string, MatchSlim[]>()
+    for (const m of targets) { const k = m.group_label || 'none'; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k)!.push(m) }
+    const groups = [...byGroup.entries()].sort((a, b) => b[1].length - a[1].length)
+    const updates: { id: string; court: string; court_order: number }[] = []
+    for (const [, groupMatches] of groups) {
+      const court = getLeastLoaded(pool)
+      for (const m of sortGroupMatches(groupMatches)) {
+        const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
+        updates.push({ id:m.id, court, court_order:nextOrder })
+      }
+    }
+    for (const u of updates) await supabase.from('matches').update({ court:u.court, court_order:u.court_order }).eq('id', u.id)
+    const divName = divisions.find(d => d.id === autoDiv)?.name || ''
+    const summary = pool.map(c => { const cnt = updates.filter(u => u.court === c).length; return cnt > 0 ? `${c}:${cnt}경기` : '' }).filter(Boolean).join(' | ')
+    setMsg(`✅ [${divName}] 예선 ${updates.length}경기 배정 완료 — ${summary}`); loadMatches()
+  }
+
+  async function assignFinals(round: string) {
+    const stageVal = ROUND_TO_STAGE[round] || 'FINALS'
+    const raw = matches.filter(m => m.division_id === autoDiv && m.stage === stageVal && m.round === round && !m.court && m.status !== 'FINISHED')
+    if (raw.length === 0) { setMsg(`배정할 ${STAGE_LABEL[round] || round} 경기가 없습니다.`); return }
+    // ✅ 양쪽 확정 경기 먼저, TBD 나중에
+    const targets = [
+      ...raw.filter(m => m.team_a_id && m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
+      ...raw.filter(m => !m.team_a_id || !m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
+    ]
+    const pool = getCourtPool(autoDiv, round)
+    const currentMatches = [...matchesRef.current]
+    const updates: { id: string; court: string; court_order: number }[] = []
+    for (const m of targets) {
+      const court = getSmartCourt(pool, currentMatches)
+      const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
+      updates.push({ id:m.id, court, court_order:nextOrder })
+      // 스냅샷에 반영해서 다음 경기 배정 시 코트 상태 반영
+      currentMatches.push({ ...m, court, court_order:nextOrder, status:'PENDING' })
+    }
+    for (const u of updates) await supabase.from('matches').update({ court:u.court, court_order:u.court_order }).eq('id', u.id)
+    const divName = divisions.find(d => d.id === autoDiv)?.name || ''
+    setMsg(`✅ [${divName}] ${STAGE_LABEL[round] || round} ${updates.length}경기 배정 완료`); loadMatches()
+  }
+
+  async function assignAllFinals() {
+    const divName = divisions.find(d => d.id === autoDiv)?.name || ''; let total = 0
+    const currentMatches = [...matchesRef.current]
+    for (const round of ['128강','64강','32강','16강','8강','4강','결승']) {
+      const pool = getCourtPool(autoDiv, round)
+      const raw  = matches.filter(m => m.division_id === autoDiv && m.stage === (ROUND_TO_STAGE[round]||'FINALS') && m.round === round && !m.court && m.status !== 'FINISHED')
+      if (raw.length === 0) continue
+      // ✅ 양쪽 확정 경기 먼저, TBD 나중에
+      const targets = [
+        ...raw.filter(m => m.team_a_id && m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
+        ...raw.filter(m => !m.team_a_id || !m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
+      ]
+      for (const m of targets) {
+        const court = getSmartCourt(pool, currentMatches)
+        const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
+        await supabase.from('matches').update({ court, court_order:nextOrder }).eq('id', m.id)
+        // 스냅샷에 반영해서 다음 경기 배정 시 코트 상태 반영
+        currentMatches.push({ ...m, court, court_order:nextOrder, status:'PENDING' })
+        total++
+      }
+    }
+    if (total === 0) { setMsg(`[${divName}] 배정할 본선 경기가 없습니다.`); return }
+    setMsg(`✅ [${divName}] 전체 본선 ${total}경기 미리배정 완료`); loadMatches()
+  }
+
+  async function assignItemToCourt(itemId: string, court: string) {
+    if (itemId.startsWith('tie_')) {
+      // ✅ [FIX-②] 드래그 배정도 글로벌 court_number 사용
+      const courtNum = getGlobalCourtNumber(court, allCourtNames)
+      const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
+      await supabase.from('ties').update({ court_number:courtNum, court_order:nextOrder }).eq('id', itemId.replace('tie_',''))
+      sendCourtNotify(court, 'court_changed'); loadTies()
+    } else {
+      const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
+      await supabase.from('matches').update({ court, court_order:nextOrder }).eq('id', itemId)
+      sendCourtNotify(court, 'court_changed', itemId); loadMatches()
+    }
+  }
+  async function unassignItem(itemId: string) {
+    if (itemId.startsWith('tie_')) { await supabase.from('ties').update({ court_number:null, court_order:null }).eq('id', itemId.replace('tie_','')); loadTies() }
+    else { await supabase.from('matches').update({ court:null, court_order:null }).eq('id', itemId); loadMatches() }
+  }
+  async function moveMatchOrder(matchId: string, direction: 'up' | 'down') {
+    if (matchId.startsWith('tie_')) return
+    const m = matches.find(mm => mm.id === matchId); if (!m || !m.court || !m.court_order) return
+    const cms = matches.filter(mm => mm.court === m.court).sort((a,b) => (a.court_order||0)-(b.court_order||0))
+    const idx = cms.findIndex(mm => mm.id === matchId)
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (swapIdx < 0 || swapIdx >= cms.length) return
+    const other = cms[swapIdx]
+    await supabase.from('matches').update({ court_order:other.court_order }).eq('id', m.id)
+    await supabase.from('matches').update({ court_order:m.court_order   }).eq('id', other.id)
+    loadMatches()
+  }
+
+  async function clearDivisionAssignments(divId: string) {
+    if (divId === 'TEAM') {
+      if (!confirm('[단체전] 코트 배정을 모두 초기화하시겠습니까?')) return
+      for (const t of ties.filter(t => t.court_number))
+        await supabase.from('ties').update({ court_number:null, court_order:null }).eq('id', t.id)
+      courtOrderRef.current = {}; setMsg('✅ [단체전] 초기화 완료'); loadTies(); return
+    }
+    const divName = divisions.find(d => d.id === divId)?.name || ''
+    if (!confirm(`[${divName}] 코트 배정을 모두 초기화하시겠습니까?`)) return
+    const divMatches = matches.filter(m => m.division_id === divId && m.court)
+    for (const m of divMatches) await supabase.from('matches').update({ court:null, court_order:null }).eq('id', m.id)
+    const affectedCourts = new Set(divMatches.map(m => m.court!))
+    const remaining = matches.filter(m => m.division_id !== divId && m.court && m.court_order)
+    const newCounter: Record<string,number> = {}
+    for (const m of remaining) if (m.court && m.court_order) newCounter[m.court] = Math.max(newCounter[m.court]||0, m.court_order)
+    const updated = { ...courtOrderRef.current }
+    for (const court of affectedCourts) updated[court] = newCounter[court] || 0
+    courtOrderRef.current = updated; setMsg(`✅ [${divName}] 초기화 완료`); loadMatches()
+  }
+  async function clearAllAssignments() {
+    if (!confirm('전체 코트 배정을 초기화하시겠습니까?')) return
+    await supabase.from('matches').update({ court:null, court_order:null }).eq('event_id', eventId)
+    for (const t of ties.filter(t => t.court_number))
+      await supabase.from('ties').update({ court_number:null, court_order:null }).eq('id', t.id)
+    courtOrderRef.current = {}; setMsg('✅ 전체 초기화'); loadMatches(); loadTies()
+  }
+
+  function openScoreEdit(m: MatchSlim) {
+    if (m.is_team_tie) return
+    setEditMatch(m); setEditScore(m.score || '')
+    setEditWinner(m.winner_team_id === m.team_a_id ? 'A' : m.winner_team_id === m.team_b_id ? 'B' : '')
+    setMsg('')
+  }
+
+  async function submitResult() {
+    if (!editMatch || !editScore || !editWinner) { setMsg('점수와 승자를 모두 입력해주세요.'); return }
+    setSubmitting(true); setMsg('')
+    const winnerId = editWinner === 'A' ? editMatch.team_a_id : editMatch.team_b_id
+    try {
+      const { error: rpcError } = await supabase.rpc('rpc_submit_match_result', { p_match_id:editMatch.id, p_score:editScore, p_winner_team_id:winnerId })
+      if (rpcError) {
+        if (editMatch.status === 'FINISHED') {
+          const { error: ue } = await supabase.from('matches').update({ score:editScore, winner_team_id:winnerId, status:'FINISHED', ended_at:new Date().toISOString() }).eq('id', editMatch.id)
+          if (ue) { setMsg('❌ ' + ue.message); return }
+          setMsg('✅ 결과 강제 수정됨 (운영자 모드)')
+        } else { setMsg('❌ ' + rpcError.message); return }
+      } else {
+        setMsg('✅ 결과 저장됨')
+        if (editMatch.court) sendCourtNotify(editMatch.court, 'finished')
+      }
+      setEditMatch(null)
+      await loadMatches()
+    } finally { setSubmitting(false) }
+  }
+
+  async function startMatch(matchId: string) {
+    if (matchId.startsWith('tie_')) return
+    await supabase.from('matches').update({ status:'IN_PROGRESS' }).eq('id', matchId); loadMatches()
+  }
+
+  function handleDragOver(e: React.DragEvent) { e.preventDefault() }
+  function handleDropOnCourt(court: string) { if (!dragMatch) return; assignItemToCourt(dragMatch, court); setDragMatch(null) }
+  function handleDropOnUnassigned() { if (!dragMatch) return; unassignItem(dragMatch); setDragMatch(null) }
+  function handleTouchStart(id: string) { touchDragIdRef.current = id; setTouchDragId(id) }
+  const touchOverRef = useRef<string | null>(null)
+  function handleTouchMove(e: React.TouchEvent) {
+    // 드래그 중이 아니면 즉시 리턴 — 일반 스크롤 시 리렌더 방지
+    if (!touchDragIdRef.current) return
+    e.preventDefault()
+    const touch = e.touches[0]
+    const el = document.elementFromPoint(touch.clientX, touch.clientY)
+    const courtEl      = el?.closest('[data-court]') as HTMLElement | null
+    const unassignedEl = el?.closest('[data-unassigned]') as HTMLElement | null
+    const next = courtEl ? 'court:' + courtEl.dataset.court : unassignedEl ? 'unassigned' : null
+    // 값이 바뀔 때만 state 업데이트 — 불필요한 리렌더 제거
+    if (next !== touchOverRef.current) {
+      touchOverRef.current = next
+      setTouchOver(next)
+    }
+  }
+  function handleTouchEnd() {
+    const dragId = touchDragIdRef.current
+    const over   = touchOverRef.current
+    touchDragIdRef.current = null; touchOverRef.current = null
+    setTouchDragId(null); setTouchOver(null)
+    if (!dragId || !over) return
+    if (over === 'unassigned') unassignItem(dragId)
+    else if (over.startsWith('court:')) assignItemToCourt(dragId, over.slice(6))
+  }
+
+  // ✅ [FIX-①②⑤] tiesToMatchSlim: 글로벌 court_number → courtName, DB 실제 court_order 사용
+  function tiesToMatchSlim(tieList: TieWithClubs[]): MatchSlim[] {
+    return tieList.filter(t => !t.is_bye).map(t => {
+      const cn = (t as any).court_number
+      let courtName: string | null = null
+      if (cn != null) {
+        // ✅ [FIX-①②] 글로벌 court_number → courtName 역변환 (short_name-N 포맷 통일)
+        courtName = globalCourtNumToName(cn, allCourtNames, venuesRef.current)
+      }
+      const statusMap: Record<string,string> = { pending:'PENDING', lineup_phase:'PENDING', lineup_ready:'PENDING', in_progress:'IN_PROGRESS', completed:'FINISHED' }
+      return {
+        id:`tie_${t.id}`, match_num:`T#${t.tie_order}`, stage:'TEAM', round:t.round||'group',
+        team_a_name:t.club_a?.name||'TBD', team_b_name:t.club_b?.name||'TBD',
+        team_a_id:t.club_a_id||'', team_b_id:t.club_b_id||'',
+        court:courtName,
+        // ✅ [FIX-⑤] DB 실제 court_order 사용 (100+tie_order 하드코딩 제거)
+        court_order:cn ? ((t as any).court_order ?? t.tie_order ?? 999) : null,
+        status:statusMap[t.status]||'PENDING',
+        score:(t.status==='completed'||t.status==='in_progress') ? `${t.club_a_rubbers_won ?? 0}-${t.club_b_rubbers_won ?? 0}` : null,
+        winner_team_id:t.winning_club_id||null,
+        division_name:'단체전', division_id:t.division_id||'TEAM',
+        locked_by_participant:false, group_label:null, is_team_tie:true,
+      }
+    })
+  }
+
+  const tieMatches  = tiesToMatchSlim(ties)
+  const allItems    = [...matches, ...tieMatches]
+
+  const divColors: Record<string,string> = { TEAM:'#2563eb' }
+  const colors = ['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#10b981','#ef4444']
+  divisions.forEach((d, i) => { divColors[d.id] = colors[i % colors.length] })
+
+  const hasTeamTies       = ties.filter(t => !t.is_bye).length > 0
+  const selectedVenueInfo = venues.find(v => v.id === selectedVenue)
+
+  if (!eventId) return <p className="text-stone-400">설정에서 대회를 선택해주세요.</p>
+  if (loading)  return <p className="text-stone-400">불러오는 중..</p>
+
+  const uniqueDates = [...new Set(Object.values(divMatchDates))].sort()
+  const dateDivIds = dateFilter === 'ALL'
+    ? null
+    : Object.entries(divMatchDates).filter(([, d]) => d === dateFilter).map(([id]) => id)
+
+  const filteredDivisions = dateDivIds
+    ? divisions.filter(d => dateDivIds.includes(d.id))
+    : divisions
+  const dateFilteredItems = dateDivIds
+    ? allItems.filter(m => dateDivIds.includes(m.division_id) || m.is_team_tie)
+    : allItems
+
+  const byCourt = new Map<string, MatchSlim[]>()
+  for (const name of filteredCourtNames) byCourt.set(name, [])
+  for (const m of dateFilteredItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
+
+  const filteredAll = viewFilter==='ALL' ? dateFilteredItems : viewFilter==='TEAM' ? dateFilteredItems.filter(m=>m.is_team_tie) : dateFilteredItems.filter(m=>m.division_id===viewFilter)
+  const unassigned  = filteredAll
+    .filter(m => !m.court && m.status !== 'FINISHED')
+    .sort((a,b) => (a.match_num || '').localeCompare(b.match_num || ''))
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <h1 className="text-2xl font-bold">🎾 코트 배정</h1>
+        {startTime && <span className="text-xs text-stone-500">⏰ {startTime} 자동시작</span>}
+      </div>
+
+      {msg && <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('✅') ? 'bg-tennis-50 text-tennis-700' : 'bg-red-50 text-red-600'}`}>{msg}</div>}
+
+      {/* 날짜 필터 */}
+      {uniqueDates.length > 0 && (
+        <div className="bg-white rounded-xl border p-3 mb-4">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-stone-500 font-medium whitespace-nowrap">📅 날짜:</span>
+            {uniqueDates.map(date => {
+              const label = new Date(date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short' })
+              const divsOnDate = Object.entries(divMatchDates).filter(([, d]) => d === date).map(([id]) => divisions.find(div => div.id === id)?.name).filter(Boolean)
+              return (
+                <button key={date} onClick={() => { setDateFilter(date); setAutoDiv(''); setViewFilter('ALL') }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${dateFilter === date ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-stone-600 border-stone-300 hover:border-blue-400'}`}>
+                  {label} <span className="opacity-70">({divsOnDate.join('·')})</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 경기장 선택 */}
+      {venues.length > 0 && (
+        <div className="bg-white rounded-xl border p-3 mb-4">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-stone-500 font-medium whitespace-nowrap">📍 경기장:</span>
+            <button onClick={() => setSelectedVenue('ALL')} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${selectedVenue==='ALL' ? 'bg-[#2d5016] text-white border-[#2d5016]' : 'bg-white text-stone-600 border-stone-300 hover:border-stone-400'}`}>🏟 전체 보기</button>
+            {venues.map(v => {
+              const count = v.court_count || v.courts?.length || 0; const sn = v.short_name || v.name
+              return <button key={v.id} onClick={() => setSelectedVenue(v.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${selectedVenue===v.id ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-stone-600 border-stone-300 hover:border-orange-400'}`}>{v.name} <span className="opacity-70">({sn}-1~{sn}-{count})</span></button>
+            })}
+          </div>
+          {selectedVenueInfo && <p className="text-xs text-stone-400 mt-2">{selectedVenueInfo.short_name}-1 ~ {selectedVenueInfo.short_name}-{selectedVenueInfo.court_count || selectedVenueInfo.courts?.length || 0} · PIN: {selectedVenueInfo.pin_plain}</p>}
+        </div>
+      )}
+
+      {/* 자동 배정 패널 */}
+      <div className="bg-white rounded-xl border p-4 mb-4 space-y-4">
+        <h3 className="font-bold text-sm">🎯 자동 코트 배정</h3>
+        <div className="flex flex-wrap gap-3 items-start">
+          <div>
+            <label className="text-xs text-stone-500 block mb-1">부문</label>
+            <select value={autoDiv} onChange={e => setAutoDiv(e.target.value)} className="border rounded-lg px-3 py-2 text-sm min-w-[140px]">
+              <option value="">부문 선택</option>
+              {filteredDivisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              {hasTeamTies && <option value="TEAM">🏆 단체전</option>}
+            </select>
+          </div>
+          {autoDiv && autoDiv !== 'TEAM' && (
+            <div>
+              <label className="text-xs text-stone-500 block mb-1">스테이지</label>
+              <div className="flex flex-wrap gap-1">
+                {(() => {
+                  // 해당 부문의 실제 존재하는 본선 라운드만 추출
+                  const existingRounds = new Set(
+                    matches
+                      .filter(m => m.division_id === autoDiv && m.stage === 'FINALS')
+                      .map(m => m.round)
+                  )
+                  const activeTabs = STAGE_TABS.filter(tab => {
+                    if (tab.key === 'GROUP') return true
+                    if (tab.key === 'ALL_FINALS') return existingRounds.size >= 2
+                    return existingRounds.has(tab.key)
+                  })
+                  return activeTabs.map(tab => (
+                    <button key={tab.key} onClick={() => setAutoStage(tab.key)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${autoStage===tab.key ? (tab.key==='ALL_FINALS'?'bg-purple-600 text-white border-purple-600':'bg-tennis-600 text-white border-tennis-600') : 'border-stone-300 hover:border-tennis-400'}`}>
+                      {tab.label}
+                    </button>
+                  ))
+                })()}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <label className="text-xs text-stone-500">배정 코트</label>
+            <button onClick={() => setAutoCourts(autoCourts.length===filteredCourtNames.length ? [] : [...filteredCourtNames])}
+              className="text-xs px-2 py-0.5 rounded border border-dashed border-stone-400 text-stone-500 hover:border-tennis-500 hover:text-tennis-600 transition-all">
+              {autoCourts.length===filteredCourtNames.length ? '전체 해제' : '전체 선택'}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {filteredCourtNames.map(c => (
+              <button key={c} onClick={() => setAutoCourts(prev => prev.includes(c) ? prev.filter(x=>x!==c) : [...prev,c])}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${autoCourts.includes(c) ? 'bg-tennis-600 text-white border-tennis-600' : 'bg-white text-stone-600 border-stone-300 hover:border-tennis-400'}`}>
+                {c}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          <button onClick={autoAssignByDivision} disabled={!autoDiv || autoCourts.length===0 || assigning}
+            className="bg-tennis-600 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-tennis-700 disabled:opacity-50 flex items-center gap-2">
+            {assigning ? <><span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />배정 중...</> : `🎯 ${autoDiv && autoDiv!=='TEAM' ? STAGE_LABEL[autoStage] : ''} 자동 배정`}
+          </button>
+        </div>
+
+        {/* 코트 구역 설정 (접기) */}
+        <div className="border-t pt-3">
+          <button onClick={() => setZoneOpen(!zoneOpen)} className="flex items-center gap-2 text-xs font-medium text-stone-600 hover:text-stone-800 transition-all">
+            <span>{zoneOpen ? '▾' : '▸'}</span><span>부서별 코트 구역 설정</span><span className="text-stone-400 font-normal">(예선용 / 본선 16강~)</span>
+          </button>
+          {zoneOpen && (
+            <div className="mt-3 space-y-3">
+              <div className="flex gap-1">
+                {(['group','finals'] as const).map(t => (
+                  <button key={t} onClick={() => setZoneTab(t)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${zoneTab===t ? 'bg-stone-700 text-white border-stone-700' : 'border-stone-300 text-stone-500 hover:border-stone-500'}`}>
+                    {t==='group' ? '예선용 구역' : '본선용 구역 (16강~)'}
+                  </button>
+                ))}
+              </div>
+              {filteredDivisions.map(div => {
+                const selected = courtZones[div.id]?.[zoneTab] || []
+                return (
+                  <div key={div.id} className="flex items-start gap-3">
+                    <div className="flex items-center gap-1.5 w-24 flex-shrink-0 pt-1">
+                      <span style={{ width:8, height:8, borderRadius:'50%', background:divColors[div.id], display:'inline-block', flexShrink:0 }} />
+                      <span className="text-xs font-medium text-stone-700 truncate">{div.name}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {filteredCourtNames.map(c => {
+                        const inZone = selected.includes(c)
+                        return (
+                          <button key={c} onClick={() => toggleZoneCourt(div.id, c)}
+                            style={{ borderColor:inZone?divColors[div.id]:undefined, background:inZone?divColors[div.id]+'20':undefined }}
+                            className={`px-2 py-1 rounded text-xs font-medium border transition-all ${inZone?'text-stone-700':'border-stone-200 text-stone-400 hover:border-stone-400'}`}>{c}</button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+              <button onClick={saveCourtZones} disabled={zoneSaving} className="bg-stone-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-stone-800 disabled:opacity-50">{zoneSaving ? '저장 중...' : '💾 구역 설정 저장'}</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 뷰 필터 / 초기화 */}
+      <div className="bg-white rounded-xl border p-3 mb-4">
+        <div className="flex flex-wrap gap-2 items-center">
+          <div className="flex gap-1 bg-stone-100 rounded-lg p-0.5">
+            <button onClick={() => setViewFilter('ALL')} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter==='ALL'?'bg-white shadow-sm':''}`}>전체</button>
+            {filteredDivisions.map(d => <button key={d.id} onClick={() => setViewFilter(d.id)} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter===d.id?'bg-white shadow-sm':''}`}>{d.name}</button>)}
+            {hasTeamTies && <button onClick={() => setViewFilter('TEAM')} className={`px-3 py-1 rounded-md text-xs font-medium ${viewFilter==='TEAM'?'bg-white shadow-sm':''}`}>단체전</button>}
+          </div>
+          <div className="ml-auto flex gap-2">
+            {autoDiv && <button onClick={() => clearDivisionAssignments(autoDiv)} className="text-xs text-stone-400 hover:text-red-500 border border-stone-200 px-2 py-1 rounded-lg">{autoDiv==='TEAM'?'단체전':divisions.find(d=>d.id===autoDiv)?.name} 초기화</button>}
+            <button onClick={clearAllAssignments} className="text-xs text-stone-400 hover:text-red-500 border border-stone-200 px-2 py-1 rounded-lg">전체 초기화</button>
+          </div>
+        </div>
+      </div>
+
+      {/* ═══ 메인 그리드: 미배정 + 코트 ═══ */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 items-start">
+
+        {/* 미배정 컬럼 */}
+        <UnassignedColumn
+          unassigned={unassigned}
+          divColors={divColors}
+          touchOver={touchOver}
+          onDragOver={handleDragOver}
+          onDrop={handleDropOnUnassigned}
+          onDragStart={setDragMatch}
+          onClickScore={openScoreEdit}
+          onClickUnassign={unassignItem}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+        />
+
+        {/* 코트 그리드 */}
+        <div className="lg:col-span-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+          {filteredCourtNames.map(court => {
+            const courtItems = (byCourt.get(court)||[]).sort((a,b)=> {
+              const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)
+              if (od !== 0) return od
+              return (a.match_num || '').localeCompare(b.match_num || '')
+            })
+            const finished   = courtItems.filter(m=>m.status==='FINISHED').length
+            const activeIdx  = courtItems.findIndex(m=>m.status==='IN_PROGRESS')
+            const pendingIdx = courtItems.findIndex(m=>m.status==='PENDING')
+            const currentIdx = activeIdx>=0?activeIdx:pendingIdx
+            const isLive     = activeIdx>=0
+            const hasPending = courtItems.some(m=>m.status==='PENDING')
+            const zoneDiv = autoDiv && autoDiv!=='TEAM' ? (() => {
+              const z = courtZones[autoDiv]; if (!z) return null
+              if (z.finals?.includes(court)) return { label:'본선', color:divColors[autoDiv] }
+              if (z.group?.includes(court))  return { label:'예선', color:divColors[autoDiv]+'99' }
+              return null
+            })() : null
+
+            return (
+              <div key={court} data-court={court}
+                onDragOver={handleDragOver} onDrop={() => handleDropOnCourt(court)}
+                className={`bg-white rounded-xl border overflow-hidden min-h-[100px] transition-all ${touchOver==='court:'+court?'ring-2 ring-tennis-400 bg-tennis-50':''}`}>
+
+                <div className={`px-3 py-2 font-bold text-sm flex items-center justify-between ${isLive?'bg-red-700':'bg-[#2d5016]'} text-white`}>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className={`font-bold ${court.length > 6 ? 'text-xs' : 'text-sm'}`}>{court}</span>
+                    {isLive && <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded-full animate-pulse flex-shrink-0">LIVE</span>}
+                    {zoneDiv && <span style={{ background:zoneDiv.color }} className="text-[9px] px-1 py-0.5 rounded text-white/90 flex-shrink-0">{zoneDiv.label}</span>}
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <span className="text-white/60 text-xs">{finished}/{courtItems.length}</span>
+                    <button onClick={() => sendCourtNotify(court,'manual')} disabled={notifying===court||!hasPending}
+                      className="text-white/80 hover:text-white disabled:opacity-30 text-sm leading-none">
+                      {notifying===court?'⏳':'🔔'}
+                    </button>
+                  </div>
+                </div>
+
+                {notifyMsg[court] && <div className="px-3 py-1 text-xs bg-amber-50 text-amber-800 border-b">{notifyMsg[court]}</div>}
+
+                <div className="p-1.5 space-y-1 max-h-[60vh] overflow-y-auto">
+                  {courtItems.filter(m=>m.status!=='FINISHED').map((m) => {
+                    const allIdx = courtItems.indexOf(m)
+                    let badge = ''
+                    if (m.status==='IN_PROGRESS') badge='🔴'
+                    else {
+                      if (currentIdx>=0&&allIdx===currentIdx) badge='🔴'
+                      else if (currentIdx>=0&&allIdx===currentIdx+1) badge='🟡'
+                      else if (currentIdx>=0&&allIdx===currentIdx+2) badge='🟢'
+                    }
+                    const firstPendingIdx = courtItems.findIndex(mm => mm.status === 'PENDING')
+                    const canStart = !m.is_team_tie && m.status === 'PENDING' && allIdx === firstPendingIdx
+                    return (
+                      <MatchChip key={m.id} m={m} badge={badge}
+                        isCurrentSlot={m.status==='PENDING'&&allIdx===currentIdx}
+                        divColor={divColors[m.division_id]}
+                        allMatches={allFinalsMatches.length > 0 ? allFinalsMatches : matches}
+                        onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
+                        onClickStart={canStart?()=>startMatch(m.id):undefined}
+                        onClickUnassign={() => unassignItem(m.id)}
+                        onMoveUp={!m.is_team_tie&&allIdx>0?()=>moveMatchOrder(m.id,'up'):undefined}
+                        onMoveDown={!m.is_team_tie&&allIdx<courtItems.length-1?()=>moveMatchOrder(m.id,'down'):undefined}
+                        onTouchStart={()=>handleTouchStart(m.id)}
+                        onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} />
+                    )
+                  })}
+
+                  {finished > 0 && (
+                    <FinishedCourtItems
+                      items={courtItems.filter(m=>m.status==='FINISHED')}
+                      onClickScore={openScoreEdit}
+                      onClickUnassign={unassignItem}
+                      divColors={divColors} />
+                  )}
+
+                  {courtItems.length===0 && (
+                    <div className="text-xs text-stone-300 text-center py-6 border-2 border-dashed rounded-lg">
+                      드래그 또는 자동배정
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* 점수 입력 모달 */}
+      {editMatch && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setEditMatch(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+            {editMatch.status==='FINISHED' && (
+              <div className="mb-4 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2">
+                <span className="text-lg">⚠️</span>
+                <div>
+                  <p className="text-xs font-semibold text-amber-800">완료된 경기 수정 (운영자 모드)</p>
+                  <p className="text-xs text-amber-600 mt-0.5">기존 결과: {editMatch.score||'-'}</p>
+                </div>
+              </div>
+            )}
+            <h3 className="font-bold text-lg mb-1">경기 결과 입력/수정</h3>
+            <p className="text-xs text-stone-400 mb-4">
+              {editMatch.match_num} · {editMatch.division_name} · {editMatch.round}
+              {editMatch.court && <span className="ml-1 font-medium text-[#2d5016]">({editMatch.court} #{editMatch.court_order})</span>}
+            </p>
+            <div className="flex items-center justify-center gap-4 my-4">
+              <div className="text-center flex-1 font-medium">{editMatch.team_a_name||'TBD'}</div>
+              <span className="text-xl text-stone-300">VS</span>
+              <div className="text-center flex-1 font-medium">{editMatch.team_b_name||'TBD'}</div>
+            </div>
+            <div className="mb-4">
+              <label className="text-xs text-stone-500 mb-1 block">점수</label>
+              <input type="text" placeholder="6:4" value={editScore} onChange={e=>setEditScore(e.target.value)}
+                className="w-full border rounded-xl px-4 py-3 text-center text-lg font-bold" autoFocus />
+            </div>
+            <div className="mb-4">
+              <label className="text-xs text-stone-500 mb-1 block">승자</label>
+              <div className="flex gap-2">
+                <button onClick={()=>setEditWinner('A')} className={`flex-1 py-2.5 rounded-xl text-sm font-medium border-2 transition-all ${editWinner==='A'?'bg-tennis-600 text-white border-tennis-600':'border-stone-200 hover:border-tennis-400'}`}>{editMatch.team_a_name||'A'}</button>
+                <button onClick={()=>setEditWinner('B')} className={`flex-1 py-2.5 rounded-xl text-sm font-medium border-2 transition-all ${editWinner==='B'?'bg-tennis-600 text-white border-tennis-600':'border-stone-200 hover:border-tennis-400'}`}>{editMatch.team_b_name||'B'}</button>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={()=>setEditMatch(null)} className="flex-1 py-2.5 rounded-xl border border-stone-300 text-sm text-stone-600">취소</button>
+              <button onClick={submitResult} disabled={submitting||!editScore||!editWinner}
+                className={`flex-1 py-2.5 rounded-xl font-bold text-sm disabled:opacity-50 text-white ${editMatch.status==='FINISHED'?'bg-amber-500 hover:bg-amber-600':'bg-tennis-600 hover:bg-tennis-700'}`}>
+                {submitting?'저장 중..':editMatch.status==='FINISHED'?'강제 수정':'결과 저장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 완료 경기 접기 컴포넌트
+function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }: {
+  items: MatchSlim[]
+  onClickScore: (m: MatchSlim) => void
+  onClickUnassign: (id: string) => void
+  divColors: Record<string, string>
+}) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <div className="border-t border-stone-100 mt-1 pt-1">
+      <button onClick={() => setOpen(!open)}
+        className="text-xs text-stone-400 hover:text-stone-600 w-full text-left px-1 py-0.5 flex items-center gap-1">
+        <span>{open ? '▼' : '▶'}</span>
+        <span>완료 {items.length}경기</span>
+      </button>
+      {open && (
+        <div className="space-y-1 mt-1">
+          {items.map(m => (
+            <div key={m.id} className="rounded-lg border border-stone-100 bg-stone-50 p-2 opacity-60">
+              <div className="flex items-center justify-between gap-1">
+                <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                  <span className="text-xs text-stone-500"><MatchTeamRow raw={m.team_a_name} done /><span className="text-stone-300 mx-0.5">vs</span><MatchTeamRow raw={m.team_b_name} done /></span>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  {m.score && <span className="text-xs font-bold text-stone-500">{m.score}</span>}
+                  <button onClick={() => onClickScore(m)} className="text-[10px] text-stone-300 hover:text-blue-500">✏</button>
+                  <button onClick={() => onClickUnassign(m.id)} className="text-[10px] text-stone-300 hover:text-red-500">✕</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── MatchChip 컴포넌트
+function MatchChip({ m, badge, divColor, isCurrentSlot, allMatches, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
+  m: MatchSlim; badge?: string; divColor?: string; isCurrentSlot?: boolean
+  allMatches?: MatchSlim[]
+  onDragStart: (id: string) => void; onClickScore: () => void
+  onClickStart?: () => void; onClickUnassign?: () => void
+  onMoveUp?: () => void; onMoveDown?: () => void
+  onTouchStart?: () => void; onTouchMove?: (e: React.TouchEvent) => void; onTouchEnd?: () => void
+}) {
+  const done = m.status==='FINISHED'; const live = m.status==='IN_PROGRESS'; const isTeam = m.is_team_tie
+
+  // TBD 예상 후보: A슬롯/B슬롯 각각 직전 라운드 1경기씩 표시
+  function getTbdCandidates(teamName: string | null, abSlot: 'A' | 'B'): string[] {
+    if (teamName && teamName !== 'TBD') return []
+    if (!allMatches || isTeam) return []
+    const PREV: Record<string,string> = {
+      '결승':'4강','4강':'8강','8강':'16강','16강':'32강','32강':'64강','64강':'128강',
+      'F':'SF','SF':'QF','QF':'R16','R16':'R32','R32':'R64','R64':'R128'
+    }
+    const prevRound = PREV[m.round]
+    if (!prevRound) return []
+
+    // 직전 라운드 경기 slot 순 정렬
+    const prevList = allMatches
+      .filter(pm => pm.division_id === m.division_id && pm.round === prevRound)
+      .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+    if (prevList.length === 0) return []
+
+    // 현재 라운드 내 로컬 인덱스
+    const curList = allMatches
+      .filter(pm => pm.division_id === m.division_id && pm.round === m.round)
+      .sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))
+    const myLocalIdx = curList.findIndex(pm => pm.id === m.id)
+    if (myLocalIdx < 0) return []
+
+    // A슬롯 → prevList[myLocalIdx*2], B슬롯 → prevList[myLocalIdx*2+1]
+    const pm = abSlot === 'A' ? prevList[myLocalIdx * 2] : prevList[myLocalIdx * 2 + 1]
+    if (!pm) return []
+
+    const strip = (raw: string) => raw.split('/').map((p: string) => p.replace(/\(.*?\)/g, '').trim()).join('/')
+    if (pm.status === 'FINISHED' && pm.winner_team_id) {
+      const winner = pm.winner_team_id === pm.team_a_id ? pm.team_a_name : pm.team_b_name
+      return winner && winner !== 'TBD' ? [strip(winner)] : []
+    }
+    const names: string[] = []
+    if (pm.team_a_name && pm.team_a_name !== 'TBD') names.push(strip(pm.team_a_name))
+    if (pm.team_b_name && pm.team_b_name !== 'TBD') names.push(strip(pm.team_b_name))
+    return names
+  }
+  return (
+    <div draggable onDragStart={() => onDragStart(m.id)}
+      onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+      className={`rounded-lg border p-2 text-xs cursor-grab active:cursor-grabbing transition-all ${
+        isTeam
+          ? (live?'bg-blue-50 border-blue-300':done?'bg-blue-50 border-blue-200':'bg-white border-blue-200 hover:border-blue-400')
+          : live?'bg-red-50 border-red-200':done?'bg-tennis-50 border-tennis-200':isCurrentSlot?'bg-amber-50 border-amber-300':'bg-white border-stone-200 hover:border-stone-300'
+      }`}>
+      {/* 1줄: order + badge + 색점/단체 + 버튼들 */}
+      <div className="flex items-center gap-1 min-w-0">
+        {badge && <span className="text-[10px] flex-shrink-0">{badge}</span>}
+        {isTeam
+          ? <span className="text-[10px] bg-blue-600 text-white px-1 rounded flex-shrink-0">단체</span>
+          : <span style={{ display:'inline-block',width:6,height:6,borderRadius:'50%',background:divColor||'#999',flexShrink:0 }} />
+        }
+        {isTeam && <span className="text-stone-400 text-[10px] flex-1 min-w-0 truncate">{m.match_num}</span>}
+        {!isTeam && <span className="flex-1" />}
+        <div className="flex items-center gap-0.5 flex-shrink-0">
+          {onMoveUp    && <button onClick={e=>{e.stopPropagation();onMoveUp()}}    className="text-stone-300 hover:text-stone-600 px-0.5">▲</button>}
+          {onMoveDown  && <button onClick={e=>{e.stopPropagation();onMoveDown()}}  className="text-stone-300 hover:text-stone-600 px-0.5">▼</button>}
+          {onClickStart && <button onClick={e=>{e.stopPropagation();onClickStart()}} className="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded hover:bg-red-600">▶</button>}
+          {!isTeam && (
+            <button onClick={e=>{e.stopPropagation();onClickScore()}}
+              className={`px-1 py-0.5 rounded text-[10px] transition-colors ${done?'text-amber-500 hover:text-amber-700':'text-stone-300 hover:text-blue-500'}`}>
+              {done?'재수정':'수정'}
+            </button>
+          )}
+          {onClickUnassign && <button onClick={e=>{e.stopPropagation();onClickUnassign()}} className="text-stone-300 hover:text-red-400">✕</button>}
+        </div>
+      </div>
+      {/* 2줄: 부서명(truncate) + 라운드뱃지(항상 보임) */}
+      {!isTeam && (() => {
+        const { round: rLabel } = getRoundBadge(m.round, m.group_label, m.division_name)
+        return (
+          <div className="flex items-center gap-1 mt-0.5 mb-1 min-w-0">
+            <span className="text-[10px] text-stone-400 truncate flex-1 min-w-0">{m.division_name}</span>
+            <span className={`text-[10px] font-bold flex-shrink-0 whitespace-nowrap px-1.5 py-0.5 rounded ${
+              rLabel === '예선' || rLabel.includes('조')
+                ? 'bg-stone-100 text-stone-600'
+                : 'bg-amber-100 text-amber-800'
+            }`}>{rLabel}</span>
+          </div>
+        )
+      })()}
+      <div className={done ? 'opacity-50' : ''}>
+        <MatchTeamRow raw={m.team_a_name} done={done} candidates={getTbdCandidates(m.team_a_name, 'A')} />
+        <div className="text-stone-300 text-[10px] leading-none my-0.5">vs</div>
+        <MatchTeamRow raw={m.team_b_name} done={done} candidates={getTbdCandidates(m.team_b_name, 'B')} />
+      </div>
+      {m.score && (
+        <div className={`mt-0.5 font-bold ${isTeam?'text-blue-600':done?'text-stone-400':'text-tennis-600'}`}>{m.score}</div>
+      )}
+    </div>
+  )
+}
+
+// ── 선수명 표시: 이름 굵게(안잘림) + 클럽명 작게(ellipsis)
+// candidates: TBD일 때 예상 후보 이름 목록
+function MatchTeamRow({ raw, done, candidates }: { raw: string; done?: boolean; candidates?: string[] }) {
+  const isTbd = !raw || raw === 'TBD'
+  const players = parsePlayers(raw)
+
+  // TBD — 후보 있으면 이름만 작게, 없으면 TBD 표시
+  if (isTbd) {
+    if (candidates && candidates.length > 0) {
+      return (
+        <div className="flex items-start gap-1 min-w-0 flex-wrap">
+          {candidates.map((name, i) => (
+            <React.Fragment key={i}>
+              {i > 0 && <span className="text-stone-200 text-[9px] self-center">/</span>}
+              <span className="text-[10px] text-stone-400 leading-tight whitespace-nowrap">{name}</span>
+            </React.Fragment>
+          ))}
+        </div>
+      )
+    }
+    return <span className="text-[10px] text-stone-300 italic">TBD</span>
+  }
+
+  if (players.length === 0) {
+    return <span className={`text-xs font-bold ${done ? 'text-stone-400' : 'text-stone-800'}`}>{raw || 'TBD'}</span>
+  }
+  return (
+    <div className="flex items-start gap-1 min-w-0">
+      {players.map((p, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && <span className="text-stone-300 text-[9px] flex-shrink-0 pt-px">/</span>}
+          <div className="min-w-0 flex-1">
+            <div className={`text-xs font-bold leading-tight whitespace-nowrap ${done ? 'text-stone-400' : 'text-stone-800'}`}>
+              {p.name}
+            </div>
+            {p.club && (
+              <div className="text-[9px] leading-tight truncate text-stone-400">{p.club}</div>
+            )}
+          </div>
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
+// ── 미배정 컬럼: 모바일 접기 가능
+function UnassignedColumn({ unassigned, divColors, touchOver, onDragOver, onDrop, onDragStart, onClickScore, onClickUnassign, onTouchStart, onTouchMove, onTouchEnd }: {
+  unassigned: MatchSlim[]
+  divColors: Record<string, string>
+  touchOver: string | null
+  onDragOver: (e: React.DragEvent) => void
+  onDrop: () => void
+  onDragStart: (id: string) => void
+  onClickScore: (m: MatchSlim) => void
+  onClickUnassign: (id: string) => void
+  onTouchStart: (id: string) => void
+  onTouchMove: (e: React.TouchEvent) => void
+  onTouchEnd: () => void
+}) {
+  const [open, setOpen] = React.useState(true)
+  return (
+    <div className="lg:col-span-1" data-unassigned onDragOver={onDragOver} onDrop={onDrop}>
+      <div className={`bg-white rounded-xl border overflow-hidden transition-all ${touchOver === 'unassigned' ? 'ring-2 ring-stone-400' : ''}`}>
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="w-full bg-stone-500 text-white px-4 py-2 font-bold text-sm flex items-center justify-between"
+        >
+          <span>미배정 ({unassigned.length})</span>
+          <span className="text-white/60 text-xs lg:hidden">{open ? '▲' : '▼'}</span>
+        </button>
+        {open && (
+          <div className="p-1.5 space-y-1 max-h-[40vh] lg:max-h-[70vh] overflow-y-auto">
+            {unassigned.map(m => (
+              <MatchChip key={m.id} m={m} divColor={divColors[m.division_id]}
+                onDragStart={onDragStart} onClickScore={() => onClickScore(m)}
+                onClickUnassign={() => onClickUnassign(m.id)}
+                onTouchStart={() => onTouchStart(m.id)}
+                onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} />
+            ))}
+            {unassigned.length === 0 && <div className="text-xs text-stone-300 text-center py-6">없음</div>}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
+============================================================
+FILE: src\app\dashboard\groups\page.tsx
+============================================================
+'use client'
+import { useEffect, useState, useCallback } from 'react'
+import { supabase } from '@/lib/supabase'
+import { useEventId, useDivisions, DivisionTabs } from '@/components/useDashboard'
+
+interface GroupMember {
+  id: string
+  team_id: string
+  team_name: string
+  seed: number
+  checked_in: boolean
+  checked_in_at: string | null
+}
+
+interface GroupData {
+  id: string; label: string; num: number
+  members: GroupMember[]
+}
+
+// 조별 경기 결과 기반 순위 정보
+interface GroupStanding {
+  team_id: string
+  team_name: string
+  wins: number
+  losses: number
+  game_diff: number  // 게임 득실
+  rank: number | null  // null = 동률 미결정
+}
+
+export default function GroupsPage() {
+  const eventId = useEventId()
+  const { divisions, selected, setSelected } = useDivisions(eventId)
+  const [groups, setGroups] = useState<GroupData[]>([])
+  const [loading, setLoading] = useState(true)
+  const [msg, setMsg] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [groupSize, setGroupSize] = useState(4)
+
+  // 조별 순위 데이터
+  const [standings, setStandings] = useState<Record<string, GroupStanding[]>>({})
+  // 조별 경기 완료 여부
+  const [groupDone, setGroupDone] = useState<Record<string, boolean>>({})
+  // 수동 순위 지정 모달
+  const [rankModal, setRankModal] = useState<{ groupId: string; groupLabel: string; teams: GroupStanding[] } | null>(null)
+  // 수동 순위 지정 상태 (team_id → rank)
+  const [manualRanks, setManualRanks] = useState<Record<string, number>>({})
+  const [savingRank, setSavingRank] = useState(false)
+  // 슬롯 채우기
+  const [fillingGroup, setFillingGroup] = useState<string | null>(null)
+
+  const loadGroups = useCallback(async () => {
+    if (!eventId || !selected) return
+    setLoading(true)
+    try {
+      const { data: rows } = await supabase.from('v_group_board').select('*')
+        .eq('event_id', eventId).eq('division_id', selected)
+        .order('group_num').order('team_num')
+
+      const teamIds = [...new Set((rows || []).map((r: any) => r.team_id))]
+      const checkedInMap = new Map<string, { checked_in: boolean; checked_in_at: string | null }>()
+
+      if (teamIds.length > 0) {
+        const { data: teamRows } = await supabase
+          .from('teams').select('id, checked_in, checked_in_at').in('id', teamIds)
+        for (const t of (teamRows || [])) {
+          checkedInMap.set(t.id, { checked_in: t.checked_in ?? false, checked_in_at: t.checked_in_at ?? null })
+        }
+      }
+
+      const map = new Map<string, GroupData>()
+      for (const r of (rows || [])) {
+        if (!map.has(r.group_id)) {
+          map.set(r.group_id, { id: r.group_id, label: r.group_label, num: r.group_num, members: [] })
+        }
+        const ci = checkedInMap.get(r.team_id)
+        map.get(r.group_id)!.members.push({
+          id: r.member_id, team_id: r.team_id, team_name: r.team_name,
+          seed: r.seed || 0,
+          checked_in: ci?.checked_in ?? false, checked_in_at: ci?.checked_in_at ?? null,
+        })
+      }
+      const groupList = Array.from(map.values()).sort((a, b) => a.num - b.num)
+      setGroups(groupList)
+
+      // 조별 경기 결과 로드
+      if (groupList.length > 0) {
+        await loadStandings(groupList)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [eventId, selected])
+
+  // 조별 순위 계산 (클라이언트에서 직접 계산)
+  async function loadStandings(groupList: GroupData[]) {
+    if (!eventId || !selected) return
+
+    // 해당 부서 조별 경기 전체 조회
+    const { data: matchData } = await supabase
+      .from('matches')
+      .select('id, group_id, status, score, team_a_id, team_b_id, winner_team_id')
+      .eq('event_id', eventId)
+      .eq('division_id', selected)
+      .eq('stage', 'GROUP')
+
+    const matches = matchData || []
+    const newStandings: Record<string, GroupStanding[]> = {}
+    const newGroupDone: Record<string, boolean> = {}
+
+    for (const g of groupList) {
+      const gMatches = matches.filter(m => m.group_id === g.id)
+      const finished = gMatches.filter(m => m.status === 'FINISHED')
+      const allDone = gMatches.length > 0 && gMatches.every(m => m.status === 'FINISHED')
+      newGroupDone[g.id] = allDone
+
+      // 팀별 통계 계산
+      const stats: Record<string, { wins: number; losses: number; gf: number; ga: number }> = {}
+      for (const mem of g.members) {
+        stats[mem.team_id] = { wins: 0, losses: 0, gf: 0, ga: 0 }
+      }
+
+      for (const m of finished) {
+        if (!m.score || m.score === 'BYE' || !m.score.includes(':')) continue
+        const [aScore, bScore] = m.score.split(':').map(Number)
+        if (isNaN(aScore) || isNaN(bScore)) continue
+
+        // team_a
+        if (m.team_a_id && stats[m.team_a_id] !== undefined) {
+          stats[m.team_a_id].gf += aScore
+          stats[m.team_a_id].ga += bScore
+          if (m.winner_team_id === m.team_a_id) stats[m.team_a_id].wins++
+          else stats[m.team_a_id].losses++
+        }
+        // team_b
+        if (m.team_b_id && stats[m.team_b_id] !== undefined) {
+          stats[m.team_b_id].gf += bScore
+          stats[m.team_b_id].ga += aScore
+          if (m.winner_team_id === m.team_b_id) stats[m.team_b_id].wins++
+          else stats[m.team_b_id].losses++
+        }
+      }
+
+      // 순위 계산 (wins → game_diff)
+      const teamList = g.members.map(mem => ({
+        team_id: mem.team_id,
+        team_name: mem.team_name,
+        wins: stats[mem.team_id]?.wins ?? 0,
+        losses: stats[mem.team_id]?.losses ?? 0,
+        game_diff: (stats[mem.team_id]?.gf ?? 0) - (stats[mem.team_id]?.ga ?? 0),
+        rank: null as number | null,
+      }))
+
+      // 정렬: wins DESC, game_diff DESC
+      const sorted = [...teamList].sort((a, b) =>
+        b.wins !== a.wins ? b.wins - a.wins : b.game_diff - a.game_diff
+      )
+
+      // 동률 체크: 같은 wins + game_diff면 rank=null
+      let rank = 1
+      for (let i = 0; i < sorted.length; i++) {
+        const prev = sorted[i - 1]
+        if (i > 0 && sorted[i].wins === prev.wins && sorted[i].game_diff === prev.game_diff) {
+          sorted[i].rank = null  // 동률 — 수동 지정 필요
+          sorted[i - 1].rank = null
+        } else {
+          sorted[i].rank = rank
+        }
+        rank++
+      }
+
+      newStandings[g.id] = sorted
+    }
+
+    setStandings(newStandings)
+    setGroupDone(newGroupDone)
+  }
+
+  useEffect(() => { loadGroups() }, [loadGroups])
+
+  useEffect(() => {
+    if (!eventId || !selected) return
+    const iv = setInterval(() => loadGroups(), 30000)
+    return () => clearInterval(iv)
+  }, [loadGroups])
+
+  async function generateGroups() {
+    setGenerating(true); setMsg('')
+    const { data, error } = await supabase.rpc('rpc_generate_groups', {
+      p_event_id: eventId, p_division_id: selected, p_group_size: groupSize,
+    })
+    setGenerating(false)
+    if (error) { setMsg('❌ ' + error.message); return }
+    setMsg(`✅ 조편성 완료! ${data?.groups_created || ''}개 조 생성`)
+    loadGroups()
+  }
+
+  async function generateGroupMatches() {
+    setGenerating(true); setMsg('')
+    const { data, error } = await supabase.rpc('rpc_generate_group_matches', {
+      p_event_id: eventId, p_division_id: selected,
+    })
+    setGenerating(false)
+    if (error) { setMsg('❌ ' + error.message); return }
+    setMsg(`✅ 조별 경기 생성 완료! ${data?.matches_created || ''}경기`)
+  }
+
+  async function deleteAllGroups() {
+    if (!confirm('현재 부서의 모든 조편성을 삭제하시겠습니까? (조별 경기도 함께 삭제됩니다)')) return
+    setMsg('')
+    const groupIds = groups.map(g => g.id)
+    if (groupIds.length === 0) return
+    await supabase.from('group_members').delete().in('group_id', groupIds)
+    await supabase.from('matches').delete().eq('event_id', eventId).eq('division_id', selected).eq('stage', 'GROUP')
+    await supabase.from('groups').delete().in('id', groupIds)
+    setMsg('✅ 조편성 삭제됨')
+    loadGroups()
+  }
+
+  // 수동 순위 지정 모달 열기
+  function openRankModal(g: GroupData) {
+    const st = standings[g.id] || []
+    const initRanks: Record<string, number> = {}
+    // 이미 rank가 있는 팀은 그대로, null인 팀만 초기화
+    st.forEach((s, i) => { initRanks[s.team_id] = s.rank ?? (i + 1) })
+    setManualRanks(initRanks)
+    setRankModal({ groupId: g.id, groupLabel: g.label, teams: st })
+  }
+
+  // 수동 순위 저장 → rpc_fill_tournament_slots 호출
+  async function saveManualRanks() {
+    if (!rankModal) return
+    const { groupId, groupLabel } = rankModal
+
+    // 순위 중복 체크
+    const rankValues = Object.values(manualRanks)
+    const unique = new Set(rankValues)
+    if (unique.size !== rankValues.length) {
+      setMsg('❌ 중복된 순위가 있습니다. 각 팀에 다른 순위를 지정해주세요.')
+      return
+    }
+
+    setSavingRank(true)
+    try {
+      // group_members 테이블에 manual_rank 저장 (없으면 matches winner 기반으로 처리)
+      // 실제로는 qualifier_label 매칭을 위해 순위대로 wins를 조작하는 대신
+      // rpc_fill_tournament_slots를 직접 호출하되, 순위를 파라미터로 넘김
+      // → 가장 간단한 방법: group_members에 rank 컬럼이 없으므로
+      //   matches의 winner 데이터를 수동 순위로 override하는 RPC 호출
+      const { data, error } = await supabase.rpc('rpc_fill_tournament_slots_manual', {
+        p_event_id:   eventId,
+        p_group_id:   groupId,
+        p_rank_order: Object.entries(manualRanks)
+          .sort((a, b) => a[1] - b[1])
+          .map(([team_id]) => team_id),
+      })
+
+      if (error) {
+        // rpc_fill_tournament_slots_manual이 없으면 일반 fill 호출
+        if (error.message.includes('does not exist') || error.code === '42883') {
+          const { data: fillData, error: fillError } = await supabase.rpc('rpc_fill_tournament_slots', {
+            p_event_id: eventId,
+            p_group_id: groupId,
+          })
+          if (fillError) { setMsg('❌ ' + fillError.message); return }
+          setMsg(`✅ ${groupLabel} 본선 진출 확정! (자동 순위 적용)`)
+        } else {
+          setMsg('❌ ' + error.message); return
+        }
+      } else {
+        setMsg(`✅ ${groupLabel} 수동 순위 확정 및 본선 슬롯 채우기 완료!`)
+      }
+
+      setRankModal(null)
+      loadGroups()
+    } finally {
+      setSavingRank(false)
+    }
+  }
+
+  // 본선 슬롯 자동 채우기 (자동 순위로)
+  async function fillSlots(groupId: string, groupLabel: string) {
+    setFillingGroup(groupId)
+    setMsg('')
+    const { data, error } = await supabase.rpc('rpc_fill_tournament_slots', {
+      p_event_id: eventId,
+      p_group_id: groupId,
+    })
+    setFillingGroup(null)
+    if (error) { setMsg('❌ ' + error.message); return }
+    if (!data?.success) { setMsg('❌ ' + (data?.error || '실패')); return }
+    setMsg(
+      `✅ ${groupLabel} 본선 슬롯 채우기 완료!` +
+      ` (채움 ${data.filled}개${data.remaining_tbd > 0 ? ` · 남은 TBD ${data.remaining_tbd}` : ' · 모든 TBD 해소'})`
+    )
+    loadGroups()
+  }
+
+  const allMembers = groups.flatMap(g => g.members)
+  const checkedCount = allMembers.filter(m => m.checked_in).length
+  const totalCount = allMembers.length
+
+  function formatTime(iso: string) {
+    return new Date(iso).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+  }
+
+  if (!eventId) return <p className="text-stone-400">대시보드 홈에서 대회를 선택해주세요.</p>
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold">🎯 조편성</h1>
+        {totalCount > 0 && (
+          <div className="flex items-center gap-2">
+            <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-2 text-center">
+              <span className="text-lg font-black text-green-600">{checkedCount}</span>
+              <span className="text-stone-400 text-sm"> / {totalCount}</span>
+              <span className="text-xs text-stone-400 ml-1">참석</span>
+            </div>
+            <button onClick={loadGroups}
+              className="text-xs text-stone-400 hover:text-stone-600 bg-stone-100 px-3 py-2 rounded-lg">↺</button>
+          </div>
+        )}
+      </div>
+
+      <DivisionTabs divisions={divisions} selected={selected} onSelect={setSelected} />
+
+      {msg && (
+        <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('✅') ? 'bg-tennis-50 text-tennis-700' : 'bg-red-50 text-red-600'}`}>
+          {msg}
+        </div>
+      )}
+
+      {/* 조편성 도구 */}
+      <div className="bg-white rounded-xl border p-4 mb-4">
+        <div className="flex flex-wrap gap-3 items-center">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-stone-600">조당 인원:</label>
+            <select value={groupSize} onChange={e => setGroupSize(Number(e.target.value))}
+              className="border rounded-lg px-3 py-1.5 text-sm">
+              {[2, 3, 4, 5, 6].map(n => <option key={n} value={n}>{n}팀</option>)}
+            </select>
+          </div>
+          <button onClick={generateGroups} disabled={generating}
+            className="bg-tennis-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-tennis-700 disabled:opacity-50">
+            {generating ? '생성 중...' : '🎲 자동 조편성'}
+          </button>
+          <button onClick={generateGroupMatches} disabled={generating || groups.length === 0}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+            📋 조별 경기 생성
+          </button>
+          {groups.length > 0 && (
+            <button onClick={deleteAllGroups}
+              className="bg-red-100 text-red-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-200">
+              🗑️ 전체 삭제
+            </button>
+          )}
+        </div>
+        <p className="text-xs text-stone-400 mt-2">
+          * 1팀 조 방지 보정 자동 적용 (2+1→3, 3+1→2+2, 4+1→3+2)
+        </p>
+      </div>
+
+      {/* 범례 */}
+      {totalCount > 0 && (
+        <div className="flex items-center gap-4 mb-3 px-1">
+          <div className="flex items-center gap-1.5 text-xs text-stone-500">
+            <span className="w-3 h-3 rounded-sm bg-green-100 border border-green-300 inline-block" />참석 확인
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-stone-400">
+            <span className="w-3 h-3 rounded-sm bg-white border border-stone-200 inline-block" />미확인
+          </div>
+        </div>
+      )}
+
+      {/* 조 편성 결과 */}
+      {loading ? (
+        <p className="text-stone-400 text-center py-10">불러오는 중...</p>
+      ) : groups.length === 0 ? (
+        <p className="text-stone-400 text-center py-10">아직 조편성이 없습니다. 자동 조편성 버튼을 눌러주세요.</p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {groups.map(g => {
+            const gChecked = g.members.filter(m => m.checked_in).length
+            const gStandings = standings[g.id] || []
+            const isDone = groupDone[g.id] ?? false
+            const hasTie = isDone && gStandings.some(s => s.rank === null)
+            const allRanked = isDone && gStandings.length > 0 && gStandings.every(s => s.rank !== null)
+
+            return (
+              <div key={g.id} className="bg-white rounded-xl border overflow-hidden">
+                {/* 조 헤더 */}
+                <div className={`text-white px-4 py-2 font-bold text-sm flex justify-between items-center ${
+                  hasTie ? 'bg-amber-500' : isDone ? 'bg-tennis-600' : 'bg-tennis-600'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    <span>{g.label}</span>
+                    {hasTie && <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full animate-pulse">⚠️ 동률</span>}
+                    {isDone && !hasTie && <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">✅ 완료</span>}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{gChecked}/{g.members.length}</span>
+                    <span className="text-white/60">{g.members.length}팀</span>
+                  </div>
+                </div>
+
+                {/* 순위표 (경기 완료 시) */}
+                {isDone && gStandings.length > 0 && (
+                  <div className="border-b border-stone-100 bg-stone-50 px-3 py-2">
+                    <div className="text-xs text-stone-400 mb-1.5 font-medium">경기 결과</div>
+                    {gStandings.map((s, i) => (
+                      <div key={s.team_id} className={`flex items-center gap-2 py-1 text-xs ${
+                        s.rank === 1 ? 'text-tennis-700 font-bold' :
+                        s.rank === 2 ? 'text-blue-600 font-medium' :
+                        'text-stone-400'
+                      }`}>
+                        {/* 순위 배지 */}
+                        <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${
+                          s.rank === null ? 'bg-amber-100 text-amber-600' :
+                          s.rank === 1 ? 'bg-tennis-600 text-white' :
+                          s.rank === 2 ? 'bg-blue-500 text-white' :
+                          'bg-stone-200 text-stone-500'
+                        }`}>
+                          {s.rank === null ? '?' : s.rank}
+                        </span>
+                        <span className="flex-1 truncate">{s.team_name}</span>
+                        <span className="text-stone-400 font-mono">{s.wins}승 {s.losses}패</span>
+                        <span className={`font-mono ${s.game_diff > 0 ? 'text-tennis-600' : s.game_diff < 0 ? 'text-red-400' : 'text-stone-400'}`}>
+                          {s.game_diff > 0 ? '+' : ''}{s.game_diff}
+                        </span>
+                      </div>
+                    ))}
+
+                    {/* 액션 버튼 */}
+                    <div className="flex gap-1.5 mt-2">
+                      {hasTie && (
+                        <button
+                          onClick={() => openRankModal(g)}
+                          className="flex-1 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-white hover:bg-amber-600"
+                        >
+                          ✏️ 순위 직접 지정
+                        </button>
+                      )}
+                      {allRanked && (
+                        <button
+                          onClick={() => fillSlots(g.id, g.label)}
+                          disabled={fillingGroup === g.id}
+                          className="flex-1 py-1.5 rounded-lg text-xs font-bold bg-tennis-600 text-white hover:bg-tennis-700 disabled:opacity-50"
+                        >
+                          {fillingGroup === g.id ? '처리 중...' : '🏆 본선 슬롯 채우기'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* 팀 목록 */}
+                <div className="p-3">
+                  {g.members.map((m, i) => (
+                    <div key={m.id} className={`flex items-center gap-2 py-1.5 px-2 rounded-lg mb-1 last:mb-0 ${
+                      m.checked_in ? 'bg-green-50 border border-green-200' : 'border border-transparent'
+                    }`}>
+                      {m.checked_in ? (
+                        <span className="w-5 h-5 rounded-full bg-green-500 flex items-center justify-center text-[10px] text-white font-bold flex-shrink-0">✓</span>
+                      ) : (
+                        <span className="w-5 h-5 rounded-full bg-stone-100 flex items-center justify-center text-xs font-bold text-stone-400 flex-shrink-0">{i + 1}</span>
+                      )}
+                      <span className={`text-sm font-medium flex-1 ${m.checked_in ? 'text-green-800' : 'text-stone-700'}`}>
+                        {m.team_name}
+                      </span>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {m.seed > 0 && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">시드 {m.seed}</span>
+                        )}
+                        {m.checked_in && m.checked_in_at ? (
+                          <span className="text-xs text-green-500 font-mono">{formatTime(m.checked_in_at)}</span>
+                        ) : !m.checked_in ? (
+                          <span className="text-xs text-stone-300">미확인</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* 수동 순위 지정 모달 */}
+      {rankModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+          onClick={() => setRankModal(null)}>
+          <div className="bg-white rounded-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+            <h3 className="font-bold text-lg mb-1">✏️ 순위 직접 지정</h3>
+            <p className="text-xs text-stone-400 mb-4">
+              {rankModal.groupLabel} · 승수/게임득실 동률 — 직접 순위를 지정해주세요
+            </p>
+
+            <div className="space-y-2 mb-6">
+              {rankModal.teams.map(s => (
+                <div key={s.team_id} className="flex items-center gap-3 p-3 bg-stone-50 rounded-xl">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-stone-800 truncate">{s.team_name}</div>
+                    <div className="text-xs text-stone-400 mt-0.5">
+                      {s.wins}승 {s.losses}패 · 득실 {s.game_diff > 0 ? '+' : ''}{s.game_diff}
+                    </div>
+                  </div>
+                  <select
+                    value={manualRanks[s.team_id] ?? ''}
+                    onChange={e => setManualRanks(prev => ({ ...prev, [s.team_id]: Number(e.target.value) }))}
+                    className="border-2 border-amber-300 rounded-lg px-2 py-1.5 text-sm font-bold w-16 text-center focus:border-amber-500 focus:outline-none"
+                  >
+                    <option value="">-</option>
+                    {rankModal.teams.map((_, i) => (
+                      <option key={i + 1} value={i + 1}>{i + 1}위</option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+
+            {/* 중복 경고 */}
+            {(() => {
+              const vals = Object.values(manualRanks).filter(Boolean)
+              const hasDup = new Set(vals).size !== vals.length
+              return hasDup ? (
+                <p className="text-xs text-red-500 mb-3 text-center">⚠️ 중복된 순위가 있습니다</p>
+              ) : null
+            })()}
+
+            <div className="flex gap-2">
+              <button onClick={() => setRankModal(null)}
+                className="flex-1 py-2.5 rounded-xl border border-stone-300 text-sm text-stone-600">
+                취소
+              </button>
+              <button
+                onClick={saveManualRanks}
+                disabled={savingRank || Object.values(manualRanks).some(v => !v) ||
+                  new Set(Object.values(manualRanks)).size !== rankModal.teams.length}
+                className="flex-1 py-2.5 rounded-xl bg-amber-500 text-white font-bold text-sm hover:bg-amber-600 disabled:opacity-50"
+              >
+                {savingRank ? '처리 중...' : '순위 확정 + 본선 진출'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+============================================================
+FILE: src\app\dashboard\layout.tsx
+============================================================
+// ============================================================
+// src/app/dashboard/layout.tsx
+// ✅ 타임테이블 메뉴 추가 (/dashboard/timetable)
+// ✅ 대회 선택 드롭다운 복구
+// ✅ 페이지 이동 시 대회 고정 (router.refresh 제거)
+// ✅ AggregateError 방지 (async/await + try/finally)
+// ✅ 대회 자동 선택: 오늘 기준 가장 가까운 미래 대회 우선
+// ✅ localStorage 사용 → 다른 탭/창과 대회 선택 동기화
+// ============================================================
+'use client'
+import { useEffect, useState } from 'react'
+import { useRouter, usePathname } from 'next/navigation'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+  const router   = useRouter()
+  const pathname = usePathname()
+  const [user, setUser]           = useState<any>(null)
+  const [checking, setChecking]   = useState(true)
+  const [menuOpen, setMenuOpen]   = useState(false)
+  const [eventId, setEventId]     = useState('')
+  const [events, setEvents]       = useState<{ id: string; name: string }[]>([])
+  const [openIndiv, setOpenIndiv] = useState(false)
+  const [openTeam, setOpenTeam]   = useState(false)
+
+  const isLoginPage = pathname === '/dashboard/login'
+
+  // 개인전/단체전 하위 경로면 자동 펼침
+  useEffect(() => {
+    const indivPaths = ['/dashboard/teams', '/dashboard/groups', '/dashboard/tournament']
+    const teamPaths  = ['/dashboard/teams/clubs', '/dashboard/teams/groups', '/dashboard/teams/ties', '/dashboard/teams/standings', '/dashboard/teams/bracket']
+    if (teamPaths.some(p => pathname.startsWith(p)))                               { setOpenTeam(true);  setOpenIndiv(false) }
+    else if (indivPaths.some(p => pathname === p || pathname.startsWith(p + '/'))) { setOpenIndiv(true); setOpenTeam(false)  }
+  }, [pathname])
+
+  useEffect(() => {
+    if (isLoginPage) { setChecking(false); return }
+
+    let unsubFn = () => {}
+
+    async function init() {
+      try {
+        // 1. 세션 확인
+        const { data: authData } = await supabase.auth.getSession()
+        const session = authData?.session ?? null
+        if (!session) { router.push('/dashboard/login'); return }
+        setUser(session.user)
+
+        // 2. 대회 목록 로드 (날짜 오름차순 — 가까운 대회가 위에)
+        const { data: evList } = await supabase
+          .from('events').select('id, name, date')
+          .order('date', { ascending: true })
+        setEvents(evList ?? [])
+
+        // 3. 대회 ID 결정 (localStorage 사용 → 다른 창과 공유)
+        const stored = localStorage.getItem('dashboard_event_id')
+        // stored 값이 현재 목록에 실제로 존재하는지 검증
+        const storedValid = stored && (evList ?? []).some(e => e.id === stored)
+
+        if (storedValid) {
+          // localStorage 값이 유효하면 그대로 사용
+          setEventId(stored!)
+        } else {
+          // 없거나 목록에 없는 ID면 → 오늘 기준 가장 가까운 대회 자동 선택
+          const today = new Date().toISOString().split('T')[0]
+          const list = evList ?? []
+
+          // 오늘 이후(포함) 대회 중 가장 가까운 것
+          const upcoming = list.filter(e => e.date >= today)
+          // 없으면 과거 대회 중 가장 최근 것
+          const fallback = [...list].reverse()
+
+          const best = upcoming[0] ?? fallback[0]
+          const id = best?.id ?? ''
+          if (id) {
+            setEventId(id)
+            localStorage.setItem('dashboard_event_id', id)
+          }
+        }
+
+      } catch (e) {
+        console.error('[Dashboard] init error:', e)
+        router.push('/dashboard/login')
+      } finally {
+        setChecking(false)
+      }
+    }
+
+    init()
+
+    // 4. 인증 상태 변화 감지
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_ev, session) => {
+      if (!session && !isLoginPage) router.push('/dashboard/login')
+      else if (session) setUser(session.user)
+    })
+    unsubFn = () => subscription.unsubscribe()
+    return () => unsubFn()
+  }, [router, isLoginPage])
+
+  async function handleLogout() { await supabase.auth.signOut(); router.push('/') }
+
+  // 대회 변경 시 localStorage 저장 → 다른 탭/창이 storage 이벤트로 즉시 감지
+  function handleEventChange(id: string) {
+    setEventId(id)
+    localStorage.setItem('dashboard_event_id', id)
+  }
+
+  if (isLoginPage) return <>{children}</>
+  if (checking) return <div className="min-h-screen flex items-center justify-center text-stone-400">인증 확인 중...</div>
+
+  function navLink(href: string, label: string, emoji: string, indent = false) {
+    const fullHref = href.includes('event_id') ? href
+      : (href.startsWith('/dashboard/teams/') && href !== '/dashboard/teams'
+          ? `${href}?event_id=${eventId}` : href)
+    const isActive = pathname === href || pathname.startsWith(href + '/') || pathname.startsWith(href + '?')
+    return (
+      <Link key={href} href={fullHref} onClick={() => setMenuOpen(false)}
+        className={`flex items-center gap-2 ${indent ? 'pl-8' : 'px-3'} pr-3 py-2 rounded-lg text-sm transition-all ${
+          isActive ? 'bg-tennis-50 text-tennis-700 font-bold' : 'text-stone-600 hover:bg-stone-50'
+        }`}>
+        <span className="text-sm">{emoji}</span> {label}
+      </Link>
+    )
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col md:flex-row">
+      {/* Mobile Header */}
+      <div className="md:hidden bg-white border-b px-4 py-3 flex items-center justify-between sticky top-0 z-20">
+        <button onClick={() => setMenuOpen(!menuOpen)} className="text-xl">☰</button>
+        <span className="font-bold text-sm">⚙️ 운영 대시보드</span>
+        <button onClick={handleLogout} className="text-xs text-stone-400">로그아웃</button>
+      </div>
+
+      {/* Sidebar */}
+      <aside className={`${menuOpen ? 'block' : 'hidden'} md:block w-full md:w-56 bg-white border-r border-stone-200 md:min-h-screen flex-shrink-0`}>
+        <div className="hidden md:block p-4 border-b">
+          <Link href="/" className="text-xs text-stone-400 hover:text-stone-600">← 홈으로</Link>
+          <h2 className="font-bold mt-1">⚙️ 운영 대시보드</h2>
+          <p className="text-xs text-stone-400 mt-0.5 truncate">{user?.email}</p>
+        </div>
+
+        {/* 대회 선택 드롭다운 */}
+        <div className="p-3 border-b bg-stone-50">
+          <label className="text-xs text-stone-400 block mb-1">📅 대회 선택</label>
+          <select
+            value={eventId}
+            onChange={e => handleEventChange(e.target.value)}
+            className="w-full text-xs border border-stone-200 rounded-lg px-2 py-1.5 bg-white text-stone-700 focus:outline-none focus:border-tennis-400"
+          >
+            {events.length === 0 && <option value="">대회 없음</option>}
+            {events.map(ev => (
+              <option key={ev.id} value={ev.id}>{ev.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <nav className="p-2 space-y-0.5">
+          {navLink('/dashboard', '홈', '🏠')}
+
+          {/* 개인전 */}
+          <button onClick={() => setOpenIndiv(!openIndiv)}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-all ${
+              openIndiv ? 'bg-stone-100 text-stone-800 font-bold' : 'text-stone-600 hover:bg-stone-50'
+            }`}>
+            <span>🎾 개인전</span>
+            <span className="text-xs text-stone-400">{openIndiv ? '▲' : '▼'}</span>
+          </button>
+          {openIndiv && (
+            <div className="space-y-0.5">
+              {navLink('/dashboard/teams',      '팀 관리',      '👥', true)}
+              {navLink('/dashboard/groups',     '조편성',       '🔢', true)}
+              {navLink('/dashboard/tournament', '본선 토너먼트', '🏆', true)}
+            </div>
+          )}
+
+          {/* 단체전 */}
+          <button onClick={() => setOpenTeam(!openTeam)}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-all ${
+              openTeam ? 'bg-stone-100 text-stone-800 font-bold' : 'text-stone-600 hover:bg-stone-50'
+            }`}>
+            <span>📋 단체전</span>
+            <span className="text-xs text-stone-400">{openTeam ? '▲' : '▼'}</span>
+          </button>
+          {openTeam && (
+            <div className="space-y-0.5">
+              {navLink('/dashboard/teams/clubs',     '클럽 관리', '🏟️', true)}
+              {navLink('/dashboard/teams/groups',    '조편성',    '⚔️', true)}
+              {navLink('/dashboard/teams/ties',      '대전 관리', '🎾', true)}
+              {navLink('/dashboard/teams/standings', '순위',      '📊', true)}
+              {navLink('/dashboard/teams/bracket',   '토너먼트',  '🏆', true)}
+            </div>
+          )}
+
+          <hr className="my-2" />
+          {navLink('/dashboard/courts',    '코트 배정',  '🏟')}
+          {navLink('/dashboard/timetable', '타임테이블', '⏱')}
+          {navLink('/dashboard/sync',      '앱A 연동',  '🔄')}
+          {navLink('/dashboard/settings',  '설정',      '⚙️')}
+          <hr className="my-2" />
+
+          <button onClick={handleLogout}
+            className="hidden md:flex w-full items-center gap-2 px-3 py-2.5 rounded-lg text-sm text-stone-400 hover:text-red-500 hover:bg-red-50">
+            🚪 로그아웃
+          </button>
+        </nav>
+      </aside>
+
+      {/* Main */}
+      <main className="flex-1 p-4 md:p-6 max-w-5xl">{children}</main>
+    </div>
+  )
+}
+
+
+============================================================
+FILE: src\app\dashboard\login\page.tsx
+============================================================
+'use client'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+
+export default function LoginPage() {
+  const router = useRouter()
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault()
+    if (!email || !password) { setError('이메일과 비밀번호를 입력하세요.'); return }
+    setError(''); setLoading(true)
+
+    const { error: err } = await supabase.auth.signInWithPassword({ email, password })
+    setLoading(false)
+
+    if (err) { setError('로그인 실패: ' + err.message); return }
+    router.push('/dashboard')
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-stone-50">
+      <Link href="/" className="text-stone-400 hover:text-stone-600 mb-8 text-sm">← 홈으로</Link>
+      <div className="w-full max-w-sm bg-white rounded-2xl border p-6">
+        <h1 className="text-xl font-bold text-center mb-1">⚙️ 운영 대시보드</h1>
+        <p className="text-sm text-stone-500 text-center mb-6">운영자 계정으로 로그인하세요</p>
+
+        <form onSubmit={handleLogin} className="space-y-3">
+          <input type="email" placeholder="이메일" value={email}
+            onChange={e => setEmail(e.target.value)}
+            className="w-full border border-stone-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-tennis-600" />
+          <input type="password" placeholder="비밀번호" value={password}
+            onChange={e => setPassword(e.target.value)}
+            className="w-full border border-stone-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-tennis-600" />
+          {error && <p className="text-red-500 text-sm">{error}</p>}
+          <button type="submit" disabled={loading}
+            className="w-full bg-tennis-600 text-white font-bold py-3 rounded-xl hover:bg-tennis-700 disabled:opacity-50 transition-all">
+            {loading ? '로그인 중...' : '로그인'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+
+============================================================
+FILE: src\app\dashboard\logs\page.tsx
+============================================================
+// ============================================================
+// 접속 로그 뷰어
+// src/app/dashboard/logs/page.tsx
+// P9: access_logs 테이블 조회
+// ============================================================
+'use client'
+import { useState, useEffect, useCallback } from 'react'
+import { useEventId } from '@/components/useDashboard'
+import { supabase } from '@/lib/supabase'
+
+interface AccessLog {
+  id: string
+  event_id: string
+  page: string
+  tab: string | null
+  device: string | null
+  accessed_at: string
+}
+
+interface Stats {
+  total: number
+  mobile: number
+  desktop: number
+  byPage: Record<string, number>
+  byTab: Record<string, number>
+  byHour: Record<string, number>
+}
+
+export default function LogsPage() {
+  const eventId = useEventId()
+  const [logs, setLogs] = useState<AccessLog[]>([])
+  const [loading, setLoading] = useState(true)
+  const [stats, setStats] = useState<Stats | null>(null)
+  const [filterPage, setFilterPage] = useState('ALL')
+  const [limit, setLimit] = useState(50)
+
+  const loadLogs = useCallback(async () => {
+    if (!eventId) return
+    setLoading(true)
+    try {
+      const { data } = await supabase
+        .from('access_logs')
+        .select('*')
+        .eq('event_id', eventId)
+        .order('accessed_at', { ascending: false })
+        .limit(200)
+
+      const allLogs: AccessLog[] = data || []
+      setLogs(allLogs)
+
+      // 통계 계산
+      const total = allLogs.length
+      const mobile = allLogs.filter(l => l.device === 'mobile').length
+      const desktop = allLogs.filter(l => l.device === 'desktop').length
+
+      const byPage: Record<string, number> = {}
+      const byTab: Record<string, number> = {}
+      const byHour: Record<string, number> = {}
+
+      allLogs.forEach(l => {
+        byPage[l.page] = (byPage[l.page] || 0) + 1
+        if (l.tab) byTab[l.tab] = (byTab[l.tab] || 0) + 1
+        const hour = new Date(l.accessed_at).getHours()
+        const hourKey = `${hour.toString().padStart(2, '0')}:00`
+        byHour[hourKey] = (byHour[hourKey] || 0) + 1
+      })
+
+      setStats({ total, mobile, desktop, byPage, byTab, byHour })
+    } finally {
+      setLoading(false)
+    }
+  }, [eventId])
+
+  useEffect(() => { loadLogs() }, [loadLogs])
+
+  const filteredLogs = filterPage === 'ALL' ? logs : logs.filter(l => l.page === filterPage)
+  const pages = [...new Set(logs.map(l => l.page))]
+
+  function formatTime(iso: string): string {
+    return new Date(iso).toLocaleString('ko-KR', {
+      month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    })
+  }
+
+  function getDeviceIcon(device: string | null) {
+    if (device === 'mobile') return '📱'
+    if (device === 'desktop') return '💻'
+    return '❓'
+  }
+
+  function getPageLabel(page: string): string {
+    const map: Record<string, string> = {
+      event_detail: '대회 상세',
+      pin: 'PIN 로그인',
+      venue: '현장 관리',
+    }
+    return map[page] || page
+  }
+
+  function getTabLabel(tab: string): string {
+    const map: Record<string, string> = {
+      groups: '조편성', tournament: '토너먼트', results: '경기결과', courts: '코트현황',
+      team_standings: '단체전 순위', team_matches: '단체전 경기', team_bracket: '단체전 토너먼트',
+    }
+    return map[tab] || tab
+  }
+
+  if (!eventId) return <p className="text-stone-400">대시보드에서 이벤트를 선택하세요.</p>
+
+  return (
+    <div className="max-w-5xl mx-auto p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">👥 접속 로그</h1>
+        <button onClick={loadLogs} disabled={loading}
+          className="text-sm text-gray-500 hover:text-gray-700 bg-gray-100 px-3 py-1.5 rounded-lg disabled:opacity-50">
+          {loading ? '불러오는 중...' : '🔄 새로고침'}
+        </button>
+      </div>
+
+      {/* 통계 카드 */}
+      {stats && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-white rounded-xl border p-4 text-center">
+            <div className="text-3xl font-black text-blue-600">{stats.total}</div>
+            <div className="text-xs text-gray-500 mt-1">총 접속</div>
+          </div>
+          <div className="bg-white rounded-xl border p-4 text-center">
+            <div className="text-3xl font-black text-green-600">{stats.mobile}</div>
+            <div className="text-xs text-gray-500 mt-1">📱 모바일</div>
+          </div>
+          <div className="bg-white rounded-xl border p-4 text-center">
+            <div className="text-3xl font-black text-purple-600">{stats.desktop}</div>
+            <div className="text-xs text-gray-500 mt-1">💻 데스크탑</div>
+          </div>
+          <div className="bg-white rounded-xl border p-4 text-center">
+            <div className="text-3xl font-black text-orange-600">
+              {(stats.mobile / (stats.total || 1) * 100).toFixed(0)}%
+            </div>
+            <div className="text-xs text-gray-500 mt-1">모바일 비율</div>
+          </div>
+        </div>
+      )}
+
+      {/* 페이지별 통계 */}
+      {stats && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="bg-white rounded-xl border p-4">
+            <h3 className="font-semibold text-sm mb-3">페이지별 접속</h3>
+            <div className="space-y-2">
+              {Object.entries(stats.byPage)
+                .sort((a, b) => b[1] - a[1])
+                .map(([page, count]) => (
+                  <div key={page} className="flex items-center gap-2">
+                    <span className="text-sm flex-1">{getPageLabel(page)}</span>
+                    <div className="flex items-center gap-2">
+                      <div className="bg-blue-100 rounded-full h-2 flex-1 min-w-[80px]" style={{ position: 'relative' }}>
+                        <div className="bg-blue-500 rounded-full h-2" style={{ width: `${count / stats.total * 100}%` }} />
+                      </div>
+                      <span className="text-xs font-bold text-gray-500 w-8 text-right">{count}</span>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border p-4">
+            <h3 className="font-semibold text-sm mb-3">탭별 접속 (TOP 5)</h3>
+            <div className="space-y-2">
+              {Object.entries(stats.byTab)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 5)
+                .map(([tab, count]) => (
+                  <div key={tab} className="flex items-center gap-2">
+                    <span className="text-sm flex-1">{getTabLabel(tab)}</span>
+                    <span className="text-xs font-bold text-gray-500">{count}회</span>
+                  </div>
+                ))}
+              {Object.keys(stats.byTab).length === 0 && (
+                <p className="text-xs text-gray-400">탭 데이터 없음</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 로그 목록 */}
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b">
+          <h3 className="font-semibold text-sm">최근 접속 로그</h3>
+          <div className="flex items-center gap-2">
+            <select value={filterPage} onChange={e => setFilterPage(e.target.value)}
+              className="text-xs border rounded px-2 py-1">
+              <option value="ALL">전체 페이지</option>
+              {pages.map(p => <option key={p} value={p}>{getPageLabel(p)}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {loading ? (
+          <p className="text-center py-10 text-gray-400">불러오는 중...</p>
+        ) : filteredLogs.length === 0 ? (
+          <p className="text-center py-10 text-gray-400">접속 로그가 없습니다.</p>
+        ) : (
+          <div className="divide-y max-h-[60vh] overflow-y-auto">
+            {filteredLogs.slice(0, limit).map(log => (
+              <div key={log.id} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50">
+                <span className="text-lg">{getDeviceIcon(log.device)}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{getPageLabel(log.page)}</span>
+                    {log.tab && (
+                      <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+                        {getTabLabel(log.tab)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-400">{log.device || '알수없음'}</div>
+                </div>
+                <span className="text-xs text-gray-400 flex-shrink-0">{formatTime(log.accessed_at)}</span>
+              </div>
+            ))}
+            {filteredLogs.length > limit && (
+              <div className="text-center py-3">
+                <button onClick={() => setLimit(l => l + 50)}
+                  className="text-xs text-blue-500 hover:underline">
+                  더 보기 ({filteredLogs.length - limit}개 더)
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+============================================================
+FILE: src\app\dashboard\matches\page.tsx
+============================================================
+'use client'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+
+interface PinMatch {
+  id: string; match_num: string; stage: string; round: string; court: string | null
+  court_order: number | null; status: string; score: string | null
+  locked_by_participant: boolean
+  team_a_name: string; team_b_name: string; team_a_id: string; team_b_id: string
+  my_side: 'A' | 'B'; division_name: string
+}
+
+interface CourtContext {
+  currentOrder: number | null
+  currentMatch: { team_a_name: string; team_b_name: string; division_name: string } | null
+  myOrder: number
+  remainingBefore: number
+}
+
+export default function PinMatchesPage() {
+  const router = useRouter()
+  const [session, setSession] = useState<any>(null)
+  const [matches, setMatches] = useState<PinMatch[]>([])
+  const [courtContexts, setCourtContexts] = useState<Map<string, CourtContext>>(new Map())
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState<string | null>(null)
+  const [scores, setScores] = useState<Record<string, string>>({})
+  const [msg, setMsg] = useState('')
+  const [notifEnabled, setNotifEnabled] = useState(false)
+  const prevWaitingRef = useRef<Map<string, number>>(new Map())
+
+  useEffect(() => {
+    const raw = sessionStorage.getItem('pin_session')
+    if (!raw) { router.push('/pin'); return }
+    const s = JSON.parse(raw)
+    setSession(s)
+    loadData(s)
+  }, [])
+
+  // 15초 자동 새로고침
+  useEffect(() => {
+    if (!session) return
+    const interval = setInterval(() => loadData(session), 15000)
+    return () => clearInterval(interval)
+  }, [session])
+
+  const loadData = useCallback(async (s: any) => {
+    // 내 경기 목록
+    const { data: pinData, error } = await supabase.rpc('rpc_pin_list_matches', { p_token: s.token })
+    if (error) {
+      sessionStorage.removeItem('pin_session')
+      router.push('/pin')
+      return
+    }
+    const myMatches: PinMatch[] = pinData.matches || []
+    setMatches(myMatches)
+
+    // 각 코트의 현재 진행 상황 조회
+    const courts = [...new Set(myMatches.map(m => m.court).filter(Boolean))]
+    const ctxMap = new Map<string, CourtContext>()
+
+    if (courts.length > 0) {
+      const { data: courtMatches } = await supabase.from('v_matches_with_teams').select('*')
+        .eq('event_id', s.event_id)
+        .in('court', courts)
+        .neq('score', 'BYE')
+        .order('court').order('court_order')
+
+      for (const court of courts) {
+        const cm = (courtMatches || []).filter((m: any) => m.court === court)
+        // 현재 진행 중이거나 첫 번째 대기 경기
+        const activeIdx = cm.findIndex((m: any) => m.status === 'IN_PROGRESS')
+        const pendingIdx = cm.findIndex((m: any) => m.status === 'PENDING')
+        const currentIdx = activeIdx >= 0 ? activeIdx : pendingIdx
+        const currentMatch = currentIdx >= 0 ? cm[currentIdx] : null
+
+        // 내 경기 찾기
+        const myMatch = myMatches.find(m => m.court === court)
+        const myIdx = myMatch ? cm.findIndex((m: any) => m.id === myMatch.id) : -1
+        const remainingBefore = (currentIdx >= 0 && myIdx >= 0) ? myIdx - currentIdx : 0
+
+        ctxMap.set(court!, {
+          currentOrder: currentMatch?.court_order || null,
+          currentMatch: currentMatch ? {
+            team_a_name: currentMatch.team_a_name,
+            team_b_name: currentMatch.team_b_name,
+            division_name: currentMatch.division_name,
+          } : null,
+          myOrder: myMatch?.court_order || 0,
+          remainingBefore: Math.max(0, remainingBefore),
+        })
+
+        // 알림 체크: 대기1이 되면 알림
+        if (notifEnabled && myMatch && remainingBefore === 1) {
+          const prevRemaining = prevWaitingRef.current.get(court!) ?? 99
+          if (prevRemaining > 1) {
+            sendNotification(court!, myMatch)
+          }
+        }
+        if (court) prevWaitingRef.current.set(court, remainingBefore)
+      }
+    }
+
+    setCourtContexts(ctxMap)
+    setLoading(false)
+  }, [notifEnabled])
+
+  function sendNotification(court: string, match: PinMatch) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('🎾 경기 준비!', {
+        body: `${court}에서 다음 경기입니다! 대기코트로 이동해주세요.`,
+        icon: '🎾',
+        tag: `court-${court}`,
+      })
+    }
+  }
+
+  async function enableNotifications() {
+    if (!('Notification' in window)) {
+      setMsg('이 브라우저는 알림을 지원하지 않습니다.')
+      return
+    }
+    const permission = await Notification.requestPermission()
+    if (permission === 'granted') {
+      setNotifEnabled(true)
+      setMsg('✅ 알림이 활성화되었습니다. 내 차례가 다가오면 알림을 보내드립니다.')
+    } else {
+      setMsg('알림 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.')
+    }
+  }
+
+  async function submitScore(matchId: string) {
+    const score = scores[matchId]
+    if (!score) { setMsg('점수를 입력해주세요. (예: 6:4)'); return }
+    setSubmitting(matchId); setMsg('')
+
+    const { data, error } = await supabase.rpc('rpc_pin_submit_score', {
+      p_token: session.token,
+      p_match_id: matchId,
+      p_score: score,
+    })
+    setSubmitting(null)
+
+    if (error) { setMsg(error.message); return }
+    setMsg('✅ 결과가 저장되었습니다!')
+    loadData(session)
+  }
+
+  function handleLogout() {
+    sessionStorage.removeItem('pin_session')
+    router.push('/pin')
+  }
+
+  if (!session) return null
+
+  return (
+    <div className="min-h-screen bg-stone-50">
+      <header className="bg-white border-b sticky top-0 z-10">
+        <div className="max-w-lg mx-auto px-4 py-3 flex items-center justify-between">
+          <div>
+            <h1 className="font-bold">🔑 {session.team_name}</h1>
+            <p className="text-xs text-stone-500">{session.division}</p>
+          </div>
+          <button onClick={handleLogout} className="text-sm text-stone-400 hover:text-red-500">로그아웃</button>
+        </div>
+      </header>
+
+      <main className="max-w-lg mx-auto px-4 py-6">
+        {/* 알림 활성화 버튼 */}
+        {!notifEnabled && (
+          <button onClick={enableNotifications}
+            className="w-full mb-4 p-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-700 hover:bg-blue-100 transition-all">
+            🔔 알림 켜기 — 내 차례가 다가오면 알려드립니다
+          </button>
+        )}
+        {notifEnabled && (
+          <div className="mb-4 p-2 bg-blue-50 rounded-xl text-xs text-blue-600 text-center">
+            🔔 알림 활성화됨 — 대기 1번째가 되면 알림을 보내드립니다
+          </div>
+        )}
+
+        {msg && (
+          <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('✅') ? 'bg-tennis-50 text-tennis-700' : 'bg-red-50 text-red-600'}`}>
+            {msg}
+          </div>
+        )}
+
+        {loading ? (
+          <p className="text-center py-10 text-stone-400">불러오는 중...</p>
+        ) : matches.length === 0 ? (
+          <div className="text-center py-10">
+            <div className="text-4xl mb-3">🎉</div>
+            <p className="text-stone-500">입력할 경기가 없습니다.</p>
+            <p className="text-stone-400 text-sm mt-1">모든 경기가 완료되었거나 아직 배정되지 않았습니다.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {matches.map(m => {
+              const ctx = m.court ? courtContexts.get(m.court) : null
+              return (
+                <div key={m.id} className="bg-white rounded-xl border overflow-hidden">
+                  {/* 코트 대기 상황 */}
+                  {ctx && m.court && m.stage === 'GROUP' && (
+                    <CourtWaitingBar court={m.court} ctx={ctx} />
+                  )}
+
+                  <div className="p-4">
+                    {/* 경기 정보 */}
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-stone-400">{m.round} · {m.match_num}</span>
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-stone-100 text-stone-500">{m.division_name}</span>
+                      </div>
+                      {m.court && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-[#2d5016]/10 text-[#2d5016] font-bold">
+                          {m.court} #{m.court_order}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 팀 대결 */}
+                    <div className="flex items-center justify-center gap-3 mb-3">
+                      <div className={`text-center flex-1 ${m.my_side === 'A' ? 'font-bold text-tennis-700' : ''}`}>
+                        <div className="text-sm">{m.team_a_name}</div>
+                        {m.my_side === 'A' && <span className="text-xs text-tennis-500">내 팀</span>}
+                      </div>
+                      <span className="text-stone-300 font-bold">VS</span>
+                      <div className={`text-center flex-1 ${m.my_side === 'B' ? 'font-bold text-tennis-700' : ''}`}>
+                        <div className="text-sm">{m.team_b_name}</div>
+                        {m.my_side === 'B' && <span className="text-xs text-tennis-500">내 팀</span>}
+                      </div>
+                    </div>
+
+                    {/* 점수 입력 */}
+                    {m.locked_by_participant ? (
+                      <div className="text-center text-sm text-stone-400 py-2">
+                        🔒 이미 입력 완료 ({m.score})
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text" placeholder="6:4"
+                          value={scores[m.id] || ''}
+                          onChange={e => setScores({ ...scores, [m.id]: e.target.value })}
+                          onKeyDown={e => e.key === 'Enter' && submitScore(m.id)}
+                          className="score-input flex-1"
+                        />
+                        <button onClick={() => submitScore(m.id)}
+                          disabled={submitting === m.id}
+                          className="bg-amber-500 text-white font-bold px-5 py-3 rounded-lg hover:bg-amber-600 disabled:opacity-50 transition-all whitespace-nowrap">
+                          {submitting === m.id ? '...' : '제출'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}
+
+// 코트 대기 상황 바
+function CourtWaitingBar({ court, ctx }: { court: string; ctx: CourtContext }) {
+  const { remainingBefore, currentMatch } = ctx
+
+  let statusColor = 'bg-stone-100 text-stone-600'
+  let statusText = ''
+  let statusEmoji = ''
+
+  if (remainingBefore === 0) {
+    statusColor = 'bg-red-100 text-red-700'
+    statusText = '지금 내 경기!'
+    statusEmoji = '🔴'
+  } else if (remainingBefore === 1) {
+    statusColor = 'bg-amber-100 text-amber-700'
+    statusText = '다음 경기 (대기코트로 이동!)'
+    statusEmoji = '🟡'
+  } else if (remainingBefore === 2) {
+    statusColor = 'bg-green-100 text-green-700'
+    statusText = `앞에 ${remainingBefore}경기 남음`
+    statusEmoji = '🟢'
+  } else {
+    statusText = `앞에 ${remainingBefore}경기 남음`
+    statusEmoji = '⏳'
+  }
+
+  return (
+    <div className={`px-4 py-2.5 ${statusColor}`}>
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-bold">{statusEmoji} {statusText}</span>
+        <span className="text-xs opacity-70">{court}</span>
+      </div>
+      {currentMatch && remainingBefore > 0 && (
+        <div className="text-xs mt-1 opacity-70">
+          현재 진행: {currentMatch.team_a_name} vs {currentMatch.team_b_name} ({currentMatch.division_name})
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+============================================================
+FILE: src\app\dashboard\page.tsx
+============================================================
+// ============================================================
+// 대시보드 메인 페이지
+// src/app/dashboard/page.tsx
+// ✅ 경기결과 목록 (조별 + 부서 필터)
+// ✅ 동률 시 수동 순위 조정
+// ============================================================
+'use client'
+import React from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
+import { useEventId } from '@/components/useDashboard'
+
+interface EventStats {
+  event: any
+  divisions: any[]
+  totalMatches: number
+  finishedMatches: number
+  inProgressMatches: number
+  totalTies: number
+  finishedTies: number
+  inProgressTies: number
+  totalTeams: number
+  totalClubs: number
+  completedGroups: number
+  totalGroups: number
+}
+
+interface MatchRow {
+  id: string
+  match_num: string
+  division_name: string
+  division_id: string
+  group_label: string | null
+  stage: string
+  round: string
+  team_a_name: string
+  team_b_name: string
+  team_a_id: string
+  team_b_id: string
+  winner_team_id: string | null
+  score: string | null
+  court: string | null
+  status: string
+  updated_at: string
+}
+
+export default function DashboardPage() {
+  const eventId = useEventId()
+  const [stats, setStats] = useState<EventStats | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [recentActivity, setRecentActivity] = useState<any[]>([])
+
+  // 경기결과 목록
+  const [allMatches, setAllMatches] = useState<MatchRow[]>([])
+  const [matchFilter, setMatchFilter] = useState<string>('ALL')
+  const [showResults, setShowResults] = useState(false)
+
+  // 동률 수동 조정
+  const [tiedGroups, setTiedGroups] = useState<any[]>([])
+  const [showTieAdjust, setShowTieAdjust] = useState(false)
+  const [adjusting, setAdjusting] = useState(false)
+  const [adjustMsg, setAdjustMsg] = useState('')
+  // ✅ 날짜 필터 (최상단 선언 필수 — Hooks 규칙)
+  const [dateMatchFilter, setDateMatchFilter] = useState<string>('ALL_DATE')
+
+  const loadStats = useCallback(async () => {
+    if (!eventId) { setLoading(false); return }
+    setLoading(true)
+    try {
+      const [
+        evRes, divRes,
+        matchCountRes, matchFinRes, matchInpRes,
+        tieCountRes, tieFinRes, tieInpRes,
+        teamCountRes, clubCountRes, groupCountRes,
+        recentMatchRes, recentTieRes,
+        allMatchRes,
+      ] = await Promise.all([
+        supabase.from('events').select('*').eq('id', eventId).single(),
+        supabase.from('divisions').select('id,name,match_date').eq('event_id', eventId).order('sort_order'),
+        supabase.from('matches').select('id', { count: 'exact' }).eq('event_id', eventId).neq('score', 'BYE'),
+        supabase.from('matches').select('id', { count: 'exact' }).eq('event_id', eventId).eq('status', 'FINISHED').neq('score', 'BYE'),
+        supabase.from('matches').select('id', { count: 'exact' }).eq('event_id', eventId).eq('status', 'IN_PROGRESS'),
+        supabase.from('ties').select('id', { count: 'exact' }).eq('event_id', eventId).eq('is_bye', false),
+        supabase.from('ties').select('id', { count: 'exact' }).eq('event_id', eventId).eq('status', 'completed').eq('is_bye', false),
+        supabase.from('ties').select('id', { count: 'exact' }).eq('event_id', eventId).eq('status', 'in_progress'),
+        supabase.from('teams').select('id', { count: 'exact' }).eq('event_id', eventId),
+        supabase.from('clubs').select('id', { count: 'exact' }).eq('event_id', eventId),
+        supabase.from('groups').select('id,is_finalized', { count: 'exact' }).eq('event_id', eventId),
+        supabase.from('v_matches_with_teams').select('team_a_name,team_b_name,score,division_name,updated_at').eq('event_id', eventId).eq('status', 'FINISHED').order('updated_at', { ascending: false }).limit(5),
+        supabase.from('ties').select('*, updated_at, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name)').eq('event_id', eventId).eq('status', 'completed').order('updated_at', { ascending: false }).limit(5),
+        // 전체 완료 경기 (결과 목록용)
+        supabase.from('v_matches_with_teams')
+          .select('id,match_num,division_name,division_id,group_label,stage,round,team_a_name,team_b_name,team_a_id,team_b_id,winner_team_id,score,court,status,updated_at')
+          .eq('event_id', eventId).eq('status', 'FINISHED').neq('score', 'BYE')
+          .order('updated_at', { ascending: false }).limit(200),
+      ])
+
+      const groups = groupCountRes.data || []
+      const completedGroups = groups.filter((g: any) => g.is_finalized).length
+
+      setStats({
+        event: evRes.data,
+        divisions: divRes.data || [],
+        totalMatches: matchCountRes.count || 0,
+        finishedMatches: matchFinRes.count || 0,
+        inProgressMatches: matchInpRes.count || 0,
+        totalTies: tieCountRes.count || 0,
+        finishedTies: tieFinRes.count || 0,
+        inProgressTies: tieInpRes.count || 0,
+        totalTeams: teamCountRes.count || 0,
+        totalClubs: clubCountRes.count || 0,
+        completedGroups,
+        totalGroups: groupCountRes.count || 0,
+      })
+
+      const recentMatches = (recentMatchRes.data || []).map((m: any) => ({
+        type: 'match',
+        desc: `${m.team_a_name} vs ${m.team_b_name}`,
+        detail: `${m.division_name} · ${m.score}`,
+        time: m.updated_at,
+      }))
+      const recentTies = (recentTieRes.data || []).map((t: any) => ({
+        type: 'tie',
+        desc: `${t.club_a?.name || 'TBD'} vs ${t.club_b?.name || 'TBD'}`,
+        detail: `단체전 · ${t.club_a_rubbers_won}-${t.club_b_rubbers_won}`,
+        time: t.updated_at,
+      }))
+      const combined = [...recentMatches, ...recentTies]
+        .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
+        .slice(0, 8)
+      setRecentActivity(combined)
+      setAllMatches((allMatchRes.data || []) as MatchRow[])
+
+      // 동률 감지 — 조별 예선 완료된 그룹 중 동률 팀 있는 것
+      await detectTied(eventId, divRes.data || [])
+    } finally {
+      setLoading(false)
+    }
+  }, [eventId])
+
+  // ── 동률 감지 ─────────────────────────────────────────────
+  async function detectTied(eid: string, divs: any[]) {
+    const { data: grpData } = await supabase
+      .from('groups').select('id,group_label,division_id,division_name').eq('event_id', eid)
+
+    if (!grpData?.length) return
+
+    const tiedList: any[] = []
+    for (const g of grpData) {
+      const { data: mData } = await supabase
+        .from('v_matches_with_teams').select('*')
+        .eq('event_id', eid).eq('group_id', g.id)
+        .eq('status', 'FINISHED').neq('score', 'BYE')
+
+      if (!mData?.length) continue
+
+      // 팀별 승수 집계
+      const teamWins: Record<string, { name: string; id: string; wins: number; diff: number; manualRank?: number }> = {}
+      for (const m of mData) {
+        if (!teamWins[m.team_a_id]) teamWins[m.team_a_id] = { name: m.team_a_name, id: m.team_a_id, wins: 0, diff: 0 }
+        if (!teamWins[m.team_b_id]) teamWins[m.team_b_id] = { name: m.team_b_name, id: m.team_b_id, wins: 0, diff: 0 }
+        const [sa, sb] = (m.score || '0:0').split(':').map(Number)
+        if (m.winner_team_id === m.team_a_id) { teamWins[m.team_a_id].wins++; teamWins[m.team_a_id].diff += (sa - sb) }
+        else if (m.winner_team_id === m.team_b_id) { teamWins[m.team_b_id].wins++; teamWins[m.team_b_id].diff += (sb - sa) }
+      }
+
+      const teams = Object.values(teamWins)
+      // 승수가 같은 팀이 있으면 동률
+      const winCounts = teams.map(t => t.wins)
+      const hasTie = winCounts.some((w, i) => winCounts.findIndex(x => x === w) !== i ||
+        (winCounts.filter(x => x === w).length > 1))
+
+      if (hasTie) {
+        // 기존 manual_rank 조회
+        const { data: rankData } = await supabase
+          .from('teams').select('id,team_name,manual_rank')
+          .in('id', teams.map(t => t.id))
+        const rankMap = Object.fromEntries((rankData || []).map(r => [r.id, r.manual_rank]))
+        teams.forEach(t => { t.manualRank = rankMap[t.id] ?? null })
+
+        tiedList.push({ ...g, teams: teams.sort((a, b) => b.wins - a.wins || b.diff - a.diff) })
+      }
+    }
+    setTiedGroups(tiedList)
+  }
+
+  // ── 수동 순위 저장 ─────────────────────────────────────────
+  async function saveManualRank(teamId: string, rank: number | null) {
+    setAdjusting(true); setAdjustMsg('')
+    const { error } = await supabase.from('teams').update({ manual_rank: rank }).eq('id', teamId)
+    setAdjusting(false)
+    if (error) {
+      // manual_rank 컬럼이 없을 수 있음 → 안내
+      if (error.message.includes('column')) {
+        setAdjustMsg('⚠️ teams 테이블에 manual_rank 컬럼이 없습니다. SQL 추가 필요:\nALTER TABLE teams ADD COLUMN IF NOT EXISTS manual_rank int;')
+      } else {
+        setAdjustMsg('❌ ' + error.message)
+      }
+    } else {
+      setAdjustMsg('✅ 저장됐습니다.')
+      await detectTied(eventId, stats?.divisions || [])
+    }
+  }
+
+  useEffect(() => { loadStats() }, [loadStats])
+
+  if (!eventId) {
+    return (
+      <div className="max-w-2xl mx-auto p-6 text-center text-gray-400 mt-20">
+        <div className="text-4xl mb-4">🏆</div>
+        <p className="font-medium">이벤트를 선택해주세요.</p>
+        <p className="text-sm mt-1">상단 헤더에서 이벤트를 선택하면 대시보드가 나타납니다.</p>
+      </div>
+    )
+  }
+
+  if (loading) return <div className="p-6 text-center text-gray-400">불러오는 중...</div>
+  if (!stats)  return <div className="p-6 text-center text-gray-400">데이터 없음</div>
+
+  const totalAll   = stats.totalMatches + stats.totalTies
+  const finishedAll = stats.finishedMatches + stats.finishedTies
+  const progressPct = totalAll > 0 ? Math.round(finishedAll / totalAll * 100) : 0
+  const matchProgressPct = stats.totalMatches > 0 ? Math.round(stats.finishedMatches / stats.totalMatches * 100) : 0
+  const tieProgressPct   = stats.totalTies > 0    ? Math.round(stats.finishedTies   / stats.totalTies   * 100) : 0
+
+  function getProgressColor(pct: number) {
+    if (pct >= 100) return 'bg-green-500'
+    if (pct >= 70)  return 'bg-blue-500'
+    if (pct >= 30)  return 'bg-yellow-500'
+    return 'bg-orange-500'
+  }
+  function formatTime(iso: string) {
+    return new Date(iso).toLocaleString('ko-KR', { hour: '2-digit', minute: '2-digit' })
+  }
+
+  // 경기결과 필터
+  const divisions = stats.divisions
+  const uniqueDates = [...new Set(divisions.map((d: any) => d.match_date).filter(Boolean))].sort() as string[]
+
+  const filteredMatches = (() => {
+    let list = matchFilter === 'ALL' ? allMatches : allMatches.filter(m => m.division_id === matchFilter)
+    if (dateMatchFilter !== 'ALL_DATE') {
+      const divsOnDate = divisions.filter((d: any) => d.match_date === dateMatchFilter).map((d: any) => d.id)
+      list = list.filter(m => divsOnDate.includes(m.division_id))
+    }
+    return list
+  })()
+
+  return (
+    <div className="max-w-5xl mx-auto p-6 space-y-6">
+
+      {/* ── 이벤트 헤더 ── */}
+      <div className="bg-gradient-to-r from-[#2d5016] to-[#4a7c59] rounded-2xl p-6 text-white">
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">{stats.event?.name}</h1>
+            <p className="text-white/70 mt-1 text-sm">{stats.event?.date} · {stats.event?.location}</p>
+            <div className="mt-2 flex gap-2 flex-wrap">
+              {stats.divisions.map(d => (
+                <span key={d.id} className="bg-white/20 text-white text-xs px-2 py-0.5 rounded-full">{d.name}</span>
+              ))}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-5xl font-black">{progressPct}%</div>
+            <div className="text-white/70 text-sm mt-1">전체 진행률</div>
+          </div>
+        </div>
+        <div className="mt-5">
+          <div className="flex justify-between text-xs text-white/60 mb-1.5">
+            <span>전체 진행률</span>
+            <span>{finishedAll} / {totalAll}경기 완료</span>
+          </div>
+          <div className="bg-white/20 rounded-full h-3 overflow-hidden">
+            <div className={`h-3 rounded-full transition-all duration-700 ${getProgressColor(progressPct)}`}
+              style={{ width: `${progressPct}%` }} />
+          </div>
+        </div>
+        {(stats.inProgressMatches + stats.inProgressTies) > 0 && (
+          <div className="mt-3 flex items-center gap-2">
+            <span className="inline-block w-2 h-2 rounded-full bg-red-400 animate-pulse" />
+            <span className="text-white/80 text-sm">현재 {stats.inProgressMatches + stats.inProgressTies}경기 진행 중</span>
+          </div>
+        )}
+      </div>
+
+      {/* ── 통계 카드 ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { val: stats.totalTeams || stats.totalClubs, label: '참가팀', color: 'text-blue-600' },
+          { val: finishedAll,                          label: '완료 경기', color: 'text-green-600' },
+          { val: stats.inProgressMatches + stats.inProgressTies, label: '진행 중', color: 'text-red-600', pulse: true },
+          { val: totalAll - finishedAll,               label: '남은 경기', color: 'text-orange-600' },
+        ].map((c, i) => (
+          <div key={i} className="bg-white rounded-xl border p-4">
+            <div className={`text-3xl font-black ${c.color}`}>{c.val}</div>
+            <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+              {c.pulse && c.val > 0 && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse inline-block" />}
+              {c.label}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── 개인전 / 단체전 진행률 ── */}
+      {(stats.totalMatches > 0 || stats.totalTies > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {stats.totalMatches > 0 && (
+            <div className="bg-white rounded-xl border p-4">
+              <div className="flex justify-between items-center mb-2">
+                <span className="font-semibold text-sm">🎾 개인전</span>
+                <span className="text-sm font-bold">{matchProgressPct}%</span>
+              </div>
+              <div className="bg-gray-100 rounded-full h-2.5 overflow-hidden">
+                <div className={`h-2.5 rounded-full transition-all duration-700 ${getProgressColor(matchProgressPct)}`}
+                  style={{ width: `${matchProgressPct}%` }} />
+              </div>
+              <div className="text-xs text-gray-400 mt-1.5">
+                {stats.finishedMatches} / {stats.totalMatches}경기
+                {stats.inProgressMatches > 0 && ` · 진행중 ${stats.inProgressMatches}`}
+              </div>
+            </div>
+          )}
+          {stats.totalTies > 0 && (
+            <div className="bg-white rounded-xl border p-4">
+              <div className="flex justify-between items-center mb-2">
+                <span className="font-semibold text-sm">🏆 단체전</span>
+                <span className="text-sm font-bold">{tieProgressPct}%</span>
+              </div>
+              <div className="bg-gray-100 rounded-full h-2.5 overflow-hidden">
+                <div className={`h-2.5 rounded-full transition-all duration-700 ${getProgressColor(tieProgressPct)}`}
+                  style={{ width: `${tieProgressPct}%` }} />
+              </div>
+              <div className="text-xs text-gray-400 mt-1.5">
+                {stats.finishedTies} / {stats.totalTies}타이
+                {stats.inProgressTies > 0 && ` · 진행중 ${stats.inProgressTies}`}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── ✅ 동률 수동 조정 ── */}
+      {tiedGroups.length > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl overflow-hidden">
+          <button
+            onClick={() => setShowTieAdjust(!showTieAdjust)}
+            className="w-full flex items-center justify-between px-4 py-3 text-left">
+            <div className="flex items-center gap-2">
+              <span className="text-amber-600 font-bold text-sm">⚠️ 동률 발생 — 수동 순위 조정 필요</span>
+              <span className="bg-amber-500 text-white text-xs px-2 py-0.5 rounded-full">{tiedGroups.length}그룹</span>
+            </div>
+            <span className="text-amber-500 text-sm">{showTieAdjust ? '▲ 접기' : '▼ 열기'}</span>
+          </button>
+
+          {showTieAdjust && (
+            <div className="px-4 pb-4 space-y-4 border-t border-amber-200">
+              <p className="text-xs text-amber-600 pt-3">
+                동률인 팀의 순위를 직접 지정해주세요. (1 = 1위, 2 = 2위 등)<br />
+                단, teams 테이블에 <code className="bg-amber-100 px-1 rounded">manual_rank</code> 컬럼이 필요합니다.
+              </p>
+              {adjustMsg && (
+                <div className={`text-xs px-3 py-2 rounded-lg whitespace-pre-wrap ${adjustMsg.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                  {adjustMsg}
+                </div>
+              )}
+              {tiedGroups.map(g => (
+                <div key={g.id} className="bg-white rounded-xl border border-amber-200 overflow-hidden">
+                  <div className="bg-amber-100 px-3 py-2 text-xs font-bold text-amber-800">
+                    {g.division_name} · {g.group_label}
+                  </div>
+                  <div className="divide-y divide-stone-100">
+                    {g.teams.map((t: any) => (
+                      <div key={t.id} className="flex items-center gap-3 px-3 py-2.5">
+                        <span className="flex-1 text-sm font-medium text-stone-800">{t.name}</span>
+                        <span className="text-xs text-stone-400">{t.wins}승 / 득실 {t.diff > 0 ? '+' : ''}{t.diff}</span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-stone-400">순위:</span>
+                          <select
+                            defaultValue={t.manualRank ?? ''}
+                            disabled={adjusting}
+                            onChange={e => saveManualRank(t.id, e.target.value ? parseInt(e.target.value) : null)}
+                            className="border border-amber-300 rounded-lg px-2 py-1 text-sm font-bold text-stone-700 bg-white focus:outline-none focus:border-amber-500 disabled:opacity-50">
+                            <option value="">-</option>
+                            {g.teams.map((_: any, i: number) => (
+                              <option key={i+1} value={i+1}>{i+1}위</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <p className="text-xs text-amber-500">
+                * SQL 한 줄 추가: <code className="bg-amber-100 px-1 rounded">ALTER TABLE teams ADD COLUMN IF NOT EXISTS manual_rank int;</code>
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── ✅ 경기결과 목록 ── */}
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <button
+          onClick={() => setShowResults(!showResults)}
+          className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-stone-50">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-sm">📋 경기결과 목록</span>
+            <span className="bg-[#2d5016] text-white text-xs px-2 py-0.5 rounded-full">{allMatches.length}경기</span>
+          </div>
+          <span className="text-stone-400 text-sm">{showResults ? '▲ 접기' : '▼ 열기'}</span>
+        </button>
+
+        {showResults && (
+          <div className="border-t">
+            {/* 부서 필터 */}
+            <div className="flex gap-2 px-4 py-3 overflow-x-auto border-b bg-stone-50">
+              {uniqueDates.length > 0 && (
+                <>
+                  <button onClick={() => setDateMatchFilter('ALL_DATE')}
+                    className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all ${dateMatchFilter === 'ALL_DATE' ? 'bg-stone-700 text-white' : 'bg-white border text-stone-600'}`}>
+                    전체 날짜
+                  </button>
+                  {uniqueDates.map(date => (
+                    <button key={date} onClick={() => setDateMatchFilter(date)}
+                      className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all ${dateMatchFilter === date ? 'bg-blue-600 text-white' : 'bg-white border text-stone-600'}`}>
+                      {new Date(date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short' })}
+                    </button>
+                  ))}
+                  <div className="w-px bg-stone-200 mx-1" />
+                </>
+              )}
+              <button onClick={() => setMatchFilter('ALL')}
+                className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all ${matchFilter === 'ALL' ? 'bg-[#2d5016] text-white' : 'bg-white border text-stone-600'}`}>
+                전체 ({allMatches.length})
+              </button>
+              {divisions.map((d: any) => {
+                const cnt = allMatches.filter(m => m.division_id === d.id).length
+                return (
+                  <button key={d.id} onClick={() => setMatchFilter(d.id)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all ${matchFilter === d.id ? 'bg-[#2d5016] text-white' : 'bg-white border text-stone-600'}`}>
+                    {d.name}{d.match_date ? ` (${new Date(d.match_date).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })})` : ''} ({cnt})
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* 경기 목록 */}
+            {filteredMatches.length === 0 ? (
+              <div className="text-center py-8 text-stone-400 text-sm">완료된 경기가 없습니다.</div>
+            ) : (
+              <div className="divide-y max-h-[480px] overflow-y-auto">
+                {filteredMatches.map(m => (
+                  <div key={m.id} className="flex items-center px-4 py-2.5 hover:bg-stone-50">
+                    <div className="flex-shrink-0 w-16 text-xs text-stone-400 leading-tight">
+                      <div>{m.group_label || m.round}</div>
+                      {m.court && <div className="text-[#2d5016]">{m.court}</div>}
+                    </div>
+                    <div className="flex-1 flex items-center gap-2 min-w-0">
+                      <span className={`flex-1 text-sm truncate text-right ${m.winner_team_id === m.team_a_id ? 'font-bold text-[#2d5016]' : 'text-stone-600'}`}>
+                        {m.team_a_name}
+                      </span>
+                      <span className="flex-shrink-0 text-base font-black text-stone-800 px-2">{m.score}</span>
+                      <span className={`flex-1 text-sm truncate ${m.winner_team_id === m.team_b_id ? 'font-bold text-[#2d5016]' : 'text-stone-600'}`}>
+                        {m.team_b_name}
+                      </span>
+                    </div>
+                    <div className="flex-shrink-0 w-12 text-right text-xs text-stone-400">
+                      {formatTime(m.updated_at)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── 빠른 메뉴 ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {[
+          { href: '/dashboard/courts',          emoji: '🎾', label: '코트 배정',   desc: '코트 현황 관리' },
+          { href: '/dashboard/teams/ties',      emoji: '🏆', label: '단체전 관리', desc: '타이 점수 입력' },
+          { href: '/dashboard/teams/standings', emoji: '📊', label: '순위표',      desc: '실시간 순위 확인' },
+          { href: '/dashboard/bracket',         emoji: '🗂️', label: '토너먼트표', desc: '대진 관리' },
+          { href: '/dashboard/report',          emoji: '📄', label: '리포트',      desc: 'PDF·CSV 내보내기' },
+          { href: '/dashboard/logs',            emoji: '👥', label: '접속 로그',   desc: '공개 페이지 접속 통계' },
+        ].map(item => (
+          <Link key={item.href} href={item.href}
+            className="bg-white rounded-xl border p-4 hover:shadow-md hover:border-blue-300 transition-all">
+            <div className="text-2xl mb-2">{item.emoji}</div>
+            <div className="font-semibold text-sm">{item.label}</div>
+            <div className="text-xs text-gray-400 mt-0.5">{item.desc}</div>
+          </Link>
+        ))}
+      </div>
+
+      {/* ── 최근 활동 ── */}
+      {recentActivity.length > 0 && (
+        <div className="bg-white rounded-xl border overflow-hidden">
+          <div className="px-4 py-3 border-b font-semibold text-sm">최근 완료 경기</div>
+          <div className="divide-y">
+            {recentActivity.map((a, i) => (
+              <div key={i} className="flex items-center gap-3 px-4 py-2.5">
+                <span className="text-lg">{a.type === 'tie' ? '🏆' : '🎾'}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium truncate">{a.desc}</div>
+                  <div className="text-xs text-gray-400">{a.detail}</div>
+                </div>
+                <span className="text-xs text-gray-400 flex-shrink-0">{formatTime(a.time)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="text-center">
+        <button onClick={loadStats} className="text-xs text-gray-400 hover:text-gray-600">🔄 새로고침</button>
+      </div>
+    </div>
+  )
+}
+
+
+============================================================
+FILE: src\app\dashboard\report\page.tsx
+============================================================
+// ============================================================
+// 대회 결과 리포트 (PDF + CSV 내보내기)
+// src/app/dashboard/report/page.tsx
+// ============================================================
+'use client'
+import { useState, useEffect, useCallback } from 'react'
+import { useEventId } from '@/components/useDashboard'
+import { supabase } from '@/lib/supabase'
+import { fetchStandings, fetchTies } from '@/lib/team-api'
+import type { StandingWithClub, TieWithClubs } from '@/types/team'
+
+interface EventInfo {
+  name: string
+  date: string
+  location: string
+  event_type: string
+  status: string
+}
+
+interface Division {
+  id: string
+  name: string
+  sort_order: number
+}
+
+interface MatchRow {
+  id: string
+  match_num: string
+  stage: string
+  round: string
+  division_name: string
+  team_a_name: string
+  team_b_name: string
+  winner_name: string | null
+  score: string | null
+  court: string | null
+  status: string
+}
+
+export default function ReportPage() {
+  const eventId = useEventId()
+  const [event, setEvent] = useState<EventInfo | null>(null)
+  const [divisions, setDivisions] = useState<Division[]>([])
+  const [standingsMap, setStandingsMap] = useState<Record<string, StandingWithClub[]>>({})
+  const [matches, setMatches] = useState<MatchRow[]>([])
+  const [ties, setTies] = useState<TieWithClubs[]>([])
+  const [groups, setGroups] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [exporting, setExporting] = useState(false)
+  const [activeSection, setActiveSection] = useState<'standings' | 'matches' | 'ties'>('standings')
+
+  const loadData = useCallback(async () => {
+    if (!eventId) return
+    setLoading(true)
+    try {
+      const [eventRes, divsRes, grpsRes, matchRes, tieData] = await Promise.all([
+        supabase.from('events').select('name,date,location,event_type,status').eq('id', eventId).single(),
+        supabase.from('divisions').select('id,name,sort_order').eq('event_id', eventId).order('sort_order'),
+        supabase.from('groups').select('*').eq('event_id', eventId).order('group_num'),
+        supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId).neq('score', 'BYE').order('division_name').order('stage').order('round'),
+        fetchTies(eventId),
+      ])
+
+      setEvent(eventRes.data)
+      const divList = divsRes.data || []
+      setDivisions(divList)
+      setGroups(grpsRes.data || [])
+
+      const matchList = (matchRes.data || []).map((m: any) => ({
+        id: m.id, match_num: m.match_num, stage: m.stage, round: m.round,
+        division_name: m.division_name, team_a_name: m.team_a_name, team_b_name: m.team_b_name,
+        winner_name: m.winner_name, score: m.score, court: m.court, status: m.status,
+      }))
+      setMatches(matchList)
+      setTies(tieData)
+
+      // 모든 그룹 순위 로드
+      const map: Record<string, StandingWithClub[]> = {}
+      for (const g of grpsRes.data || []) {
+        map[g.id] = await fetchStandings(eventId, g.id)
+      }
+      // 풀리그 순위 (그룹 없는 경우)
+      if (!grpsRes.data?.length) {
+        map['full'] = await fetchStandings(eventId, null)
+      }
+      setStandingsMap(map)
+    } finally {
+      setLoading(false)
+    }
+  }, [eventId])
+
+  useEffect(() => { loadData() }, [loadData])
+
+  // CSV 생성
+  function generateCSV(type: 'standings' | 'matches' | 'ties'): string {
+    if (!event) return ''
+    const BOM = '\uFEFF' // 한글 깨짐 방지
+
+    if (type === 'standings') {
+      const rows = [['그룹', '순위', '클럽명', '경기수', '승', '패', '러버승', '러버패', '득실차', '상태']]
+      Object.entries(standingsMap).forEach(([key, standings]) => {
+        const group = groups.find(g => g.id === key)
+        const groupName = key === 'full' ? '풀리그' : group?.group_label || group?.group_name || key
+        standings.forEach(s => {
+          rows.push([
+            groupName,
+            String(s.rank ?? '동점'),
+            s.club?.name || '',
+            String(s.played),
+            String(s.won),
+            String(s.lost),
+            String(s.rubbers_for ?? 0),
+            String(s.rubbers_against ?? 0),
+            String(s.rubber_diff),
+            s.rank_locked ? '확정' : s.is_tied ? '동점' : '자동',
+          ])
+        })
+      })
+      return BOM + rows.map(r => r.join(',')).join('\n')
+    }
+
+    if (type === 'matches') {
+      const rows = [['부서', '라운드', '경기번호', 'A팀', 'B팀', '점수', '승자', '코트', '상태']]
+      matches.forEach(m => {
+        rows.push([
+          m.division_name, m.round, m.match_num,
+          m.team_a_name, m.team_b_name,
+          m.score || '',
+          m.winner_name || '',
+          m.court || '',
+          m.status === 'FINISHED' ? '완료' : m.status === 'IN_PROGRESS' ? '진행중' : '대기',
+        ])
+      })
+      return BOM + rows.map(r => r.join(',')).join('\n')
+    }
+
+    if (type === 'ties') {
+      const rows = [['순서', 'A팀', 'B팀', 'A러버승', 'B러버승', '승자', '코트', '상태']]
+      ties.filter(t => !t.is_bye).forEach(t => {
+        rows.push([
+          String(t.tie_order),
+          t.club_a?.name || 'TBD',
+          t.club_b?.name || 'TBD',
+          String(t.club_a_rubbers_won),
+          String(t.club_b_rubbers_won),
+          t.winning_club_id === t.club_a_id ? (t.club_a?.name || '') : t.winning_club_id === t.club_b_id ? (t.club_b?.name || '') : '',
+          t.court_number ? `코트 ${t.court_number}` : '',
+          t.status === 'completed' ? '완료' : t.status === 'in_progress' ? '진행중' : '대기',
+        ])
+      })
+      return BOM + rows.map(r => r.join(',')).join('\n')
+    }
+    return ''
+  }
+
+  function downloadCSV(type: 'standings' | 'matches' | 'ties') {
+    const csv = generateCSV(type)
+    if (!csv) return
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const fileName = event ? `${event.name}_${type}_${new Date().toLocaleDateString('ko-KR').replace(/\s/g, '')}.csv` : `${type}.csv`
+    a.download = fileName
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // PDF 생성 (jsPDF 동적 로드)
+  async function downloadPDF() {
+    if (!event) return
+    setExporting(true)
+    try {
+      // jsPDF 동적 import
+      const jsPDFModule = await import('jspdf')
+      const autoTableModule = await import('jspdf-autotable')
+      const jsPDF = jsPDFModule.default
+      const autoTable = autoTableModule.default
+
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+
+      // 제목
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(18)
+      doc.text(event.name, 105, 20, { align: 'center' })
+      doc.setFontSize(11)
+      doc.setFont('helvetica', 'normal')
+      doc.text(`${event.date} | ${event.location}`, 105, 28, { align: 'center' })
+
+      let yPos = 38
+
+      // 순위표
+      if (Object.keys(standingsMap).length > 0) {
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(13)
+        doc.text('Standings', 14, yPos)
+        yPos += 6
+
+        for (const [key, standings] of Object.entries(standingsMap)) {
+          if (standings.length === 0) continue
+          const group = groups.find(g => g.id === key)
+          const groupName = key === 'full' ? 'Full League' : group?.group_label || group?.group_name || key
+
+          autoTable(doc, {
+            startY: yPos,
+            head: [['#', 'Club', 'P', 'W', 'L', 'RW', 'RL', 'Diff']],
+            body: standings.map(s => [
+              s.rank ?? '=',
+              s.club?.name || '',
+              s.played,
+              s.won,
+              s.lost,
+              s.rubbers_for ?? 0,
+              s.rubbers_against ?? 0,
+              s.rubber_diff,
+            ]),
+            didDrawPage: (data: any) => {},
+            theme: 'striped',
+            styles: { fontSize: 9, cellPadding: 2 },
+            headStyles: { fillColor: [45, 80, 22] },
+            margin: { left: 14, right: 14 },
+            tableWidth: 'auto',
+          })
+          yPos = (doc as any).lastAutoTable?.finalY + 8 || yPos + 30
+        }
+      }
+
+      // 단체전 결과
+      const completedTies = ties.filter(t => t.status === 'completed' && !t.is_bye)
+      if (completedTies.length > 0) {
+        if (yPos > 240) { doc.addPage(); yPos = 20 }
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(13)
+        doc.text('Team Ties Results', 14, yPos)
+        yPos += 6
+
+        autoTable(doc, {
+          startY: yPos,
+          head: [['#', 'Team A', 'A', 'B', 'Team B', 'Winner']],
+          body: completedTies.map(t => [
+            t.tie_order,
+            t.club_a?.name || 'TBD',
+            t.club_a_rubbers_won,
+            t.club_b_rubbers_won,
+            t.club_b?.name || 'TBD',
+            t.winning_club_id === t.club_a_id ? (t.club_a?.name || '') : (t.club_b?.name || ''),
+          ]),
+          theme: 'striped',
+          styles: { fontSize: 9, cellPadding: 2 },
+          headStyles: { fillColor: [37, 99, 235] },
+          margin: { left: 14, right: 14 },
+        })
+        yPos = (doc as any).lastAutoTable?.finalY + 8 || yPos + 30
+      }
+
+      // 개인전 결과
+      const finishedMatches = matches.filter(m => m.status === 'FINISHED').slice(0, 60)
+      if (finishedMatches.length > 0) {
+        if (yPos > 230) { doc.addPage(); yPos = 20 }
+        doc.setFont('helvetica', 'bold')
+        doc.setFontSize(13)
+        doc.text('Match Results', 14, yPos)
+        yPos += 6
+
+        autoTable(doc, {
+          startY: yPos,
+          head: [['Div', 'Round', 'Team A', 'Score', 'Team B']],
+          body: finishedMatches.map(m => [
+            m.division_name || '',
+            m.round || '',
+            m.team_a_name || '',
+            m.score || '',
+            m.team_b_name || '',
+          ]),
+          theme: 'striped',
+          styles: { fontSize: 8, cellPadding: 2 },
+          headStyles: { fillColor: [120, 53, 15] },
+          margin: { left: 14, right: 14 },
+        })
+      }
+
+      // 페이지 번호
+      const pageCount = doc.getNumberOfPages()
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i)
+        doc.setFontSize(8)
+        doc.setTextColor(150)
+        doc.text(`Page ${i} of ${pageCount} - Generated ${new Date().toLocaleDateString('ko-KR')}`, 105, 290, { align: 'center' })
+      }
+
+      const fileName = `${event.name}_report_${new Date().toLocaleDateString('ko-KR').replace(/\s/g, '')}.pdf`
+      doc.save(fileName)
+    } catch (err: any) {
+      alert('PDF 생성 실패: jspdf 패키지가 설치되어 있는지 확인하세요.\n' + err.message)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  if (!eventId) return <p className="text-stone-400">대시보드에서 이벤트를 선택하세요.</p>
+
+  const completedMatchCount = matches.filter(m => m.status === 'FINISHED').length
+  const completedTieCount = ties.filter(t => t.status === 'completed').length
+
+  return (
+    <div className="max-w-4xl mx-auto p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">📊 대회 리포트</h1>
+        {event && (
+          <div className="text-right">
+            <div className="font-semibold">{event.name}</div>
+            <div className="text-xs text-gray-500">{event.date} · {event.location}</div>
+          </div>
+        )}
+      </div>
+
+      {/* 요약 통계 */}
+      {!loading && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-white rounded-xl border p-4 text-center">
+            <div className="text-3xl font-black text-blue-600">{divisions.length}</div>
+            <div className="text-xs text-gray-500 mt-1">부서</div>
+          </div>
+          <div className="bg-white rounded-xl border p-4 text-center">
+            <div className="text-3xl font-black text-green-600">{completedMatchCount}</div>
+            <div className="text-xs text-gray-500 mt-1">완료 경기</div>
+          </div>
+          <div className="bg-white rounded-xl border p-4 text-center">
+            <div className="text-3xl font-black text-purple-600">{completedTieCount}</div>
+            <div className="text-xs text-gray-500 mt-1">완료 단체전</div>
+          </div>
+          <div className="bg-white rounded-xl border p-4 text-center">
+            <div className="text-3xl font-black text-orange-600">
+              {Object.values(standingsMap).reduce((a, s) => a + s.length, 0)}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">참가 클럽</div>
+          </div>
+        </div>
+      )}
+
+      {/* 내보내기 버튼 */}
+      <div className="bg-white rounded-xl border p-5">
+        <h3 className="font-bold mb-4">내보내기</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* PDF */}
+          <div className="bg-red-50 rounded-xl border border-red-200 p-4">
+            <div className="text-2xl mb-2">📄</div>
+            <div className="font-semibold text-red-800 mb-1">PDF 리포트</div>
+            <div className="text-xs text-red-600 mb-3">순위표 + 경기결과 통합 문서</div>
+            <button onClick={downloadPDF} disabled={loading || exporting}
+              className="w-full bg-red-600 text-white py-2.5 rounded-lg text-sm font-bold hover:bg-red-700 disabled:opacity-50">
+              {exporting ? '생성 중...' : '📄 PDF 다운로드'}
+            </button>
+            <p className="text-xs text-red-400 mt-1.5">* jspdf, jspdf-autotable 필요</p>
+          </div>
+
+          {/* CSV */}
+          <div className="bg-green-50 rounded-xl border border-green-200 p-4">
+            <div className="text-2xl mb-2">📊</div>
+            <div className="font-semibold text-green-800 mb-1">CSV 내보내기</div>
+            <div className="text-xs text-green-600 mb-3">엑셀에서 바로 열 수 있는 CSV</div>
+            <div className="space-y-2">
+              <button onClick={() => downloadCSV('standings')} disabled={loading}
+                className="w-full bg-green-600 text-white py-2 rounded-lg text-sm hover:bg-green-700 disabled:opacity-50">
+                📋 순위표 CSV
+              </button>
+              <button onClick={() => downloadCSV('matches')} disabled={loading}
+                className="w-full bg-green-500 text-white py-2 rounded-lg text-sm hover:bg-green-600 disabled:opacity-50">
+                🎾 개인전 결과 CSV
+              </button>
+              <button onClick={() => downloadCSV('ties')} disabled={loading}
+                className="w-full bg-green-400 text-white py-2 rounded-lg text-sm hover:bg-green-500 disabled:opacity-50">
+                🏆 단체전 결과 CSV
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 미리보기 */}
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className="flex border-b">
+          {(['standings', 'matches', 'ties'] as const).map(s => (
+            <button key={s} onClick={() => setActiveSection(s)}
+              className={`flex-1 py-2.5 text-sm font-medium transition ${activeSection === s ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}>
+              {s === 'standings' ? '📊 순위' : s === 'matches' ? '🎾 개인전' : '🏆 단체전'}
+            </button>
+          ))}
+        </div>
+
+        <div className="p-4">
+          {loading ? (
+            <p className="text-center py-8 text-gray-400">불러오는 중...</p>
+          ) : activeSection === 'standings' ? (
+            <StandingsPreview standingsMap={standingsMap} groups={groups} />
+          ) : activeSection === 'matches' ? (
+            <MatchesPreview matches={matches} />
+          ) : (
+            <TiesPreview ties={ties} />
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function StandingsPreview({ standingsMap, groups }: { standingsMap: Record<string, StandingWithClub[]>, groups: any[] }) {
+  const entries = Object.entries(standingsMap)
+  if (entries.length === 0) return <p className="text-center text-gray-400 py-4">순위 데이터 없음</p>
+  return (
+    <div className="space-y-4">
+      {entries.map(([key, standings]) => {
+        const group = groups.find(g => g.id === key)
+        const groupName = key === 'full' ? '풀리그' : group?.group_label || group?.group_name || key
+        return (
+          <div key={key}>
+            <h4 className="font-semibold text-sm text-gray-600 mb-2">{groupName}</h4>
+            <table className="w-full text-xs border rounded overflow-hidden">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="px-2 py-1.5 text-left">#</th>
+                  <th className="px-2 py-1.5 text-left">클럽</th>
+                  <th className="px-2 py-1.5 text-center">승</th>
+                  <th className="px-2 py-1.5 text-center">패</th>
+                  <th className="px-2 py-1.5 text-center">득실</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {standings.map(s => (
+                  <tr key={s.id} className={s.is_tied ? 'bg-yellow-50' : ''}>
+                    <td className="px-2 py-1.5 font-bold">{s.rank ?? '='}</td>
+                    <td className="px-2 py-1.5">{s.club?.name}</td>
+                    <td className="px-2 py-1.5 text-center">{s.won}</td>
+                    <td className="px-2 py-1.5 text-center">{s.lost}</td>
+                    <td className="px-2 py-1.5 text-center">{s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function MatchesPreview({ matches }: { matches: MatchRow[] }) {
+  const finished = matches.filter(m => m.status === 'FINISHED').slice(0, 20)
+  if (finished.length === 0) return <p className="text-center text-gray-400 py-4">완료 경기 없음</p>
+  return (
+    <div className="space-y-1">
+      {finished.map(m => (
+        <div key={m.id} className="flex items-center gap-2 text-sm py-1.5 border-b last:border-0">
+          <span className="text-xs text-gray-400 w-24 flex-shrink-0">{m.division_name}</span>
+          <span className="flex-1 font-medium">{m.team_a_name}</span>
+          <span className="font-bold text-green-700 mx-2">{m.score}</span>
+          <span className="flex-1 text-right font-medium">{m.team_b_name}</span>
+        </div>
+      ))}
+      {matches.filter(m => m.status === 'FINISHED').length > 20 && (
+        <p className="text-xs text-gray-400 text-center pt-2">+ 더 많은 경기가 있습니다. CSV로 전체 내보내기 하세요.</p>
+      )}
+    </div>
+  )
+}
+
+function TiesPreview({ ties }: { ties: TieWithClubs[] }) {
+  const completed = ties.filter(t => t.status === 'completed' && !t.is_bye)
+  if (completed.length === 0) return <p className="text-center text-gray-400 py-4">완료 단체전 없음</p>
+  return (
+    <div className="space-y-1">
+      {completed.map(t => (
+        <div key={t.id} className="flex items-center gap-2 text-sm py-1.5 border-b last:border-0">
+          <span className="flex-1 font-medium">{t.club_a?.name}</span>
+          <span className="font-black text-blue-700 mx-2">{t.club_a_rubbers_won} - {t.club_b_rubbers_won}</span>
+          <span className="flex-1 text-right font-medium">{t.club_b?.name}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+

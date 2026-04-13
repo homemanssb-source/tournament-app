@@ -1,0 +1,848 @@
+============================================================
+FILE: src\lib\notify.ts
+============================================================
+'use client'
+
+import { useState, useEffect, useCallback } from 'react'
+
+// ── VAPID 공개키 (서버에서 발급 후 여기에 붙여넣기) ──
+// 테스트용으로 빈값이면 알림 구독은 안 되지만 권한 요청은 됩니다
+const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || ''
+
+function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+  const rawData = window.atob(base64)
+  const outputArray = new Uint8Array(rawData.length)
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i)
+  }
+  return outputArray.buffer as ArrayBuffer
+}
+
+export type NotificationPermission = 'default' | 'granted' | 'denied'
+
+export function usePushNotification() {
+  const [permission, setPermission] = useState<NotificationPermission>('default')
+  const [subscription, setSubscription] = useState<PushSubscription | null>(null)
+  const [isSupported, setIsSupported] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+
+  // 지원 여부 & 현재 권한 초기화
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window && 'serviceWorker' in navigator) {
+      setIsSupported(true)
+      setPermission(Notification.permission as NotificationPermission)
+    }
+  }, [])
+
+  // 기존 구독 확인
+  useEffect(() => {
+    if (!isSupported) return
+    navigator.serviceWorker.ready.then(reg => {
+      reg.pushManager.getSubscription().then(sub => {
+        if (sub) setSubscription(sub)
+      })
+    })
+  }, [isSupported])
+
+  // 권한 요청 & 구독
+  const subscribe = useCallback(async () => {
+    if (!isSupported) return null
+    setIsLoading(true)
+    try {
+      const perm = await Notification.requestPermission()
+      setPermission(perm as NotificationPermission)
+      if (perm !== 'granted') return null
+
+      const reg = await navigator.serviceWorker.ready
+
+      // 기존 구독이 있으면 재사용
+      let sub = await reg.pushManager.getSubscription()
+      if (!sub && VAPID_PUBLIC_KEY) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        })
+      }
+
+      setSubscription(sub)
+
+      // TODO: 서버에 구독 정보 저장
+      // await fetch('/api/push/subscribe', {
+      //   method: 'POST',
+      //   headers: { 'Content-Type': 'application/json' },
+      //   body: JSON.stringify(sub),
+      // })
+
+      return sub
+    } catch (err) {
+      console.error('[Push] 구독 오류:', err)
+      return null
+    } finally {
+      setIsLoading(false)
+    }
+  }, [isSupported])
+
+  // 구독 해제
+  const unsubscribe = useCallback(async () => {
+    if (!subscription) return
+    setIsLoading(true)
+    try {
+      await subscription.unsubscribe()
+      setSubscription(null)
+
+      // TODO: 서버에서 구독 정보 삭제
+      // await fetch('/api/push/unsubscribe', { method: 'POST' })
+    } catch (err) {
+      console.error('[Push] 구독 해제 오류:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [subscription])
+
+  // 로컬 테스트 알림 (서버 없이 바로 테스트)
+  const sendTestNotification = useCallback(async () => {
+    if (permission !== 'granted') {
+      await subscribe()
+      return
+    }
+    const reg = await navigator.serviceWorker.ready
+    reg.showNotification('🎾 테스트 알림', {
+      body: '알림이 정상적으로 작동합니다!',
+      icon: '/icon-192x192.png',
+      badge: '/icon-72x72.png',
+    } as NotificationOptions)
+  }, [permission, subscribe])
+
+  return {
+    isSupported,
+    permission,
+    subscription,
+    isLoading,
+    isSubscribed: !!subscription && permission === 'granted',
+    subscribe,
+    unsubscribe,
+    sendTestNotification,
+  }
+}
+
+============================================================
+FILE: src\lib\supabase.ts
+============================================================
+import { createClient } from '@supabase/supabase-js'
+
+export const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
+
+// ── 앱B 서비스 롤 (서버사이드 API Route 전용) ──
+export function getServiceClient() {
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY not set');
+  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey);
+}
+
+// ── 앱A 읽기 전용 클라이언트 (연동용) ──
+export function getAppAClient() {
+  const appAAnonKey = process.env.APP_A_ANON_KEY;
+  if (!appAAnonKey) throw new Error('APP_A_ANON_KEY not set');
+  return createClient(process.env.APP_A_SUPABASE_URL!, appAAnonKey);
+}
+
+// ============================================================
+// Types (기존 개인전)
+// ============================================================
+export interface Event {
+  id: string; event_key: string; name: string; date: string; location: string; status: string
+}
+
+export interface Division {
+  id: string; event_id: string; name: string; sort_order: number
+}
+
+export interface Team {
+  id: string; team_num: string; team_name: string; player1_name: string; player2_name: string
+  division_name: string; division_id: string; event_id: string; pin_plain?: string; group_id?: string
+}
+
+export interface Group {
+  id: string; event_id: string; division_id: string; division_name: string
+  group_label: string; group_num: number; advance_count: number
+}
+
+export interface Match {
+  id: string; match_num: string; event_id: string; division_id: string; division_name: string
+  stage: 'GROUP' | 'FINALS'; round: string; slot: number; group_id?: string
+  team_a_id?: string; team_b_id?: string; score?: string; winner_team_id?: string
+  status: 'PENDING' | 'IN_PROGRESS' | 'FINISHED'; court?: string
+  locked_by_participant: boolean; ended_at?: string
+  // joined
+  team_a_name?: string; team_b_name?: string; winner_name?: string; group_label?: string
+}
+
+export interface BracketNode {
+  id: string; division_name: string; round: string; match_id: string
+  next_match_id?: string; next_slot?: 'A' | 'B'
+  seed_a_team_id?: string; seed_b_team_id?: string; lock: boolean
+  // joined from v_bracket_with_details
+  team_a_name?: string; team_b_name?: string; winner_name?: string
+  score?: string; status?: string; team_a_id?: string; team_b_id?: string; winner_team_id?: string
+  slot?: number
+}
+
+============================================================
+FILE: src\lib\team-api.ts
+============================================================
+// ============================================================
+// 단체전 Supabase API 함수
+// src/lib/team-api.ts
+// ============================================================
+
+import { supabase } from './supabase';
+import type {
+  Club, ClubMember, ClubWithMembers,
+  Tie, TieWithClubs, TieRubber,
+  TeamStanding, StandingWithClub, TeamLineup,
+  LineupEntry, RpcResult, EventTeamConfig,
+} from '@/types/team';
+
+// ========================================
+// 클럽 CRUD
+// ========================================
+
+export async function fetchClubs(eventId: string, divisionId?: string | null): Promise<Club[]> {
+  let query = supabase
+    .from('clubs')
+    .select('*')
+    .eq('event_id', eventId);
+  if (divisionId) query = query.eq('division_id', divisionId);
+  const { data, error } = await query
+    .order('seed_number', { ascending: true, nullsFirst: false })
+    .order('created_at');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function fetchClubWithMembers(clubId: string): Promise<ClubWithMembers | null> {
+  const { data: club, error: ce } = await supabase
+    .from('clubs')
+    .select('*')
+    .eq('id', clubId)
+    .single();
+  if (ce) throw ce;
+  if (!club) return null;
+
+  const { data: members, error: me } = await supabase
+    .from('club_members')
+    .select('*')
+    .eq('club_id', clubId)
+    .order('member_order', { ascending: true, nullsFirst: false })
+    .order('name');
+  if (me) throw me;
+
+  return { ...club, members: members || [] };
+}
+
+export async function fetchClubMembers(clubId: string): Promise<ClubMember[]> {
+  const { data, error } = await supabase
+    .from('club_members')
+    .select('*')
+    .eq('club_id', clubId)
+    .order('member_order', { ascending: true, nullsFirst: false })
+    .order('name');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function createClub(
+  eventId: string,
+  name: string,
+  captainName?: string,
+  captainPin?: string,
+  seedNumber?: number | null,
+): Promise<Club> {
+  const { data, error } = await supabase
+    .from('clubs')
+    .insert({
+      event_id: eventId,
+      name,
+      captain_name: captainName || null,
+      captain_pin: captainPin || null,
+      seed_number: seedNumber ?? null,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateClub(
+  clubId: string,
+  updates: Partial<Pick<Club, 'name' | 'captain_name' | 'captain_pin' | 'seed_number'>>,
+): Promise<Club> {
+  const { data, error } = await supabase
+    .from('clubs')
+    .update(updates)
+    .eq('id', clubId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteClub(clubId: string): Promise<void> {
+  const { error } = await supabase.from('clubs').delete().eq('id', clubId);
+  if (error) throw error;
+}
+
+export async function addClubMember(
+  clubId: string,
+  name: string,
+  gender?: 'M' | 'F',
+  grade?: string,
+  isCaptain?: boolean,
+): Promise<ClubMember> {
+  const { data, error } = await supabase
+    .from('club_members')
+    .insert({
+      club_id: clubId,
+      name,
+      gender: gender || null,
+      grade: grade || null,
+      is_captain: isCaptain || false,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function addClubMembersBatch(
+  clubId: string,
+  members: { name: string; gender?: 'M' | 'F'; grade?: string; is_captain?: boolean; member_order?: number }[],
+): Promise<ClubMember[]> {
+  const rows = members.map((m, idx) => ({
+    club_id: clubId,
+    name: m.name,
+    gender: m.gender || null,
+    grade: m.grade || null,
+    is_captain: m.is_captain || false,
+    member_order: m.member_order ?? idx + 1,
+  }));
+  const { data, error } = await supabase
+    .from('club_members')
+    .insert(rows)
+    .select();
+  if (error) throw error;
+  return data || [];
+}
+
+export async function deleteClubMember(memberId: string): Promise<void> {
+  const { error } = await supabase.from('club_members').delete().eq('id', memberId);
+  if (error) throw error;
+}
+
+// ========================================
+// 주장(캡틴) 변경
+// ========================================
+
+export async function setCaptain(
+  clubId: string,
+  memberId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const { error: resetError } = await supabase
+    .from('club_members')
+    .update({ is_captain: false })
+    .eq('club_id', clubId)
+    .eq('is_captain', true);
+  if (resetError) return { success: false, error: resetError.message };
+
+  const { error: setError } = await supabase
+    .from('club_members')
+    .update({ is_captain: true })
+    .eq('id', memberId)
+    .eq('club_id', clubId);
+  if (setError) return { success: false, error: setError.message };
+  return { success: true };
+}
+
+// ========================================
+// 대전(Tie) 조회
+// ========================================
+
+export async function fetchTies(eventId: string, round?: string, divisionId?: string | null): Promise<TieWithClubs[]> {
+  let query = supabase
+    .from('ties')
+    .select(`
+      *,
+      club_a:clubs!ties_club_a_id_fkey(*),
+      club_b:clubs!ties_club_b_id_fkey(*)
+    `)
+    .eq('event_id', eventId)
+    .order('tie_order');
+
+  if (round) query = query.eq('round', round);
+  if (divisionId) query = query.eq('division_id', divisionId);
+  if (divisionId) query = query.eq('division_id', divisionId);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data || []) as TieWithClubs[];
+}
+
+export async function fetchTieWithRubbers(tieId: string) {
+  const { data: tie, error: te } = await supabase
+    .from('ties')
+    .select(`
+      *,
+      club_a:clubs!ties_club_a_id_fkey(*),
+      club_b:clubs!ties_club_b_id_fkey(*)
+    `)
+    .eq('id', tieId)
+    .single();
+  if (te) throw te;
+
+  const { data: rubbers, error: re } = await supabase
+    .from('tie_rubbers')
+    .select('*')
+    .eq('tie_id', tieId)
+    .order('rubber_number');
+  if (re) throw re;
+
+  return { ...tie, rubbers: rubbers || [] };
+}
+
+export async function fetchRubbers(tieId: string): Promise<TieRubber[]> {
+  const { data, error } = await supabase
+    .from('tie_rubbers')
+    .select('*')
+    .eq('tie_id', tieId)
+    .order('rubber_number');
+  if (error) throw error;
+  return data || [];
+}
+
+// ========================================
+// 순위 조회
+// ========================================
+
+export async function fetchStandings(eventId: string, groupId?: string | null): Promise<StandingWithClub[]> {
+  let query = supabase
+    .from('team_standings')
+    .select(`*, club:clubs(*)`)
+    .eq('event_id', eventId);
+
+  if (groupId === null || groupId === undefined) {
+    query = query.is('group_id', null);
+  } else if (groupId) {
+    query = query.eq('group_id', groupId);
+  }
+
+  const { data, error } = await query
+    .order('rank', { ascending: true, nullsFirst: false })
+    .order('won', { ascending: false })
+    .order('rubber_diff', { ascending: false });
+  if (error) throw error;
+
+  const standings = (data || []) as (TeamStanding & { club: Club })[];
+  return standings.map((s) => {
+    const isTied = s.rank === null && s.played > 0;
+    return { ...s, is_tied: isTied };
+  });
+}
+
+// ========================================
+// 라인업 조회
+// ========================================
+
+export async function fetchLineups(tieId: string, clubId: string): Promise<TeamLineup[]> {
+  const { data, error } = await supabase
+    .from('team_lineups')
+    .select('*')
+    .eq('tie_id', tieId)
+    .eq('club_id', clubId)
+    .order('rubber_number');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function fetchRevealedLineups(tieId: string): Promise<TeamLineup[]> {
+  const { data, error } = await supabase
+    .from('team_lineups')
+    .select('*')
+    .eq('tie_id', tieId)
+    .eq('is_revealed', true)
+    .order('rubber_number');
+  if (error) throw error;
+  return data || [];
+}
+
+// ========================================
+// RPC 호출
+// ========================================
+
+export async function submitLineup(
+  tieId: string, clubId: string, captainPin: string, lineups: LineupEntry[],
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_submit_lineup', {
+    p_tie_id: tieId,
+    p_club_id: clubId,
+    p_captain_pin: captainPin,
+    p_lineups: lineups,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+// ✅ divisionId 추가
+export async function generateFullLeague(
+  eventId: string,
+  divisionId?: string,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_generate_full_league', {
+    p_event_id: eventId,
+    p_division_id: divisionId || null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+// ✅ divisionId 추가
+export async function createTeamGroups(
+  eventId: string,
+  groupCount: number,
+  groupSize: number,
+  divisionId?: string,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_create_team_groups', {
+    p_event_id: eventId,
+    p_group_count: groupCount,
+    p_group_size: groupSize,
+    p_division_id: divisionId || null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+export async function recordRubberScore(
+  rubberId: string,
+  set1a: number, set1b: number,
+  set2a?: number | null, set2b?: number | null,
+  set3a?: number | null, set3b?: number | null,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_admin_record_score', {
+    p_rubber_id: rubberId,
+    p_set1_a: set1a,
+    p_set1_b: set1b,
+    p_set2_a: set2a ?? null,
+    p_set2_b: set2b ?? null,
+    p_set3_a: set3a ?? null,
+    p_set3_b: set3b ?? null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+export async function pinRecordScore(
+  pin: string, rubberId: string,
+  set1a: number, set1b: number,
+  set2a?: number | null, set2b?: number | null,
+  set3a?: number | null, set3b?: number | null,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_team_pin_score', {
+    p_pin: pin,
+    p_rubber_id: rubberId,
+    p_set1_a: set1a,
+    p_set1_b: set1b,
+    p_set2_a: set2a ?? null,
+    p_set2_b: set2b ?? null,
+    p_set3_a: set3a ?? null,
+    p_set3_b: set3b ?? null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+export async function setManualRank(
+  eventId: string, clubId: string, rank: number, notes?: string,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_set_manual_rank', {
+    p_event_id: eventId,
+    p_club_id: clubId,
+    p_rank: rank,
+    p_notes: notes || null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+// ✅ divisionId 추가
+export async function generateTeamTournament(
+  eventId: string,
+  seededClubs?: { club_id: string; seed_number: number }[],
+  divisionId?: string,
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_generate_team_tournament', {
+    p_event_id: eventId,
+    p_division_id: divisionId || null,
+    p_seeded_clubs: seededClubs || [],
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+export async function advanceTournamentWinner(tieId: string): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_advance_tournament_winner', {
+    p_tie_id: tieId,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+export async function calculateStandings(eventId: string, groupId?: string | null): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_calculate_standings', {
+    p_event_id: eventId,
+    p_group_id: groupId ?? null,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+// ========================================
+// 대회 단체전 설정 조회/수정
+// ========================================
+
+export async function fetchEventTeamConfig(eventId: string): Promise<EventTeamConfig | null> {
+  const { data, error } = await supabase
+    .from('events')
+    .select('event_type, team_format, team_rubber_count, team_sets_per_rubber, allow_player_reuse, lineup_mode, team_member_limit, team_match_type')
+    .eq('id', eventId)
+    .single();
+  if (error) throw error;
+  return data as EventTeamConfig;
+}
+
+export async function updateEventTeamConfig(eventId: string, config: Partial<EventTeamConfig>): Promise<void> {
+  const { error } = await supabase
+    .from('events')
+    .update(config)
+    .eq('id', eventId);
+  if (error) throw error;
+}
+
+// ========================================
+// 개인전 결선 결과 연동 (App B → App A)
+// ========================================
+
+export async function fetchFinalsMatches(eventId: string) {
+  const { data, error } = await supabase
+    .from('matches')
+    .select(`
+      id, match_num, event_id, division_id, division_name,
+      stage, round, team_a_id, team_b_id, score,
+      winner_team_id, status, ended_at,
+      team_a_name, team_b_name, winner_name
+    `)
+    .eq('event_id', eventId)
+    .eq('stage', 'FINALS')
+    .eq('status', 'FINISHED')
+    .in('round', ['R32', 'R16', 'QF', 'SF', 'F'])
+    .order('round')
+    .order('slot');
+
+  if (error) throw error;
+  return data || [];
+}
+
+export async function sendResultsToAppA(
+  appAClient: any,
+  eventId: string,
+  matches: any[],
+): Promise<{ success: boolean; synced: number; skipped: number; errors: string[] }> {
+  const roundMap: Record<string, string> = {
+    'R32': '32', 'R16': '16', 'QF': '8', 'SF': '4', 'F': 'final',
+  };
+
+  let synced = 0, skipped = 0;
+  const errors: string[] = [];
+
+  for (const m of matches) {
+    const { data: existing } = await appAClient
+      .from('app_b_match_results')
+      .select('id')
+      .eq('event_id', eventId)
+      .eq('external_match_id', m.id)
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      skipped++;
+      continue;
+    }
+
+    const { error } = await appAClient.from('app_b_match_results').insert([{
+      event_id: eventId,
+      division_id: m.division_id || null,
+      division_name: m.division_name || null,
+      round: roundMap[m.round] || m.round,
+      match_num: m.match_num || null,
+      external_match_id: m.id,
+      team_a_name: m.team_a_name || null,
+      team_b_name: m.team_b_name || null,
+      team_a_id: m.team_a_id || null,
+      team_b_id: m.team_b_id || null,
+      score: m.score || null,
+      winner_name: m.winner_name || null,
+      winner_id: m.winner_team_id || null,
+      completed_at: m.ended_at || new Date().toISOString(),
+    }]);
+
+    if (error) {
+      errors.push(`${m.match_num || m.id}: ${error.message}`);
+    } else {
+      synced++;
+    }
+  }
+
+  return { success: errors.length === 0, synced, skipped, errors };
+}
+
+============================================================
+FILE: src\lib\team-utils.ts
+============================================================
+// ============================================================
+// 단체전 유틸리티 함수
+// src/lib/team-utils.ts
+// ============================================================
+
+import type { TieStatus, TeamFormat, TeamMatchType } from '@/types/team';
+
+// ── 대전 상태 한글 표시 ──
+export function getTieStatusLabel(status: TieStatus): string {
+  const labels: Record<TieStatus, string> = {
+    pending: '대기',
+    lineup_phase: '라인업 제출중',
+    lineup_ready: '라인업 확정',
+    in_progress: '경기중',
+    completed: '완료',
+    bye: '부전승',
+  };
+  return labels[status] || status;
+}
+
+export function getTieStatusColor(status: TieStatus): string {
+  const colors: Record<TieStatus, string> = {
+    pending: 'bg-gray-100 text-gray-700',
+    lineup_phase: 'bg-yellow-100 text-yellow-800',
+    lineup_ready: 'bg-blue-100 text-blue-800',
+    in_progress: 'bg-green-100 text-green-800',
+    completed: 'bg-purple-100 text-purple-800',
+    bye: 'bg-gray-200 text-gray-500',
+  };
+  return colors[status] || 'bg-gray-100 text-gray-700';
+}
+
+// ── 대회 포맷 한글 ──
+export function getFormatLabel(format: TeamFormat): string {
+  const labels: Record<TeamFormat, string> = {
+    full_league: '풀리그',
+    group_tournament: '조별리그 + 토너먼트',
+    prelim_tournament: '예선 순위결정전 + 토너먼트',
+  };
+  return labels[format] || format;
+}
+
+export function getFormatDescription(format: TeamFormat): string {
+  const desc: Record<TeamFormat, string> = {
+    full_league: '모든 팀이 서로 한 번씩, 바로 순위 결정 (5팀 이하 추천)',
+    group_tournament: '조 나눠서 리그 후 토너먼트 (6팀 이상 추천)',
+    prelim_tournament: '2~3팀씩 묶어 예선, 시드 배정 후 토너먼트',
+  };
+  return desc[format] || '';
+}
+
+// ── 라운드 이름 한글 ──
+export function getRoundLabel(round: string | null): string {
+  if (!round) return '';
+  const labels: Record<string, string> = {
+    full_league: '풀리그',
+    group: '조별리그',
+    round_of_16: '16강',
+    quarter: '8강',
+    semi: '4강',
+    final: '결승',
+  };
+  return labels[round] || round;
+}
+
+// ── 과반수 계산 ──
+export function getMajority(rubberCount: number): number {
+  return Math.floor(rubberCount / 2) + 1;
+}
+
+// ── 풀리그 대전 수 ──
+export function getFullLeagueTieCount(clubCount: number): number {
+  return (clubCount * (clubCount - 1)) / 2;
+}
+
+// ── 브래킷 사이즈 + 바이 수 계산 ──
+export function calculateBracket(clubCount: number) {
+  let bracketSize = 2;
+  while (bracketSize < clubCount) bracketSize *= 2;
+  return {
+    bracketSize,
+    byeCount: bracketSize - clubCount,
+  };
+}
+
+// ── 스코어 포맷 ──
+export function formatSetScore(a: number | null, b: number | null): string {
+  if (a === null || b === null) return '-';
+  return `${a}-${b}`;
+}
+
+export function formatTieScore(aWins: number, bWins: number, rubberCount: number): string {
+  return `${aWins} - ${bWins} (${rubberCount}복식)`;
+}
+
+// ── 성별 표시 ──
+export function getGenderLabel(gender: string | null): string {
+  if (gender === 'M') return '남';
+  if (gender === 'F') return '여';
+  return '';
+}
+
+// ── PIN 생성 (6자리) ──
+export function generatePin(): string {
+  return String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
+}
+
+// ── 시드 번호 표시 ──
+export function getSeedBadge(seedNumber: number | null): string {
+  if (!seedNumber) return '';
+  return `[${seedNumber}시드]`;
+}
+
+// ★ ── 경기방식(team_match_type) 관련 ──
+
+export function getMatchTypeLabel(matchType: TeamMatchType | string | null): string {
+  if (matchType === '5_doubles') return '5복식 (3승 선승)';
+  if (matchType === '3_doubles') return '3복식 (2승 선승)';
+  return '3복식 (기본)';
+}
+
+export function getMatchTypeShort(matchType: TeamMatchType | string | null): string {
+  if (matchType === '5_doubles') return '5복식';
+  return '3복식';
+}
+
+export function getRubberCountByMatchType(matchType: TeamMatchType | string | null): number {
+  if (matchType === '5_doubles') return 5;
+  return 3; // 기본값
+}
+
+export function getMajorityByMatchType(matchType: TeamMatchType | string | null): number {
+  return getMajority(getRubberCountByMatchType(matchType));
+}
+

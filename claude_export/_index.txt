@@ -1,0 +1,95 @@
+# 앱B (jeju-tournament) 소스 인덱스
+# 생성: 2026-04-10 08:36
+# 업로드 파일 목록 (이 파일을 먼저 Claude에게 보여주세요)
+
+## app_root
+  src\app\globals.css
+  src\app\layout.tsx
+  src\app\page.tsx
+
+## app_events
+  src\app\events\[id]\page.tsx
+  src\app\events\[id]\team\page.tsx
+  src\app\events\page.tsx
+
+## app_pin
+  src\app\pin\matches\page.tsx
+  src\app\pin\page.tsx
+  src\app\pin\team\page.tsx
+
+## app_venue
+  src\app\venue\manage\page.tsx
+  src\app\venue\page.tsx
+
+## app_lineup
+  src\app\lineup\[tie_id]\page.tsx
+
+## app_admin-pin
+  src\app\admin-pin\manage\page.tsx
+  src\app\admin-pin\page.tsx
+
+## app_dashboard
+  src\app\dashboard\courts\page.tsx
+  src\app\dashboard\groups\page.tsx
+  src\app\dashboard\layout.tsx
+  src\app\dashboard\login\page.tsx
+  src\app\dashboard\logs\page.tsx
+  src\app\dashboard\matches\page.tsx
+  src\app\dashboard\page.tsx
+  src\app\dashboard\report\page.tsx
+  src\app\dashboard\settings\page.tsx
+  src\app\dashboard\sync\page.tsx
+  src\app\dashboard\teams\bracket\page.tsx
+  src\app\dashboard\teams\clubs\page.tsx
+  src\app\dashboard\teams\groups\page.tsx
+  src\app\dashboard\teams\page.tsx
+  src\app\dashboard\teams\standings\page.tsx
+  src\app\dashboard\teams\ties\page.tsx
+  src\app\dashboard\timetable\page.tsx
+  src\app\dashboard\tournament\page.tsx
+
+## app_api
+  src\app\api\notify\court\route.ts
+  src\app\api\push\check\route.ts
+  src\app\api\push\subscribe\route.ts
+  src\app\api\sync\pull-events\route.ts
+  src\app\api\sync\pull-individual\route.ts
+  src\app\api\sync\pull-team\route.ts
+  src\app\api\sync\push-results\route.ts
+  src\app\api\sync\update-clubs\route.ts
+
+## components
+  src\components\ClubDetail.tsx
+  src\components\CourtBoard.tsx
+  src\components\NotificationButton.tsx
+  src\components\PinSubscribeButton.tsx
+  src\components\SyncResults.tsx
+  src\components\TournamentBracket.tsx
+  src\components\useDashboard.tsx
+
+## hooks
+  src\hooks\usePushNotification.ts
+  src\hooks\usePushSubscription.ts
+
+## lib
+  src\lib\notify.ts
+  src\lib\supabase.ts
+  src\lib\team-api.ts
+  src\lib\team-utils.ts
+
+## types
+  src\types\team.ts
+
+## config
+  next.config.js
+  postcss.config.js
+  tailwind.config.js
+  tsconfig.json
+
+## misc
+  package.json
+
+## public
+  public\manifest.json
+  public\sw.js
+

@@ -1,0 +1,185 @@
+============================================================
+FILE: src\types\team.ts
+============================================================
+// ============================================================
+// 앱B 단체전 타입 정의
+// src/types/team.ts
+// ============================================================
+
+// ── 기본 엔티티 ──
+
+export interface Club {
+  id: string;
+  event_id: string;
+  name: string;
+  captain_name: string | null;
+  captain_phone: string | null;
+  captain_pin: string | null;
+  seed_number: number | null;
+  division_id: string | null;       // ★ 신규: 개인전 부서 연동
+  created_at: string;
+}
+
+export interface ClubMember {
+  id: string;
+  club_id: string;
+  name: string;
+  gender: 'M' | 'F' | null;
+  grade: string | null;
+  is_captain: boolean;
+  member_order: number | null;
+  created_at: string;
+}
+
+export type TieStatus = 'pending' | 'lineup_phase' | 'lineup_ready' | 'in_progress' | 'completed' | 'bye';
+
+export interface Tie {
+  id: string;
+  event_id: string;
+  group_id: string | null;
+  round: string | null;
+  tie_order: number | null;
+  bracket_position: number | null;
+  club_a_id: string | null;
+  club_b_id: string | null;
+  rubber_count: number;
+  club_a_lineup_submitted: boolean;
+  club_b_lineup_submitted: boolean;
+  lineup_revealed: boolean;
+  lineup_locked_at: string | null;
+  winning_club_id: string | null;
+  club_a_rubbers_won: number;
+  club_b_rubbers_won: number;
+  status: TieStatus;
+  is_bye: boolean;
+  court_number: number | null;
+  scheduled_time: string | null;
+  division_id: string | null;       // ★ 신규
+  created_at: string;
+}
+
+export interface TieRubber {
+  id: string;
+  tie_id: string;
+  rubber_number: number;
+  rubber_type: string;
+  club_a_player1_id: string | null;
+  club_a_player2_id: string | null;
+  club_b_player1_id: string | null;
+  club_b_player2_id: string | null;
+  set1_a: number | null;
+  set1_b: number | null;
+  set2_a: number | null;
+  set2_b: number | null;
+  set3_a: number | null;
+  set3_b: number | null;
+  sets_won_a: number;
+  sets_won_b: number;
+  winning_club_id: string | null;
+  status: 'pending' | 'in_progress' | 'completed';
+  court_number: number | null;
+  pin_code: string | null;
+  created_at: string;
+}
+
+export interface TeamLineup {
+  id: string;
+  tie_id: string;
+  club_id: string;
+  rubber_number: number;
+  player1_id: string;
+  player2_id: string;
+  submitted_at: string;
+  submitted_by: string;
+  is_revealed: boolean;
+}
+
+export interface TeamStanding {
+  id: string;
+  event_id: string;
+  group_id: string | null;
+  club_id: string;
+  played: number;
+  won: number;
+  lost: number;
+  rubbers_for: number;
+  rubbers_against: number;
+  rubber_diff: number;
+  rank: number | null;
+  rank_locked: boolean;
+  notes: string | null;
+}
+
+// ── events 확장 필드 ──
+
+export type TeamFormat = 'full_league' | 'group_tournament' | 'prelim_tournament';
+export type LineupMode = 'captain_pin' | 'admin_only';
+export type TeamMatchType = '3_doubles' | '5_doubles';   // ★ 신규
+
+export interface EventTeamConfig {
+  event_type: 'individual' | 'team' | 'both';
+  team_format: TeamFormat;
+  team_rubber_count: number;
+  team_sets_per_rubber: number;
+  allow_player_reuse: boolean;
+  lineup_mode: LineupMode;
+  team_member_limit: number | null;
+  team_match_type: TeamMatchType | null;   // ★ 신규
+}
+
+// ── 조인된/UI용 확장 타입 ──
+
+export interface ClubWithMembers extends Club {
+  members: ClubMember[];
+}
+
+export interface TieWithClubs extends Tie {
+  club_a: Club | null;
+  club_b: Club | null;
+}
+
+export interface TieWithDetails extends TieWithClubs {
+  rubbers: TieRubberWithPlayers[];
+  group_name?: string;
+}
+
+export interface TieRubberWithPlayers extends TieRubber {
+  club_a_player1?: ClubMember;
+  club_a_player2?: ClubMember;
+  club_b_player1?: ClubMember;
+  club_b_player2?: ClubMember;
+}
+
+export interface StandingWithClub extends TeamStanding {
+  club: Club;
+  is_tied: boolean;
+}
+
+export interface LineupEntry {
+  rubber_number: number;
+  player1_id: string;
+  player2_id: string;
+}
+
+// ── RPC 응답 공통 ──
+
+export interface RpcResult {
+  success: boolean;
+  error?: string;
+  [key: string]: unknown;
+}
+
+// ── 동기화 ──
+
+export interface SyncLog {
+  id: string;
+  event_id: string;
+  sync_type: 'individual' | 'team';
+  app_a_record_id: string;
+  app_b_record_id: string;
+  app_b_table: string;
+  status: string;
+  synced_at: string;
+  error_message: string | null;
+}
+

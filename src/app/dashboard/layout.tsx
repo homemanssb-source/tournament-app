@@ -6,6 +6,7 @@
 // ✅ AggregateError 방지 (async/await + try/finally)
 // ✅ 대회 자동 선택: 오늘 기준 가장 가까운 미래 대회 우선
 // ✅ localStorage 사용 → 다른 탭/창과 대회 선택 동기화
+// ✅ 푸시 알림 로그 메뉴 추가 (/dashboard/push-logs)
 // ============================================================
 'use client'
 import { useEffect, useState } from 'react'
@@ -47,7 +48,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         if (!session) { router.push('/dashboard/login'); return }
         setUser(session.user)
 
-        // 2. 대회 목록 로드 (날짜 오름차순 — 가까운 대회가 위에)
+        // 2. 대회 목록 로드 (날짜 오름차순)
         const { data: evList } = await supabase
           .from('events').select('id, name, date')
           .order('date', { ascending: true })
@@ -55,28 +56,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         // 3. 대회 ID 결정 (localStorage 사용 → 다른 창과 공유)
         const stored = localStorage.getItem('dashboard_event_id')
-        // stored 값이 현재 목록에 실제로 존재하는지 검증
         const storedValid = stored && (evList ?? []).some(e => e.id === stored)
 
         if (storedValid) {
-          // localStorage 값이 유효하면 그대로 사용
           setEventId(stored!)
         } else {
-          // 없거나 목록에 없는 ID면 → 오늘 기준 가장 가까운 대회 자동 선택
           const today = new Date().toISOString().split('T')[0]
           const list = evList ?? []
-
-          // 오늘 이후(포함) 대회 중 가장 가까운 것
           const upcoming = list.filter(e => e.date >= today)
-          // 없으면 과거 대회 중 가장 최근 것
           const fallback = [...list].reverse()
-
           const best = upcoming[0] ?? fallback[0]
           const id = best?.id ?? ''
           if (id) {
             setEventId(id)
             localStorage.setItem('dashboard_event_id', id)
-    window.dispatchEvent(new Event('dashboard_event_changed'))
+            window.dispatchEvent(new Event('dashboard_event_changed'))
           }
         }
 
@@ -101,7 +95,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   async function handleLogout() { await supabase.auth.signOut(); router.push('/') }
 
-  // 대회 변경 시 localStorage 저장 → 다른 탭/창이 storage 이벤트로 즉시 감지
   function handleEventChange(id: string) {
     setEventId(id)
     localStorage.setItem('dashboard_event_id', id)
@@ -198,8 +191,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <hr className="my-2" />
           {navLink('/dashboard/courts',    '코트 배정',  '🏟')}
           {navLink('/dashboard/timetable', '타임테이블', '⏱')}
-          {navLink('/dashboard/sync',      '앱A 연동',  '🔄')}
-          {navLink('/dashboard/settings',  '설정',      '⚙️')}
+          {navLink('/dashboard/sync',      '앱A 연동',   '🔄')}
+          {/* ✅ [FIX] label에서 이모지 제거 → emoji 파라미터와 중복 방지 */}
+          {navLink('/dashboard/push-logs', '알림 로그',  '📡')}
+          {navLink('/dashboard/settings',  '설정',       '⚙️')}
           <hr className="my-2" />
 
           <button onClick={handleLogout}
