@@ -196,8 +196,9 @@ export async function POST(req: NextRequest) {
 
     if (failedEndpoints.length > 0) {
       // 만료 구독 삭제도 fire-and-forget (응답 지연 방지)
-      supabaseAdmin.from('push_subscriptions').delete().in('endpoint', failedEndpoints)
-        .then(() => {}).catch(() => {})
+      Promise.resolve(
+        supabaseAdmin.from('push_subscriptions').delete().in('endpoint', failedEndpoints)
+      ).catch(() => {})
     }
 
     // ✅ fire-and-forget: 로그 저장이 응답을 block하지 않음
