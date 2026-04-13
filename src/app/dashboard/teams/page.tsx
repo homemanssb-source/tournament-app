@@ -32,6 +32,7 @@ function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: Ed
   const [p1Club, setP1Club] = useState(team.p1_club || '')
   const [p2Club, setP2Club] = useState(team.p2_club || '')
   const [groupId, setGroupId] = useState(team.group_id || '')
+  const [pinPlain, setPinPlain] = useState(team.pin_plain || '') // ← PIN 수정 추가
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
 
@@ -44,19 +45,26 @@ function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: Ed
 
   async function handleSave() {
     if (!p1Name.trim() || !p2Name.trim()) { setMsg('❌ 이름을 모두 입력하세요.'); return }
+    if (pinPlain.trim().length !== 6) { setMsg('❌ PIN은 6자리여야 합니다.'); return } // ← PIN 유효성
     setSaving(true); setMsg('')
     try {
       // 1. teams 테이블 업데이트
       const teamName = buildTeamName(p1Name, p1Club, p2Name, p2Club)
       const teamKey = `${divisionName}|${p1Name.trim()}|${p2Name.trim()}`
-      const { error: teamErr } = await supabase.from('teams').update({
+      const updatePayload: Record<string, unknown> = {
         player1_name: p1Name.trim(),
         player2_name: p2Name.trim(),
         p1_club: p1Club.trim() || null,
         p2_club: p2Club.trim() || null,
         team_name: teamName,
         team_key: teamKey,
-      }).eq('id', team.id)
+      }
+      // PIN이 변경된 경우만 포함
+      if (pinPlain.trim() !== team.pin_plain) {
+        updatePayload.pin_plain = pinPlain.trim()
+        updatePayload.pin_hash = pinPlain.trim()
+      }
+      const { error: teamErr } = await supabase.from('teams').update(updatePayload).eq('id', team.id)
       if (teamErr) { setMsg('❌ ' + teamErr.message); return }
 
       // 2. 조 변경 처리
@@ -73,19 +81,22 @@ function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: Ed
 
           // 기존 조의 조별 경기에서 이 팀이 포함된 미완료 경기 team 제거 (NULL 처리)
           // ※ score가 이미 있는 경기는 건드리지 않음
-          const { error: matchErr } = await supabase
+          // [수정] matchErr 선언 후 미체크 버그 수정 → 에러 시 경고 표시 후 계속 진행
+          const { error: matchErrB } = await supabase
             .from('matches')
             .update({ team_b_id: null })
             .eq('group_id', team.group_id)
             .eq('team_b_id', team.id)
             .is('score', null)
-          // team_a_id 쪽도
-          await supabase
+          if (matchErrB) console.warn('matches team_b_id NULL 처리 실패:', matchErrB.message)
+
+          const { error: matchErrA } = await supabase
             .from('matches')
             .update({ team_a_id: null })
             .eq('group_id', team.group_id)
             .eq('team_a_id', team.id)
             .is('score', null)
+          if (matchErrA) console.warn('matches team_a_id NULL 처리 실패:', matchErrA.message)
         }
 
         // 새 조에 추가
@@ -121,6 +132,7 @@ function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: Ed
   const currentGroup = groups.find(g => g.id === team.group_id)
   const newGroup = groups.find(g => g.id === groupId)
   const groupChanged = (groupId || null) !== team.group_id
+  const pinChanged = pinPlain.trim() !== team.pin_plain
 
   return (
     <div
@@ -174,6 +186,22 @@ function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: Ed
               className="w-28 border border-stone-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#2d5016]/30"
             />
           </div>
+        </div>
+
+        {/* PIN 수정 ← 추가 */}
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-stone-500 uppercase tracking-wide">PIN</label>
+          <input
+            type="tel" value={pinPlain} maxLength={6}
+            onChange={e => setPinPlain(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            placeholder="6자리 숫자"
+            className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-[#2d5016]/30"
+          />
+          {pinChanged && pinPlain.length === 6 && (
+            <p className="text-xs text-orange-600 bg-orange-50 rounded-lg px-3 py-1.5">
+              ⚠️ PIN 변경: {team.pin_plain} → {pinPlain}
+            </p>
+          )}
         </div>
 
         {/* 조 배정 */}
@@ -287,9 +315,11 @@ export default function TeamsPage() {
 
   async function loadTeams() {
     setLoading(true)
-    const { data } = await supabase.from('teams').select('*')
+    // [수정] 에러 시 빈 목록으로 조용히 실패하지 않고 메시지 표시
+    const { data, error } = await supabase.from('teams').select('*')
       .eq('event_id', eventId).eq('division_id', selected)
       .order('team_num')
+    if (error) { setMsg('❌ 팀 목록 로드 실패: ' + error.message) }
     setTeams(data || [])
     setLoading(false)
   }
@@ -411,10 +441,15 @@ export default function TeamsPage() {
     if (fileRef.current) fileRef.current.value = ''
   }
 
-  function copyPinList() {
+  // [수정] clipboard API 실패 시 조용히 넘어가지 않고 fallback 처리
+  async function copyPinList() {
     const text = teams.map(t => `${t.team_num}. ${t.team_name} — PIN: ${t.pin_plain}`).join('\n')
-    navigator.clipboard.writeText(text)
-    setMsg('📋 PIN 목록이 클립보드에 복사되었습니다.')
+    try {
+      await navigator.clipboard.writeText(text)
+      setMsg('📋 PIN 목록이 클립보드에 복사되었습니다.')
+    } catch {
+      setMsg('❌ 클립보드 복사 실패 (HTTPS 환경이 아니거나 권한 없음)')
+    }
   }
 
   if (!eventId) return <p className="text-stone-400">대시보드 홈에서 대회를 선택해주세요.</p>
@@ -606,7 +641,7 @@ export default function TeamsPage() {
                           <button
                             onClick={() => { setEditModalTeam(t); setEditId(null) }}
                             className="text-xs text-stone-400 hover:text-[#2d5016] mr-2 transition-colors"
-                            title="상세 편집 (이름·클럽·조)"
+                            title="상세 편집 (이름·클럽·PIN·조)"
                           >✏️</button>
                           <button onClick={() => deleteTeam(t.id, t.team_name)}
                             className="text-xs text-stone-400 hover:text-red-500">🗑️</button>
