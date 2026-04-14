@@ -48,14 +48,27 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
       supabase.from('venues').select('id, short_name, name, court_count').eq('event_id', eventId).order('created_at'),
     ])
 
-    // court_number(글로벌 인덱스) → "제대-N" 변환
+    // ✅ court_number(숫자) → short_name-N 포맷 변환 (timetable/page.tsx와 동일 로직)
     const venueList = (venueRes.data || []) as { short_name: string; name: string; court_count: number }[]
-    const allCourtNames: string[] = venueList.flatMap(v =>
-      Array.from({ length: v.court_count || 0 }, (_, i) => `${v.short_name || v.name}-${i + 1}`)
-    )
-    function courtNumToName(n: number): string {
-      if (allCourtNames.length > 0 && n >= 1 && n <= allCourtNames.length) return allCourtNames[n - 1]
-      return `코트-${n}`
+    function courtNumToName(courtNumber: number): string {
+      if (venueList.length === 0) return `코트-${courtNumber}`
+      if (venueList.length === 1) {
+        const v = venueList[0]
+        return `${v.short_name || v.name}-${courtNumber}`
+      }
+      // 베뉴 여러 개: court_number를 글로벌 순서로 해석
+      let offset = 0
+      for (const v of venueList) {
+        const count = v.court_count || 0
+        if (courtNumber <= offset + count) {
+          const localNum = courtNumber - offset
+          return `${v.short_name || v.name}-${localNum}`
+        }
+        offset += count
+      }
+      // 범위 초과 시 마지막 베뉴 기준
+      const last = venueList[venueList.length - 1]
+      return `${last.short_name || last.name}-${courtNumber}`
     }
 
     const indivMatches: CourtMatch[] = ((matchRes.data as any[]) || [])
