@@ -6,7 +6,14 @@ import { fetchTies, fetchClubMembers } from '@/lib/team-api'
 import { getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority } from '@/lib/team-utils'
 import type { TieWithClubs, TeamLineup, ClubMember } from '@/types/team'
 
-type Tab = 'individual' | 'team'
+type Tab = 'individual' | 'team' | 'locks'
+
+interface PinLock {
+  target_key: string
+  fail_count: number
+  locked_until: string | null
+  updated_at: string
+}
 
 export default function AdminPinManagePage() {
   const router = useRouter()
@@ -45,6 +52,12 @@ export default function AdminPinManagePage() {
   const [scoreSaving, setScoreSaving] = useState(false)
   const [tieMsg, setTieMsg] = useState('')
 
+  // ── PIN 잠금 해제 ──
+  const [pinLocks, setPinLocks] = useState<PinLock[]>([])
+  const [pinLockLoading, setPinLockLoading] = useState(false)
+  const [pinLockMsg, setPinLockMsg] = useState('')
+  const [clubNameMap, setClubNameMap] = useState<Record<string, string>>({})
+
   useEffect(() => {
     const raw = sessionStorage.getItem('admin_pin_session')
     if (!raw) { router.push('/admin-pin'); return }
@@ -52,6 +65,7 @@ export default function AdminPinManagePage() {
     setSession(s)
     loadAllMatches(s.event_id)
     loadTiesData(s.event_id)
+    loadPinLocks(s.event_id)
   }, [])
 
   async function loadAllMatches(eventId: string) {
@@ -68,6 +82,70 @@ export default function AdminPinManagePage() {
       setTies(data)
     } catch {}
     setTiesLoading(false)
+  }
+
+  // ── PIN 잠금 목록 로드 (현재 잠긴 것만) ──
+  async function loadPinLocks(eventId: string) {
+    setPinLockLoading(true)
+    try {
+      const { data } = await supabase
+        .from('pin_attempts')
+        .select('*')
+        .not('locked_until', 'is', null)
+        .gt('locked_until', new Date().toISOString())
+        .order('updated_at', { ascending: false })
+      setPinLocks((data || []) as PinLock[])
+
+      // club: 패턴에서 club_id 추출 → clubs 테이블에서 이름 조회 (현 이벤트 클럽만)
+      const clubIds = (data || [])
+        .map(r => (r.target_key.startsWith('club:') ? r.target_key.slice(5) : null))
+        .filter(Boolean) as string[]
+      if (clubIds.length > 0) {
+        const { data: clubs } = await supabase
+          .from('clubs').select('id, name').in('id', clubIds).eq('event_id', eventId)
+        const map: Record<string, string> = {}
+        for (const c of clubs || []) map[c.id] = c.name
+        setClubNameMap(map)
+      } else {
+        setClubNameMap({})
+      }
+    } catch {}
+    setPinLockLoading(false)
+  }
+
+  async function handleUnlockPin(targetKey: string) {
+    setPinLockMsg('')
+    const { error } = await supabase.from('pin_attempts').delete().eq('target_key', targetKey)
+    if (error) { setPinLockMsg('❌ ' + error.message); return }
+    setPinLockMsg('✅ 잠금 해제됨')
+    setTimeout(() => setPinLockMsg(''), 3000)
+    if (session) loadPinLocks(session.event_id)
+  }
+
+  async function handleUnlockAll() {
+    if (!confirm('현재 걸린 모든 PIN 잠금을 해제하시겠습니까?')) return
+    setPinLockMsg('')
+    const keys = pinLocks.map(l => l.target_key)
+    if (keys.length === 0) return
+    const { error } = await supabase.from('pin_attempts').delete().in('target_key', keys)
+    if (error) { setPinLockMsg('❌ ' + error.message); return }
+    setPinLockMsg(`✅ ${keys.length}건 일괄 해제`)
+    setTimeout(() => setPinLockMsg(''), 3000)
+    if (session) loadPinLocks(session.event_id)
+  }
+
+  function describePinLock(targetKey: string): string {
+    if (targetKey.startsWith('club:')) {
+      const clubId = targetKey.slice(5)
+      return `🏅 클럽 캡틴 PIN · ${clubNameMap[clubId] || clubId.slice(0, 8)}`
+    }
+    if (targetKey.startsWith('rubber:')) {
+      return `🎾 러버 PIN · ${targetKey.slice(7, 15)}…`
+    }
+    if (targetKey.startsWith('login:')) {
+      return `🔑 팀 PIN 로그인 시도`
+    }
+    return targetKey
   }
 
   // 개인전 필터
@@ -205,7 +283,36 @@ export default function AdminPinManagePage() {
   }
 
   async function handleTieScoreSave() {
+    // ✅ 1세트 체크
     if (!set1a || !set1b) { setScoreError('1세트 점수를 입력하세요.'); return }
+    const s1a = parseInt(set1a), s1b = parseInt(set1b)
+    if (s1a === s1b) { setScoreError('1세트는 동점일 수 없습니다.'); return }
+
+    // ✅ 3세트 방식 전체 검증
+    if (setsPerRubber === 3) {
+      if (!set2a || !set2b) { setScoreError('2세트 점수를 입력하세요.'); return }
+      const s2a = parseInt(set2a), s2b = parseInt(set2b)
+      if (s2a === s2b) { setScoreError('2세트는 동점일 수 없습니다.'); return }
+      const s1WinA = s1a > s1b, s2WinA = s2a > s2b
+      const needSet3 = s1WinA !== s2WinA
+      if (needSet3 && (!set3a || !set3b)) {
+        setScoreError('1-2세트 스플릿 — 3세트 점수를 입력하세요.'); return
+      }
+      if (set3a && set3b && parseInt(set3a) === parseInt(set3b)) {
+        setScoreError('3세트는 동점일 수 없습니다.'); return
+      }
+    }
+
+    // ✅ 완료된 tie 재수정 시 경고 (다음 라운드 데이터 손실 위험)
+    const rubber = tieRubbers.find((r: any) => r.id === scoringRubber)
+    const isCompletedTie = selectedTie?.status === 'completed'
+    if (isCompletedTie && rubber?.status === 'completed') {
+      const msg = '⚠️ 이미 완료된 대전입니다.\n' +
+        '점수 수정 시 다음 라운드의 러버 데이터가 초기화될 수 있습니다.\n' +
+        '계속하시겠습니까?'
+      if (!confirm(msg)) return
+    }
+
     setScoreSaving(true); setScoreError('')
     try {
       const { data, error: err } = await supabase.rpc('rpc_admin_record_score', {
@@ -265,6 +372,13 @@ export default function AdminPinManagePage() {
           <button onClick={() => { setTab('team'); setSelectedTie(null); setScoringRubber(null); setTieMsg('') }}
             className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition ${tab==='team'?'bg-blue-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
             📋 단체전
+          </button>
+          <button onClick={() => { setTab('locks'); if (session) loadPinLocks(session.event_id) }}
+            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition relative ${tab==='locks'?'bg-amber-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            🔒 PIN 잠금
+            {pinLocks.length > 0 && (
+              <span className="ml-1 text-xs bg-red-500 text-white rounded-full px-1.5">{pinLocks.length}</span>
+            )}
           </button>
         </div>
       </div>
@@ -514,6 +628,69 @@ export default function AdminPinManagePage() {
                         })}
                       </div>
                     )}
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
+
+        {/* ══════ PIN 잠금 ══════ */}
+        {tab === 'locks' && (
+          <>
+            {pinLockMsg && (
+              <div className={`p-3 rounded-lg text-sm ${pinLockMsg.startsWith('✅')?'bg-green-50 text-green-700':'bg-red-50 text-red-600'}`}>
+                {pinLockMsg}
+              </div>
+            )}
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+              <p className="font-bold mb-1">🔒 PIN 5회 실패 시 10분 자동 잠금</p>
+              <p className="text-xs">캡틴/선수가 PIN을 잘못 입력해 잠긴 경우 여기서 수동 해제</p>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-500">
+                {pinLockLoading ? '불러오는 중...' : `현재 잠긴 PIN: ${pinLocks.length}건`}
+              </span>
+              <div className="flex gap-2">
+                <button onClick={() => session && loadPinLocks(session.event_id)}
+                  className="text-xs bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg">
+                  🔄 새로고침
+                </button>
+                {pinLocks.length > 0 && (
+                  <button onClick={handleUnlockAll}
+                    className="text-xs bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg">
+                    전체 해제
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {!pinLockLoading && pinLocks.length === 0 && (
+              <div className="text-center py-10 text-gray-400">
+                <div className="text-3xl mb-2">✅</div>
+                <p>현재 잠긴 PIN 없음</p>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              {pinLocks.map(lock => {
+                const lockedMin = lock.locked_until
+                  ? Math.max(0, Math.ceil((new Date(lock.locked_until).getTime() - Date.now()) / 60000))
+                  : 0
+                return (
+                  <div key={lock.target_key} className="bg-white rounded-xl border p-4 flex items-center justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-sm truncate">{describePinLock(lock.target_key)}</div>
+                      <div className="text-xs text-gray-400 mt-0.5">
+                        실패 {lock.fail_count}회 · 잠금 해제까지 ~{lockedMin}분
+                      </div>
+                    </div>
+                    <button onClick={() => handleUnlockPin(lock.target_key)}
+                      className="text-xs bg-amber-500 hover:bg-amber-600 text-white px-3 py-2 rounded-lg font-medium flex-shrink-0 ml-3">
+                      🔓 해제
+                    </button>
                   </div>
                 )
               })}
