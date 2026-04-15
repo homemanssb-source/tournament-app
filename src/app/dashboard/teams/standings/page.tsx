@@ -50,7 +50,15 @@ export default function StandingsPage() {
     const map: Record<string, StandingWithClub[]> = {};
 
     if (cfg?.team_format === 'full_league') {
-      map['full'] = await fetchStandings(eventId, null);
+      // ✅ C3 우회: 부서별로 분리 조회
+      if (divList.length > 0) {
+        const results = await Promise.all(
+          divList.map(d => fetchStandings(eventId, null, d.id))
+        );
+        divList.forEach((d, i) => { map[`full_${d.id}`] = results[i]; });
+      } else {
+        map['full'] = await fetchStandings(eventId, null);
+      }
     } else {
       const grps = grpsRes.data || [];
       setGroups(grps);
@@ -98,8 +106,17 @@ export default function StandingsPage() {
     for (const s of all) {
       if (!manualRanks[s.club_id] || isNaN(parseInt(manualRanks[s.club_id]))) { alert('모든 팀의 순위를 입력해주세요.'); return; }
     }
-    const rv = Object.values(manualRanks).map(Number);
+    const rv = all.map(s => parseInt(manualRanks[s.club_id]));
     if (new Set(rv).size !== rv.length) { alert('동일한 순위가 있습니다.'); return; }
+    // ✅ 연속성 검증: 입력한 순위가 min~max 범위 내에서 연속이어야 함
+    const sorted = [...rv].sort((a, b) => a - b);
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i] !== sorted[i-1] + 1) {
+        alert(`순위가 연속되지 않습니다. (${sorted.join(', ')})\n동률 팀은 연속된 순위로 지정해주세요.`);
+        return;
+      }
+    }
+    if (sorted[0] < 1) { alert('순위는 1 이상이어야 합니다.'); return; }
     setSavingManual(true);
     try {
       for (const s of all) { await setManualRank(eventId, s.club_id, parseInt(manualRanks[s.club_id]), manualNotes || '수동 결정'); }
@@ -147,16 +164,24 @@ export default function StandingsPage() {
 
       {allEntries.map(([key, standings]) => {
         const group = groups.find(g => g.id === key);
+        const isFullKey = key === 'full' || key.startsWith('full_');
+        const fullDivId = key.startsWith('full_') ? key.slice(5) : null;
 
-        // selectedDiv 가 있으면 해당 division 그룹만 표시
+        // selectedDiv 가 있으면 해당 division 만 표시
         if (selectedDiv) {
-          if (!group) return null;
-          if (!group.division_id || group.division_id !== selectedDiv) return null;
+          if (isFullKey) {
+            // full_{divId} 키는 해당 부서일 때만, 레거시 'full'은 부서 없을 때만 표시
+            if (fullDivId && fullDivId !== selectedDiv) return null;
+            if (!fullDivId && divisions.length > 0) return null;
+          } else {
+            if (!group) return null;
+            if (!group.division_id || group.division_id !== selectedDiv) return null;
+          }
         }
 
         const groupNumLabel = group?.group_num ? String.fromCharCode(64 + group.group_num) + '조' : '';
-        const groupName = key === 'full'
-          ? '리그 순위표'
+        const groupName = isFullKey
+          ? (fullDivId ? `${divisions.find(d => d.id === fullDivId)?.name || ''} 리그 순위표` : '리그 순위표')
           : group?.group_label || groupNumLabel || group?.group_name || key;
 
         return (

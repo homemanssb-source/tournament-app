@@ -188,7 +188,6 @@ export async function fetchTies(eventId: string, round?: string, divisionId?: st
 
   if (round) query = query.eq('round', round);
   if (divisionId) query = query.eq('division_id', divisionId);
-  if (divisionId) query = query.eq('division_id', divisionId);
 
   const { data, error } = await query;
   if (error) throw error;
@@ -231,7 +230,11 @@ export async function fetchRubbers(tieId: string): Promise<TieRubber[]> {
 // 순위 조회
 // ========================================
 
-export async function fetchStandings(eventId: string, groupId?: string | null): Promise<StandingWithClub[]> {
+export async function fetchStandings(
+  eventId: string,
+  groupId?: string | null,
+  divisionId?: string | null,
+): Promise<StandingWithClub[]> {
   let query = supabase
     .from('team_standings')
     .select(`*, club:clubs(*)`)
@@ -249,7 +252,13 @@ export async function fetchStandings(eventId: string, groupId?: string | null): 
     .order('rubber_diff', { ascending: false });
   if (error) throw error;
 
-  const standings = (data || []) as (TeamStanding & { club: Club })[];
+  let standings = (data || []) as (TeamStanding & { club: Club })[];
+
+  // ✅ C3 우회: 풀리그 모드 다부서인 경우, join된 club.division_id로 필터
+  if (divisionId) {
+    standings = standings.filter(s => s.club?.division_id === divisionId);
+  }
+
   return standings.map((s) => {
     const isTied = s.rank === null && s.played > 0;
     return { ...s, is_tied: isTied };
@@ -277,6 +286,18 @@ export async function fetchRevealedLineups(tieId: string): Promise<TeamLineup[]>
     .select('*')
     .eq('tie_id', tieId)
     .eq('is_revealed', true)
+    .order('rubber_number');
+  if (error) throw error;
+  return data || [];
+}
+
+// 운영자/자동진입용 — is_revealed 플래그 무시하고 전체 조회
+// (lineup 페이지에서 tie.lineup_revealed=true 또는 양팀 제출된 상황에서만 사용)
+export async function fetchAllLineupsForTie(tieId: string): Promise<TeamLineup[]> {
+  const { data, error } = await supabase
+    .from('team_lineups')
+    .select('*')
+    .eq('tie_id', tieId)
     .order('rubber_number');
   if (error) throw error;
   return data || [];

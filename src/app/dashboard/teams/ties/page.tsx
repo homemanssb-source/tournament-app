@@ -101,33 +101,45 @@ export default function TiesPage() {
     // ✅ 핵심 수정: tie_rubbers가 없으면 운영자가 직접 생성
     // 토너먼트 ties는 lineup_phase를 거치지 않아 rubber 행이 없을 수 있음
     if (rubbers.length === 0 && !tie.is_bye) {
-      const rubberCount = tie.rubber_count || config?.team_rubber_count || 3;
-      const rubberType  = config?.team_match_type || 'doubles';
+      // ✅ 동시 접속 중복 insert 방지: insert 직전에 재확인
+      const recheck = await fetchRubbers(tie.id);
+      if (recheck.length > 0) {
+        rubbers = recheck;
+      } else {
+        const rubberCount = tie.rubber_count || config?.team_rubber_count || 3;
+        const rubberType  = config?.team_match_type || 'doubles';
 
-      // rubber_type 결정 (단식/복식 혼합 패턴 - 기본 3러버: 복식,단식,복식)
-      const getType = (n: number, total: number): string => {
-        if (total === 1) return rubberType;
-        if (total === 3) return n === 2 ? 'singles' : 'doubles';
-        if (total === 5) return [2,4].includes(n) ? 'singles' : 'doubles';
-        return rubberType;
-      };
+        // rubber_type 결정 (단식/복식 혼합 패턴 - 기본 3러버: 복식,단식,복식)
+        const getType = (n: number, total: number): string => {
+          if (total === 1) return rubberType;
+          if (total === 3) return n === 2 ? 'singles' : 'doubles';
+          if (total === 5) return [2,4].includes(n) ? 'singles' : 'doubles';
+          return rubberType;
+        };
 
-      const genPin = () => String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
+        const genPin = () => String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
 
-      const rows = Array.from({ length: rubberCount }, (_, i) => ({
-        tie_id:        tie.id,
-        rubber_number: i + 1,
-        rubber_type:   getType(i + 1, rubberCount),
-        status:        'pending',
-        pin_code:      genPin(),
-      }));
+        const rows = Array.from({ length: rubberCount }, (_, i) => ({
+          tie_id:        tie.id,
+          rubber_number: i + 1,
+          rubber_type:   getType(i + 1, rubberCount),
+          status:        'pending',
+          pin_code:      genPin(),
+        }));
 
-      const { data: newRubbers } = await supabase
-        .from('tie_rubbers')
-        .insert(rows)
-        .select();
+        const { data: newRubbers, error: insErr } = await supabase
+          .from('tie_rubbers')
+          .insert(rows)
+          .select();
 
-      rubbers = newRubbers || [];
+        // ✅ unique 제약(tie_id, rubber_number)이 있다면 conflict 시 재조회
+        if (insErr) {
+          const retry = await fetchRubbers(tie.id);
+          rubbers = retry;
+        } else {
+          rubbers = newRubbers || [];
+        }
+      }
     }
 
     setRubbers(rubbers);
@@ -196,16 +208,18 @@ export default function TiesPage() {
     await loadData();
   }
 
-  // ✅ 수정3: 라인업 공개 토글
+  // ✅ 수정3: 라인업 공개 토글 (공개 해제 시 is_revealed=false 동기화)
   async function handleRevealLineup(tie: TieWithClubs) {
     const newRevealed = !tie.lineup_revealed;
     if (newRevealed) {
       if (!confirm('라인업을 공개하시겠습니까? 양팀 선수에게 상대 라인업이 공개됩니다.')) return;
-      // team_lineups의 is_revealed를 true로 업데이트
-      await supabase.from('team_lineups')
-        .update({ is_revealed: true })
-        .eq('tie_id', tie.id);
+    } else {
+      if (!confirm('라인업 공개를 해제하시겠습니까? (수정을 위해 잠시 비공개)')) return;
     }
+    // ✅ team_lineups.is_revealed를 tie.lineup_revealed와 동기화
+    await supabase.from('team_lineups')
+      .update({ is_revealed: newRevealed })
+      .eq('tie_id', tie.id);
     await supabase.from('ties')
       .update({ lineup_revealed: newRevealed })
       .eq('id', tie.id);

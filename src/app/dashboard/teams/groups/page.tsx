@@ -98,9 +98,18 @@ export default function GroupsPage() {
     setGroups(grps);
     setTies(tieList);
 
-    // ✅ standings도 병렬 fetch
+    // ✅ standings도 병렬 fetch (부서별 분리)
     if (cfg?.team_format === 'full_league') {
-      setGroupStandings({ full: await fetchStandings(eventId, null) });
+      if (divList.length > 0) {
+        const results = await Promise.all(
+          divList.map((d: any) => fetchStandings(eventId, null, d.id))
+        );
+        const map: Record<string, StandingWithClub[]> = {};
+        divList.forEach((d: any, i: number) => { map[`full_${d.id}`] = results[i]; });
+        setGroupStandings(map);
+      } else {
+        setGroupStandings({ full: await fetchStandings(eventId, null) });
+      }
     } else if (grps.length > 0) {
       const standingsResults = await Promise.all(grps.map(g => fetchStandings(eventId, g.id)));
       const standings: Record<string, StandingWithClub[]> = {};
@@ -213,6 +222,7 @@ export default function GroupsPage() {
                   <div className="flex flex-wrap gap-2">
                     {distribution.map((size, i) => (
                       <span key={i} className={`px-3 py-1 rounded text-sm ${
+                        size === 1 ? 'bg-red-100 text-red-800 font-bold' :
                         size < groupSize ? 'bg-yellow-100 text-yellow-800' : 'bg-blue-100 text-blue-800'
                       }`}>
                         {String.fromCharCode(65 + i)}조: {size}팀
@@ -222,24 +232,35 @@ export default function GroupsPage() {
                   <p className="text-xs text-blue-600">
                     총 {distribution.reduce((a, b) => a + b, 0)}팀 배정 (등록: {filteredClubs.length}팀)
                   </p>
+                  {distribution.includes(1) && (
+                    <p className="text-xs text-red-600 font-medium bg-red-50 border border-red-200 rounded p-2">
+                      ⚠️ 1팀 조가 발생합니다. 조당 팀 수를 조정해주세요.
+                      (현재 팀 수 {filteredClubs.length}팀 ÷ 조당 {groupSize}팀)
+                    </p>
+                  )}
                 </div>
               )}
 
               <button onClick={handleCreateGroups}
-                disabled={generating || distribution.length === 0}
-                className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                disabled={generating || distribution.length === 0 || distribution.includes(1)}
+                className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
                 {generating ? '생성 중...' : hasGroups ? '조편성 재생성' : '조편성 생성'}
               </button>
               {hasGroups && <p className="text-xs text-red-500">재생성하면 기존 조가 모두 초기화됩니다.</p>}
             </div>
           )}
 
-          {config?.team_format === 'full_league' && groupStandings.full && (
-            <div className="bg-white rounded-lg border p-4">
-              <h3 className="font-semibold mb-3">풀리그 순위</h3>
-              <StandingsTable standings={groupStandings.full} />
-            </div>
-          )}
+          {config?.team_format === 'full_league' && (() => {
+            const key = selectedDiv ? `full_${selectedDiv}` : 'full';
+            const list = groupStandings[key];
+            if (!list) return null;
+            return (
+              <div className="bg-white rounded-lg border p-4">
+                <h3 className="font-semibold mb-3">풀리그 순위</h3>
+                <StandingsTable standings={list} />
+              </div>
+            );
+          })()}
 
           {hasGroups && (
             <div className="space-y-4">
