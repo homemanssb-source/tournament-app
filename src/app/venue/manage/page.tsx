@@ -60,6 +60,19 @@ export default function VenueManagePage() {
     }
   }, [router])
 
+  // 단체전 상태 → 개인전 상태 규칙 (UI 필터가 UPPERCASE 기준이라 통일)
+  //   pending, lineup_phase, lineup_ready → PENDING
+  //   in_progress                         → IN_PROGRESS
+  //   completed, bye                      → FINISHED
+  function normalizeStatus(s: string | null | undefined): string {
+    const v = (s || '').toLowerCase()
+    if (v === 'in_progress') return 'IN_PROGRESS'
+    if (v === 'completed' || v === 'bye') return 'FINISHED'
+    if (v === 'pending' || v === 'lineup_phase' || v === 'lineup_ready') return 'PENDING'
+    // 이미 대문자거나 정의되지 않은 값은 그대로 (FINISHED, IN_PROGRESS, PENDING 등)
+    return s ? s.toUpperCase() : 'PENDING'
+  }
+
   // ── 데이터 로드 (15초 폴링) ── [FIX V1] finally로 setLoading 보장
   const loadData = useCallback(async () => {
     if (!session) return
@@ -70,12 +83,18 @@ export default function VenueManagePage() {
         router.push('/venue')
         return
       }
-      const individual: VenueMatch[] = (data.matches || []).map((m: any) => ({ ...m, is_team_tie: false }))
-      const ties: VenueMatch[]       = (data.ties    || []).map((t: any) => ({ ...t, is_team_tie: true  }))
+      const individual: VenueMatch[] = (data.matches || []).map((m: any) => ({
+        ...m, is_team_tie: false,
+        status: normalizeStatus(m.status),
+      }))
+      const ties: VenueMatch[] = (data.ties || []).map((t: any) => ({
+        ...t, is_team_tie: true,
+        status: normalizeStatus(t.status),
+      }))
       setMatches([...individual, ...ties])
       setLastUpdate(new Date())
     } finally {
-      setLoading(false)  // 성공/실패 무관하게 반드시 로딩 해제
+      setLoading(false)
     }
   }, [session, router])
 
