@@ -472,6 +472,73 @@ async function scenario4() {
 }
 
 // ============================================================
+// SCENARIO 5: 다부서 풀리그 (C3 근본 수정 검증)
+// 두 부서 A/B에 각각 3팀씩 풀리그 → division별 순위가 섞이지 않아야 함
+// ============================================================
+async function scenario5() {
+  scen(5, 'multi_division full_league (C3 검증)');
+  const ev = await createTestEvent(newName('S5'));
+  // 부서 2개
+  const { data: divA } = await sb.from('divisions').insert({
+    event_id: ev.id, name: 'M부', sort_order: 1,
+  }).select().single();
+  const { data: divB } = await sb.from('divisions').insert({
+    event_id: ev.id, name: 'W부', sort_order: 2,
+  }).select().single();
+
+  // 각 부서에 3팀
+  const { clubs: clubsA, members: mA } = await createClubsWithMembers(
+    ev.id, divA.id, ['MA1', 'MA2', 'MA3']);
+  const { clubs: clubsB, members: mB } = await createClubsWithMembers(
+    ev.id, divB.id, ['WA1', 'WA2', 'WA3']);
+  ok('2부서 × 3팀 생성');
+
+  // 각 부서 풀리그 생성
+  await sb.rpc('rpc_generate_full_league', { p_event_id: ev.id, p_division_id: divA.id });
+  await sb.rpc('rpc_generate_full_league', { p_event_id: ev.id, p_division_id: divB.id });
+
+  const { data: ties } = await sb.from('ties').select('*').eq('event_id', ev.id);
+  assertEq(ties.length, 6, '3C2×2=6');
+
+  // 시드1이 승리 패턴
+  for (const tie of ties) {
+    const allClubs = [...clubsA, ...clubsB];
+    const ca = allClubs.find(c => c.id === tie.club_a_id);
+    const cb = allClubs.find(c => c.id === tie.club_b_id);
+    const membersMap = { ...mA, ...mB };
+    const aWins = ca.seed_number < cb.seed_number;
+    const scores = aWins ?
+      [{winner:'a',s1a:6,s1b:2}, {winner:'a',s1a:6,s1b:3}, {winner:'b',s1a:3,s1b:6}] :
+      [{winner:'b',s1a:2,s1b:6}, {winner:'b',s1a:3,s1b:6}, {winner:'a',s1a:6,s1b:3}];
+    await submitLineupAndScore(tie, ca, cb, membersMap[ca.id], membersMap[cb.id], scores);
+  }
+  ok('6 ties 점수 입력');
+
+  // ✅ C3 근본 수정: 부서별로 재계산
+  await sb.rpc('rpc_calculate_standings', { p_event_id: ev.id, p_group_id: null, p_division_id: divA.id });
+  await sb.rpc('rpc_calculate_standings', { p_event_id: ev.id, p_group_id: null, p_division_id: divB.id });
+
+  // 각 부서 순위 조회
+  const { data: allStandings } = await sb
+    .from('team_standings')
+    .select('*, club:clubs(name, division_id, seed_number)')
+    .eq('event_id', ev.id);
+
+  const aStandings = allStandings.filter(s => s.club.division_id === divA.id).sort((a, b) => a.rank - b.rank);
+  const bStandings = allStandings.filter(s => s.club.division_id === divB.id).sort((a, b) => a.rank - b.rank);
+
+  // 각 부서 1~3위가 따로 부여되어야 함 (섞이면 안 됨)
+  assertEq(aStandings.map(s => s.rank).join(','), '1,2,3', 'A부서 순위 1,2,3');
+  assertEq(bStandings.map(s => s.rank).join(','), '1,2,3', 'B부서 순위 1,2,3');
+  ok('부서별 순위 분리 확인 (1,2,3 / 1,2,3)');
+
+  // 시드 순서 검증 (A부서)
+  assertEq(aStandings[0].club.seed_number, 1, 'A 1위 = seed1');
+  assertEq(aStandings[2].club.seed_number, 3, 'A 3위 = seed3');
+  ok('시드 순서 순위 일치');
+}
+
+// ============================================================
 async function main() {
   console.log(`🎾 단체전 E2E 다중 시나리오\n   대상: ${URL_}`);
 
@@ -480,10 +547,11 @@ async function main() {
 
   const results = [];
   const scenarios = [
-    ['#1 full_league',      scenario1],
-    ['#2 tied_results',     scenario2],
-    ['#3 group_tournament', scenario3],
-    ['#4 five_doubles',     scenario4],
+    ['#1 full_league',       scenario1],
+    ['#2 tied_results',      scenario2],
+    ['#3 group_tournament',  scenario3],
+    ['#4 five_doubles',      scenario4],
+    ['#5 multi_division',    scenario5],
   ];
 
   for (const [name, fn] of scenarios) {

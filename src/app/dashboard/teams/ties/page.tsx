@@ -184,9 +184,12 @@ export default function TiesPage() {
       const isTournament = ['round_of_16', 'quarter', 'semi', 'final'].includes(selectedTie?.round || '');
 
       await loadData();
-      // 조별리그면 순위 계산
+      // 조별리그면 순위 계산 (풀리그면 division 단위로)
       if (!isTournament) {
-        try { await calculateStandings(eventId, selectedTie?.group_id || null); } catch {}
+        try {
+          const divId = (selectedTie as any)?.division_id || null;
+          await calculateStandings(eventId, selectedTie?.group_id || null, divId);
+        } catch {}
       }
     } catch (err: any) {
       setSaveError(err.message || '저장 실패');
