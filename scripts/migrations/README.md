@@ -13,6 +13,8 @@
 | 005 | `005-rpc-create-team-groups-v2.sql` | 1팀 조 로직 개인전과 동일화 | ✅ 적용됨 |
 | 006 | `006-pin-hash-cleanup.sql` | pin_hash 컬럼 삭제 + rpc_pin_login 정리 | ✅ 적용됨 |
 | 007 | `007-pin-rate-limiting.sql` | PIN 5회 실패 → 10분 잠금 | ✅ 적용됨 |
+| 008 | `008-admin-record-score-token.sql` | rpc_admin_record_score 토큰 검증 (선택) | ⏳ 보류 |
+| 009 | `009-rpc-venue-list-matches-tie-court-fix.sql` | 현장 목록 RPC 단체전 court 매핑 버그 | ✅ 적용됨 |
 
 ## 대상 DB
 
