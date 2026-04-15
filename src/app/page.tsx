@@ -158,6 +158,7 @@ export default function HomePage() {
                 ? 'bg-green-600 text-white shadow-md shadow-green-200'
                 : 'text-stone-400 hover:text-stone-600'}`}
           >
+            <span className="text-base">👥</span>
             회원
           </button>
           <button
