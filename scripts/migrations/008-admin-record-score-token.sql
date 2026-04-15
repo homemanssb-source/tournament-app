@@ -37,11 +37,17 @@ SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname = 'rpc_admin_pin_login
 SELECT pg_get_functiondef(oid) FROM pg_proc WHERE proname = 'rpc_admin_pin_unlock_match';
 
 
--- Step 1: 템플릿 — admin_pin_sessions 가정 (실제 스키마에 맞춰 수정)
+-- Step 1: 확정 마이그레이션 (2026-04-15 스키마 확인 완료)
 -- ============================================================
-/*
+-- 확인된 스키마:
+--   admin_pin_sessions(token, event_id, is_active, expires_at)
+--   토큰 검증 패턴은 rpc_admin_pin_unlock_match와 동일
+--
+-- 실행 시 같이 해야 할 것:
+--   - 프론트 admin-pin/manage/page.tsx:211의 rpc_admin_record_score 호출에
+--     p_token: session.token 추가
 CREATE OR REPLACE FUNCTION public.rpc_admin_record_score(
-  p_token    text,   -- ✅ 신규
+  p_token    text,
   p_rubber_id uuid,
   p_set1_a integer, p_set1_b integer,
   p_set2_a integer DEFAULT NULL,
@@ -54,36 +60,38 @@ CREATE OR REPLACE FUNCTION public.rpc_admin_record_score(
  SECURITY DEFINER
 AS $function$
 DECLARE
-  v_session RECORD;
-  v_rubber  RECORD;
-  v_tie     RECORD;
+  v_session admin_pin_sessions%ROWTYPE;
+  v_event_id uuid;
 BEGIN
-  -- 1. 토큰 검증 (실제 테이블/컬럼명에 맞춰 수정)
+  -- 1. 토큰 검증 (rpc_admin_pin_unlock_match와 동일 패턴)
   SELECT * INTO v_session FROM admin_pin_sessions
-  WHERE token = p_token
-    AND is_active = true
-    AND expires_at > now();
+  WHERE token = p_token AND is_active = true AND expires_at > now();
   IF NOT FOUND THEN
-    RETURN json_build_object('success', false, 'error', '관리자 세션이 만료되었거나 유효하지 않습니다.');
+    RETURN json_build_object('success', false, 'error', '마스터 PIN 세션이 만료되었습니다.');
   END IF;
 
-  -- 2. 러버가 해당 이벤트 소속인지 확인 (토큰 하이재킹 방지)
-  SELECT tr.*, t.event_id INTO v_rubber
+  -- 2. 러버가 이 세션의 이벤트 소속인지 확인 (다른 이벤트 접근 차단)
+  SELECT t.event_id INTO v_event_id
   FROM tie_rubbers tr
   JOIN ties t ON t.id = tr.tie_id
   WHERE tr.id = p_rubber_id;
   IF NOT FOUND THEN
     RETURN json_build_object('success', false, 'error', '러버를 찾을 수 없습니다.');
   END IF;
-  IF v_rubber.event_id != v_session.event_id THEN
+  IF v_event_id != v_session.event_id THEN
     RETURN json_build_object('success', false, 'error', '다른 이벤트의 러버에 접근할 수 없습니다.');
   END IF;
 
-  -- 3. 기존 rpc_record_rubber_score 위임
-  RETURN rpc_record_rubber_score(p_rubber_id, p_set1_a, p_set1_b, p_set2_a, p_set2_b, p_set3_a, p_set3_b);
+  -- 3. 감사 로그
+  PERFORM log_audit(v_session.event_id, 'admin_pin_score', 'admin_pin',
+    left(p_token, 8), 'tie_rubbers', p_rubber_id,
+    jsonb_build_object('set1', p_set1_a || ':' || p_set1_b));
+
+  -- 4. 기존 rpc_record_rubber_score 위임
+  RETURN rpc_record_rubber_score(p_rubber_id, p_set1_a, p_set1_b,
+                                 p_set2_a, p_set2_b, p_set3_a, p_set3_b);
 END;
 $function$;
-*/
 
 
 -- Step 2: 프론트 대응 (참고용 — 이미 적용 가능하도록 별도 PR 필요)
