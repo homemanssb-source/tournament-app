@@ -219,7 +219,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     <div className="space-y-5">
       {/* 헤더 */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <h3 className="font-bold text-lg">🎾 코트 현황</h3>
+        <h3 className="font-bold text-lg">코트 현황</h3>
         <div className="flex items-center gap-2">
           <span className="text-xs text-stone-400">🔄 {lastUpdate.toLocaleTimeString('ko-KR')} 업데이트</span>
           <button onClick={loadData} className="text-xs px-2 py-1 bg-stone-100 rounded-lg hover:bg-stone-200">새로고침</button>

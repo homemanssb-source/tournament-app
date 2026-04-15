@@ -301,7 +301,7 @@ export default function TiesPage() {
   if (loading) return <div className="p-8 text-center text-gray-500">불러오는 중...</div>;
   if (ties.length === 0) return (
     <div className="max-w-5xl mx-auto p-6">
-      <h1 className="text-2xl font-bold mb-4">🎾 대전 관리</h1>
+      <h1 className="text-2xl font-bold mb-4">대전 관리</h1>
       <div className="bg-gray-50 rounded-lg border border-dashed p-8 text-center text-gray-400">
         타이가 없습니다. 먼저 조편성에서 타이를 생성하세요.
       </div>
@@ -314,7 +314,7 @@ export default function TiesPage() {
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">🎾 대전 관리</h1>
+        <h1 className="text-2xl font-bold">대전 관리</h1>
         <span className="text-sm text-gray-500">
           전체 {ties.length}타이 · 완료 {ties.filter(t => t.status === 'completed').length}
         </span>

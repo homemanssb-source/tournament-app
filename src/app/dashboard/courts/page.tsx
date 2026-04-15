@@ -713,7 +713,7 @@ export default function CourtsPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <h1 className="text-2xl font-bold">🎾 코트 배정</h1>
+        <h1 className="text-2xl font-bold">코트 배정</h1>
         {startTime && <span className="text-xs text-stone-500">⏰ {startTime} 자동시작</span>}
       </div>
 

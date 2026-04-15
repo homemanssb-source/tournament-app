@@ -142,9 +142,6 @@ export default function HomePage() {
           <div className="px-6 py-7 flex items-center gap-4 relative overflow-hidden">
             <div className="absolute -top-8 -right-8 w-36 h-36 rounded-full bg-white/5" />
             <div className="absolute -bottom-6 -left-6 w-24 h-24 rounded-full bg-white/5" />
-            <div className="relative z-10 w-14 h-14 rounded-2xl bg-white/15 border border-white/20 flex items-center justify-center text-3xl backdrop-blur-sm flex-shrink-0">
-              🎾
-            </div>
             <div className="relative z-10">
               <h1 className="text-white text-xl font-black tracking-tight leading-tight">제주시테니스대회</h1>
               <p className="text-white/50 text-xs tracking-widest uppercase mt-0.5">Tennis Tournament Manager</p>
@@ -161,7 +158,6 @@ export default function HomePage() {
                 ? 'bg-green-600 text-white shadow-md shadow-green-200'
                 : 'text-stone-400 hover:text-stone-600'}`}
           >
-            <span className="text-base">🎾</span>
             회원
           </button>
           <button
@@ -272,7 +268,7 @@ export default function HomePage() {
         )}
 
         {/* Footer */}
-        <p className="text-center text-[11px] text-stone-400 mt-6">🎾 제주시테니스협회</p>
+        <p className="text-center text-[11px] text-stone-400 mt-6">제주시테니스협회</p>
       </div>
     </div>
   )

@@ -71,7 +71,7 @@ export default function EventsPage() {
       <header className="bg-white border-b sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link href="/" className="text-stone-400 hover:text-stone-600">←</Link>
-          <h1 className="text-lg font-bold">🎾 대회 목록</h1>
+          <h1 className="text-lg font-bold">대회 목록</h1>
         </div>
       </header>
 
