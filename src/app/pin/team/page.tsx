@@ -142,13 +142,14 @@ export default function TeamPinScorePage() {
 
     try {
       // ✅ pending / lineup_ready / in_progress 모두 허용 (경기 시작 불필요)
+      // ✅ maybeSingle로 변경 — PIN 충돌(0건/2건+) 시 에러 대신 null 반환
       const { data: rubberData } = await supabase
         .from('tie_rubbers')
         .select('*')
         .eq('pin_code', pin)
         .in('status', ['pending', 'in_progress'])
         .limit(1)
-        .single();
+        .maybeSingle();
 
       if (!rubberData) {
         // completed 여부 확인
@@ -157,7 +158,7 @@ export default function TeamPinScorePage() {
           .select('status')
           .eq('pin_code', pin)
           .limit(1)
-          .single();
+          .maybeSingle();
 
         if (anyRubber?.status === 'completed') {
           setError('이미 점수가 입력된 경기입니다.');
@@ -174,21 +175,21 @@ export default function TeamPinScorePage() {
         .from('ties')
         .select('*')
         .eq('id', rubberData.tie_id)
-        .single();
+        .maybeSingle();
       setTie(tieData);
 
-      if (tieData) {
+      if (tieData && tieData.club_a_id && tieData.club_b_id) {
         const playerAQueries = rubberData.club_a_player1_id ? [
-          supabase.from('club_members').select('*').eq('id', rubberData.club_a_player1_id).single(),
+          supabase.from('club_members').select('*').eq('id', rubberData.club_a_player1_id).maybeSingle(),
           rubberData.club_a_player2_id
-            ? supabase.from('club_members').select('*').eq('id', rubberData.club_a_player2_id).single()
+            ? supabase.from('club_members').select('*').eq('id', rubberData.club_a_player2_id).maybeSingle()
             : Promise.resolve({ data: null }),
         ] : [Promise.resolve({ data: null }), Promise.resolve({ data: null })];
 
         const playerBQueries = rubberData.club_b_player1_id ? [
-          supabase.from('club_members').select('*').eq('id', rubberData.club_b_player1_id).single(),
+          supabase.from('club_members').select('*').eq('id', rubberData.club_b_player1_id).maybeSingle(),
           rubberData.club_b_player2_id
-            ? supabase.from('club_members').select('*').eq('id', rubberData.club_b_player2_id).single()
+            ? supabase.from('club_members').select('*').eq('id', rubberData.club_b_player2_id).maybeSingle()
             : Promise.resolve({ data: null }),
         ] : [Promise.resolve({ data: null }), Promise.resolve({ data: null })];
 
@@ -199,9 +200,9 @@ export default function TeamPinScorePage() {
           [{ data: ap1 }, { data: ap2 }],
           [{ data: bp1 }, { data: bp2 }],
         ] = await Promise.all([
-          supabase.from('clubs').select('*').eq('id', tieData.club_a_id).single(),
-          supabase.from('clubs').select('*').eq('id', tieData.club_b_id).single(),
-          supabase.from('events').select('team_sets_per_rubber').eq('id', tieData.event_id).single(),
+          supabase.from('clubs').select('*').eq('id', tieData.club_a_id).maybeSingle(),
+          supabase.from('clubs').select('*').eq('id', tieData.club_b_id).maybeSingle(),
+          supabase.from('events').select('team_sets_per_rubber').eq('id', tieData.event_id).maybeSingle(),
           Promise.all(playerAQueries),
           Promise.all(playerBQueries),
         ]);
@@ -223,13 +224,18 @@ export default function TeamPinScorePage() {
 
   function handleScoreNext() {
     if (!set1a || !set1b) { setError('1세트 점수를 입력하세요.'); return; }
+    const s1a = parseInt(set1a), s1b = parseInt(set1b);
+    if (s1a === s1b) { setError('1세트는 동점일 수 없습니다.'); return; }
 
     if (setsPerRubber === 3) {
       if (!set2a || !set2b) { setError('2세트 점수를 입력하세요.'); return; }
-      const s1win = parseInt(set1a) > parseInt(set1b) ? 'a' : 'b';
-      const s2win = parseInt(set2a) > parseInt(set2b) ? 'a' : 'b';
+      const s2a = parseInt(set2a), s2b = parseInt(set2b);
+      if (s2a === s2b) { setError('2세트는 동점일 수 없습니다.'); return; }
+      const s1win = s1a > s1b ? 'a' : 'b';
+      const s2win = s2a > s2b ? 'a' : 'b';
       if (s1win !== s2win) {
         if (!set3a || !set3b) { setError('3세트 점수를 입력하세요.'); return; }
+        if (parseInt(set3a) === parseInt(set3b)) { setError('3세트는 동점일 수 없습니다.'); return; }
       }
     }
 

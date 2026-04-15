@@ -67,21 +67,37 @@ function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: Ed
       const { error: teamErr } = await supabase.from('teams').update(updatePayload).eq('id', team.id)
       if (teamErr) { setMsg('❌ ' + teamErr.message); return }
 
-      // 2. 조 변경 처리
+      // 2. 조 변경 처리 — 원자성 보강: 새 조 insert 먼저, 성공 시에만 기존 조 제거
       const newGroupId = groupId || null
       if (newGroupId !== team.group_id) {
-        // 기존 조에서 제거
+        // 2-1. 새 조 insert 먼저 (실패하면 기존 상태 유지)
+        if (newGroupId) {
+          const { data: members } = await supabase
+            .from('group_members')
+            .select('id')
+            .eq('group_id', newGroupId)
+          const nextSeed = (members?.length || 0) + 1
+
+          const { error: insErr } = await supabase
+            .from('group_members')
+            .insert({ group_id: newGroupId, team_id: team.id, event_id: eventId, seed: nextSeed })
+          if (insErr) { setMsg('❌ 새 조 배정 실패 (기존 상태 유지): ' + insErr.message); return }
+        }
+
+        // 2-2. 기존 조에서 제거 (insert 성공했거나 newGroupId가 null인 경우)
         if (team.group_id) {
           const { error: delErr } = await supabase
             .from('group_members')
             .delete()
             .eq('team_id', team.id)
             .eq('group_id', team.group_id)
-          if (delErr) { setMsg('❌ 기존 조 제거 실패: ' + delErr.message); return }
+          if (delErr) {
+            // 기존 조 제거 실패 — 새 조는 이미 추가됨. 수동 정리 필요 메시지
+            setMsg('⚠️ 새 조는 추가되었으나 기존 조 제거 실패 — 운영자 확인 필요: ' + delErr.message)
+            return
+          }
 
-          // 기존 조의 조별 경기에서 이 팀이 포함된 미완료 경기 team 제거 (NULL 처리)
-          // ※ score가 이미 있는 경기는 건드리지 않음
-          // [수정] matchErr 선언 후 미체크 버그 수정 → 에러 시 경고 표시 후 계속 진행
+          // 기존 조의 미완료 경기에서 team 제거 (NULL 처리)
           const { error: matchErrB } = await supabase
             .from('matches')
             .update({ team_b_id: null })
@@ -97,21 +113,6 @@ function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: Ed
             .eq('team_a_id', team.id)
             .is('score', null)
           if (matchErrA) console.warn('matches team_a_id NULL 처리 실패:', matchErrA.message)
-        }
-
-        // 새 조에 추가
-        if (newGroupId) {
-          // 현재 조 멤버 수 (seed 계산)
-          const { data: members } = await supabase
-            .from('group_members')
-            .select('id')
-            .eq('group_id', newGroupId)
-          const nextSeed = (members?.length || 0) + 1
-
-          const { error: insErr } = await supabase
-            .from('group_members')
-            .insert({ group_id: newGroupId, team_id: team.id, event_id: eventId, seed: nextSeed })
-          if (insErr) { setMsg('❌ 새 조 배정 실패: ' + insErr.message); return }
         }
 
         // teams.group_id 동기화
@@ -343,13 +344,26 @@ export default function TeamsPage() {
     return `${divName}|${p1}|${p2}`
   }
 
+  // ✅ DB에서 max team_num 조회 후 +1 — 삭제·동시성 안전
+  async function nextTeamNum(offset = 0): Promise<string> {
+    const { data } = await supabase
+      .from('teams')
+      .select('team_num')
+      .eq('event_id', eventId)
+      .order('team_num', { ascending: false })
+      .limit(1)
+    const last = data?.[0]?.team_num || 'T-0000'
+    const num = parseInt(last.replace(/\D/g, ''), 10) || 0
+    return `T-${String(num + 1 + offset).padStart(4, '0')}`
+  }
+
   async function addTeam() {
     if (!p1Name.trim() || !p2Name.trim()) { setMsg('선수1, 선수2 이름을 모두 입력하세요.'); return }
     setAddLoading(true); setMsg('')
     const divName = selectedDiv?.name || ''
     const teamName = `${p1Name.trim()}/${p2Name.trim()}`
     const pin = generatePin()
-    const teamNum = `T-${String(teams.length + 1).padStart(4, '0')}`
+    const teamNum = await nextTeamNum()
     const { error } = await supabase.from('teams').insert({
       event_id: eventId, division_id: selected, division_name: divName,
       team_name: teamName, team_key: makeTeamKey(divName, p1Name.trim(), p2Name.trim()),
@@ -400,6 +414,14 @@ export default function TeamsPage() {
 
     let skipped = 0
     const rows: any[] = []
+    // ✅ CSV 배치 시작 번호도 DB max 기준
+    const { data: maxRow } = await supabase
+      .from('teams')
+      .select('team_num')
+      .eq('event_id', eventId)
+      .order('team_num', { ascending: false })
+      .limit(1)
+    const lastNum = parseInt((maxRow?.[0]?.team_num || 'T-0000').replace(/\D/g, ''), 10) || 0
 
     for (const line of dataLines) {
       const parts = line.split(',').map(s => s.trim())
@@ -425,7 +447,7 @@ export default function TeamsPage() {
       if (!player1 || !player2) { skipped++; continue }
 
       const pin = generatePin()
-      const teamNum = `T-${String(teams.length + rows.length + 1).padStart(4, '0')}`
+      const teamNum = `T-${String(lastNum + rows.length + 1).padStart(4, '0')}`
       rows.push({
         event_id: eventId, division_id: divId, division_name: divName,
         team_name: `${player1}/${player2}`, team_key: makeTeamKey(divName, player1, player2),

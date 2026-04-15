@@ -12,7 +12,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { fetchClubMembers, fetchLineups, fetchRevealedLineups, submitLineup, fetchRubbers } from '@/lib/team-api';
+import { fetchClubMembers, fetchLineups, fetchAllLineupsForTie, submitLineup, fetchRubbers } from '@/lib/team-api';
 import { getGenderLabel, formatSetScore, getMatchTypeShort } from '@/lib/team-utils';
 import type { Tie, Club, ClubMember, TeamLineup, LineupEntry, TieRubber } from '@/types/team';
 import PinSubscribeButton from '@/components/PinSubscribeButton'
@@ -51,6 +51,7 @@ export default function LineupPage() {
   const [setsPerRubber, setSetsPerRubber] = useState(1);
   // ★ 신규: 경기방식 표시용
   const [teamMatchType, setTeamMatchType] = useState<string | null>(null);
+  const [allowPlayerReuse, setAllowPlayerReuse] = useState(true);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clubARef = useRef<Club | null>(null);
   const clubBRef = useRef<Club | null>(null);
@@ -60,16 +61,22 @@ export default function LineupPage() {
       const { data: t } = await supabase.from('ties').select('*').eq('id', tieId).single();
       if (!t) { setError('대전을 찾을 수 없습니다.'); setLoading(false); return; }
       setTie(t);
-      const { data: ca } = await supabase.from('clubs').select('*').eq('id', t.club_a_id).single();
-      const { data: cb } = await supabase.from('clubs').select('*').eq('id', t.club_b_id).single();
+      if (!t.club_a_id || !t.club_b_id) {
+        setError('아직 상대팀이 확정되지 않은 경기입니다. (TBD 슬롯)');
+        setLoading(false);
+        return;
+      }
+      const { data: ca } = await supabase.from('clubs').select('*').eq('id', t.club_a_id).maybeSingle();
+      const { data: cb } = await supabase.from('clubs').select('*').eq('id', t.club_b_id).maybeSingle();
       setClubA(ca); setClubB(cb);
       clubARef.current = ca; clubBRef.current = cb;
       // ★ 수정: team_match_type도 함께 조회
       const { data: ev } = await supabase.from('events')
-        .select('team_sets_per_rubber, team_match_type')
-        .eq('id', t.event_id).single();
+        .select('team_sets_per_rubber, team_match_type, allow_player_reuse')
+        .eq('id', t.event_id).maybeSingle();
       setSetsPerRubber(ev?.team_sets_per_rubber || 1);
       setTeamMatchType(ev?.team_match_type || null);
+      setAllowPlayerReuse(ev?.allow_player_reuse ?? true);
       // ✅ lineup_revealed OR 경기 진행중/완료 → 바로 revealed 단계
       if (t.lineup_revealed || (t.club_a_lineup_submitted && t.club_b_lineup_submitted)) {
         setStep('revealed');
@@ -77,7 +84,7 @@ export default function LineupPage() {
         await loadRubbers(tieId);
         setLoading(false); return;
       }
-      const savedPin = sessionStorage.getItem('captain_pin');
+      const savedPin = sessionStorage.getItem(`captain_pin_${tieId}`);
       if (savedPin && ca && cb) {
         const ok = await tryAutoLogin(savedPin, ca, cb, t);
         if (ok) { setLoading(false); return; }
@@ -131,7 +138,9 @@ export default function LineupPage() {
   }
 
   async function loadRevealedData(tid: string, ca: Club | null, cb: Club | null) {
-    const revealed = await fetchRevealedLineups(tid); setRevealedLineups(revealed);
+    // revealed 단계 진입 조건(tie.lineup_revealed 또는 양팀 제출 완료)을 이미 통과했으므로
+    // is_revealed 플래그를 무시하고 전체 라인업을 가져온다. (백엔드 트리거 누락 대응)
+    const revealed = await fetchAllLineupsForTie(tid); setRevealedLineups(revealed);
     const mm: Record<string, ClubMember> = {};
     if (ca) { (await fetchClubMembers(ca.id)).forEach(m => { mm[m.id] = m; }); }
     if (cb) { (await fetchClubMembers(cb.id)).forEach(m => { mm[m.id] = m; }); }
@@ -145,7 +154,7 @@ export default function LineupPage() {
     if (clubA?.captain_pin === pinInput) { setMyClub(clubA); setOpponentClub(clubB); }
     else if (clubB?.captain_pin === pinInput) { setMyClub(clubB); setOpponentClub(clubA); }
     else { setError('PIN이 일치하지 않습니다.'); return; }
-    sessionStorage.setItem('captain_pin', pinInput);
+    sessionStorage.setItem(`captain_pin_${tieId}`, pinInput);
     const club = clubA?.captain_pin === pinInput ? clubA : clubB!;
     const ml = await fetchClubMembers(club.id); setMembers(ml);
     const existing = await fetchLineups(tieId, club.id);
@@ -160,6 +169,19 @@ export default function LineupPage() {
     for (let i = 0; i < lineups.length; i++) {
       if (!lineups[i].player1_id || !lineups[i].player2_id) { setError('복식 '+(i+1)+'의 선수를 모두 선택하세요.'); return; }
       if (lineups[i].player1_id === lineups[i].player2_id) { setError('복식 '+(i+1)+'에 같은 선수를 두 번 배정할 수 없습니다.'); return; }
+    }
+    // ✅ allow_player_reuse=false인 경우 러버간 선수 중복 사용 검증
+    if (!allowPlayerReuse) {
+      const used = new Map<string, number>();
+      for (let i = 0; i < lineups.length; i++) {
+        for (const pid of [lineups[i].player1_id, lineups[i].player2_id]) {
+          if (used.has(pid)) {
+            setError(`선수 중복: 복식 ${used.get(pid)}과 복식 ${i+1}에 같은 선수가 배정되었습니다. (선수 재사용 불가 설정)`);
+            return;
+          }
+          used.set(pid, i+1);
+        }
+      }
     }
     setError(''); setSubmitting(true);
     try {
@@ -177,8 +199,18 @@ export default function LineupPage() {
   function getMemberName(id: string): string { return allMembers[id]?.name || members.find(m => m.id === id)?.name || '-'; }
 
   function startScoring(rubber: TieRubber) {
-    setScoringRubber(rubber.id); setSelectedWinner(null); setScoreError('');
-    setSet1a(''); setSet1b(''); setSet2a(''); setSet2b(''); setSet3a(''); setSet3b('');
+    setScoringRubber(rubber.id); setScoreError('');
+    // ✅ 기존 점수가 있으면 미리 채움 (수정 시 재입력 방지)
+    setSet1a(rubber.set1_a?.toString() || '');
+    setSet1b(rubber.set1_b?.toString() || '');
+    setSet2a(rubber.set2_a?.toString() || '');
+    setSet2b(rubber.set2_b?.toString() || '');
+    setSet3a(rubber.set3_a?.toString() || '');
+    setSet3b(rubber.set3_b?.toString() || '');
+    // winner도 기존 데이터로 복원
+    if (rubber.winning_club_id && clubA && rubber.winning_club_id === clubA.id) setSelectedWinner('a');
+    else if (rubber.winning_club_id && clubB && rubber.winning_club_id === clubB.id) setSelectedWinner('b');
+    else setSelectedWinner(null);
   }
 
   async function handleScoreSave() {
@@ -186,14 +218,27 @@ export default function LineupPage() {
     if (!set1a || !set1b) { setScoreError('1세트 점수를 입력하세요.'); return; }
     if (setsPerRubber === 1) {
       const a = parseInt(set1a), b = parseInt(set1b);
+      if (a === b) { setScoreError('1세트가 동점입니다. 점수를 확인하세요.'); return; }
       if (selectedWinner === 'a' && a <= b) { setScoreError('이긴 팀의 점수가 더 높아야 합니다.'); return; }
       if (selectedWinner === 'b' && b <= a) { setScoreError('이긴 팀의 점수가 더 높아야 합니다.'); return; }
     }
     if (setsPerRubber === 3) {
       if (!set2a || !set2b) { setScoreError('2세트 점수를 입력하세요.'); return; }
       const s1a=parseInt(set1a),s1b=parseInt(set1b),s2a=parseInt(set2a),s2b=parseInt(set2b);
-      if ((s1a>s1b?1:0)+(s2a>s2b?1:0)===1 && (s1b>s1a?1:0)+(s2b>s2a?1:0)===1 && (!set3a||!set3b))
-        { setScoreError('세트 동률입니다. 3세트 점수를 입력하세요.'); return; }
+      if (s1a === s1b || s2a === s2b) { setScoreError('각 세트는 동점일 수 없습니다.'); return; }
+      const s1WinA = s1a > s1b, s2WinA = s2a > s2b;
+      const needSet3 = s1WinA !== s2WinA;
+      if (needSet3 && (!set3a || !set3b)) { setScoreError('세트 동률입니다. 3세트 점수를 입력하세요.'); return; }
+      // ✅ 선택한 승자와 실제 세트 승자 일치 검증
+      let aSets = (s1WinA ? 1 : 0) + (s2WinA ? 1 : 0);
+      let bSets = 2 - aSets;
+      if (needSet3 && set3a && set3b) {
+        const s3a = parseInt(set3a), s3b = parseInt(set3b);
+        if (s3a === s3b) { setScoreError('3세트는 동점일 수 없습니다.'); return; }
+        if (s3a > s3b) aSets++; else bSets++;
+      }
+      if (selectedWinner === 'a' && aSets <= bSets) { setScoreError('선택한 승자와 실제 점수가 일치하지 않습니다.'); return; }
+      if (selectedWinner === 'b' && bSets <= aSets) { setScoreError('선택한 승자와 실제 점수가 일치하지 않습니다.'); return; }
     }
     setScoreSaving(true); setScoreError('');
     try {

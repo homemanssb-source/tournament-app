@@ -55,6 +55,7 @@ export function getRoundLabel(round: string | null): string {
   const labels: Record<string, string> = {
     full_league: '풀리그',
     group: '조별리그',
+    round_of_32: '32강',
     round_of_16: '16강',
     quarter: '8강',
     semi: '4강',

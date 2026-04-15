@@ -16,7 +16,7 @@ interface GroupProgress {
   id: string; name: string; total: number; finished: number;
 }
 
-const ROUND_ORDER = ['round_of_16', 'quarter', 'semi', 'final'];
+const ROUND_ORDER = ['round_of_32', 'round_of_16', 'quarter', 'semi', 'final'];
 
 export default function BracketPage() {
   const searchParams = useSearchParams();
@@ -154,8 +154,18 @@ export default function BracketPage() {
   }
 
   async function deleteTournament() {
-    if (!confirm('현재 부서의 본선 토너먼트를 삭제하시겠습니까?')) return;
     setMsg('');
+    // ✅ 완료된 경기 존재 시 강제 confirm
+    const completedCount = ties.filter(t => t.status === 'completed').length;
+    if (completedCount > 0) {
+      const warn = `⚠️ 이미 완료된 경기 ${completedCount}건이 있습니다.\n` +
+        `삭제 시 점수·라인업·러버 데이터가 모두 사라집니다.\n\n` +
+        `그래도 삭제하려면 "DELETE"를 입력하세요.`;
+      const confirmed = prompt(warn);
+      if (confirmed !== 'DELETE') { setMsg('삭제 취소됨'); return; }
+    } else {
+      if (!confirm('현재 부서의 본선 토너먼트를 삭제하시겠습니까?')) return;
+    }
     const { error } = await supabase
       .from('ties')
       .delete()

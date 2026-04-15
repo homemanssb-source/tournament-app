@@ -12,6 +12,7 @@ import { useEventId, useDivisions, DivisionTabs } from '@/components/useDashboar
 import {
   fetchClubs, fetchClubMembers, updateClub, deleteClub,
   addClubMember, addClubMembersBatch, deleteClubMember, fetchEventTeamConfig,
+  setCaptain,
 } from '@/lib/team-api';
 import { generatePin, getGenderLabel } from '@/lib/team-utils';
 import type { Club, ClubMember, EventTeamConfig } from '@/types/team';
@@ -176,11 +177,15 @@ export default function ClubsPage() {
     if (selectedClub) await loadMembers(selectedClub);
   }
 
-  // ── 주장 설정 ──
+  // ── 주장 설정 (원자적 처리) ──
   async function handleSetCaptain(member: ClubMember) {
     if (!selectedClub) return;
-    await supabase.from('club_members').update({ is_captain: false }).eq('club_id', selectedClub.id);
-    await supabase.from('club_members').update({ is_captain: true }).eq('id', member.id);
+    const res = await setCaptain(selectedClub.id, member.id);
+    if (!res.success) {
+      alert(res.error || '주장 지정 실패');
+      return;
+    }
+    // captain_name도 동기화 (기존 동작 유지)
     await supabase.from('clubs').update({ captain_name: member.name }).eq('id', selectedClub.id);
     await loadMembers(selectedClub);
     await loadClubs();

@@ -98,9 +98,18 @@ export default function GroupsPage() {
     setGroups(grps);
     setTies(tieList);
 
-    // ✅ standings도 병렬 fetch
+    // ✅ standings도 병렬 fetch (부서별 분리)
     if (cfg?.team_format === 'full_league') {
-      setGroupStandings({ full: await fetchStandings(eventId, null) });
+      if (divList.length > 0) {
+        const results = await Promise.all(
+          divList.map((d: any) => fetchStandings(eventId, null, d.id))
+        );
+        const map: Record<string, StandingWithClub[]> = {};
+        divList.forEach((d: any, i: number) => { map[`full_${d.id}`] = results[i]; });
+        setGroupStandings(map);
+      } else {
+        setGroupStandings({ full: await fetchStandings(eventId, null) });
+      }
     } else if (grps.length > 0) {
       const standingsResults = await Promise.all(grps.map(g => fetchStandings(eventId, g.id)));
       const standings: Record<string, StandingWithClub[]> = {};
@@ -234,12 +243,17 @@ export default function GroupsPage() {
             </div>
           )}
 
-          {config?.team_format === 'full_league' && groupStandings.full && (
-            <div className="bg-white rounded-lg border p-4">
-              <h3 className="font-semibold mb-3">풀리그 순위</h3>
-              <StandingsTable standings={groupStandings.full} />
-            </div>
-          )}
+          {config?.team_format === 'full_league' && (() => {
+            const key = selectedDiv ? `full_${selectedDiv}` : 'full';
+            const list = groupStandings[key];
+            if (!list) return null;
+            return (
+              <div className="bg-white rounded-lg border p-4">
+                <h3 className="font-semibold mb-3">풀리그 순위</h3>
+                <StandingsTable standings={list} />
+              </div>
+            );
+          })()}
 
           {hasGroups && (
             <div className="space-y-4">
