@@ -152,15 +152,21 @@ export default function PinPage() {
     if (pin.length !== 6) { setError('팀 PIN 6자리를 입력해주세요.'); return }
     setError(''); setLoading(true)
     try {
-      const { data: club } = await supabase
+      // 같은 팀이 여러 부서로 신청한 경우 clubs 테이블에 부서별 row가 생기므로 전체 조회
+      const { data: clubs } = await supabase
         .from('clubs').select('id, name, event_id')
-        .eq('captain_pin', pin).limit(1).single()
-      if (!club) { setError('팀 PIN에 해당하는 클럽을 찾을 수 없습니다.'); setLoading(false); return }
+        .eq('captain_pin', pin)
+      if (!clubs || clubs.length === 0) { setError('팀 PIN에 해당하는 클럽을 찾을 수 없습니다.'); setLoading(false); return }
+
+      const clubIds = clubs.map(c => c.id)
+      const orFilter = clubIds
+        .flatMap(id => [`club_a_id.eq.${id}`, `club_b_id.eq.${id}`])
+        .join(',')
 
       const { data: ties } = await supabase
         .from('ties')
         .select('id, tie_order, status, round, club_a:clubs!ties_club_a_id_fkey(id, name), club_b:clubs!ties_club_b_id_fkey(id, name)')
-        .or(`club_a_id.eq.${club.id},club_b_id.eq.${club.id}`)
+        .or(orFilter)
         .in('status', ['pending', 'lineup_phase', 'lineup_ready', 'in_progress'])
         .order('tie_order')
 
