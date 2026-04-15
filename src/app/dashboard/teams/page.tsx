@@ -62,7 +62,6 @@ function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: Ed
       // PIN이 변경된 경우만 포함
       if (pinPlain.trim() !== team.pin_plain) {
         updatePayload.pin_plain = pinPlain.trim()
-        updatePayload.pin_hash = pinPlain.trim()
       }
       const { error: teamErr } = await supabase.from('teams').update(updatePayload).eq('id', team.id)
       if (teamErr) { setMsg('❌ ' + teamErr.message); return }
