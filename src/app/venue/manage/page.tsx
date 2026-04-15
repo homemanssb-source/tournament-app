@@ -4,8 +4,8 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
 // ──────────────────────────────────────────────────────────
-// 현장관리 역할: 조회 + 시작 + 점수입력만
-// 코트 배정/해제는 운영자 대시보드(courts/page.tsx) 전담
+// 현장관리: 조회 + 시작 + 점수입력 + 코트 배정/재배정/자동배정
+// (자기 경기장 코트에 한해서만 배정 가능)
 // ──────────────────────────────────────────────────────────
 
 interface VenueMatch {
@@ -31,11 +31,32 @@ export default function VenueManagePage() {
   const [editWinner, setEditWinner] = useState<'A' | 'B' | ''>('')
   const [submitting, setSubmitting] = useState(false)
 
+  // ── 코트 배정 ──
+  const [allVenueCourtNames, setAllVenueCourtNames] = useState<string[]>([])
+  const [assigning, setAssigning] = useState(false)
+  const [assignMsg, setAssignMsg] = useState('')
+
   // ── 세션 로드
   useEffect(() => {
     const raw = sessionStorage.getItem('venue_session')
     if (!raw) { router.push('/venue'); return }
-    setSession(JSON.parse(raw))
+    const s = JSON.parse(raw)
+    setSession(s)
+    // 전체 경기장의 코트 이름 배열 (단체전 court_number 글로벌 인덱스 계산용)
+    if (s?.event_id) {
+      supabase.from('venues')
+        .select('courts, short_name, court_count')
+        .eq('event_id', s.event_id)
+        .order('created_at')
+        .then(({ data }) => {
+          const names: string[] = (data || []).flatMap((v: any) => {
+            const sn = v.short_name?.trim() || '코트'
+            const count = v.court_count || v.courts?.length || 0
+            return Array.from({ length: count }, (_, i) => `${sn}-${i + 1}`)
+          })
+          setAllVenueCourtNames(names)
+        })
+    }
   }, [router])
 
   // ── 데이터 로드 (15초 폴링) ── [FIX V1] finally로 setLoading 보장
@@ -143,6 +164,113 @@ export default function VenueManagePage() {
     await loadData()
   }
 
+  // ── 코트 배정 헬퍼 ────────────────────────────────────────
+
+  // 다음 court_order 계산 (해당 코트의 max + 1)
+  async function nextCourtOrderForMatches(courtName: string): Promise<number> {
+    const { data } = await supabase.from('matches')
+      .select('court_order').eq('court', courtName)
+      .order('court_order', { ascending: false }).limit(1)
+    return (data?.[0]?.court_order || 0) + 1
+  }
+  async function nextCourtOrderForTies(courtNumber: number): Promise<number> {
+    const { data } = await supabase.from('ties')
+      .select('court_order').eq('court_number', courtNumber)
+      .order('court_order', { ascending: false }).limit(1)
+    return (data?.[0]?.court_order || 0) + 1
+  }
+
+  // 개별 배정/해제 (courtName=null → 해제)
+  async function assignItem(item: VenueMatch, courtName: string | null): Promise<string | null> {
+    // 자기 경기장 코트만 허용 (해제는 예외)
+    if (courtName !== null && !sessionCourts.includes(courtName)) {
+      return '자기 경기장 코트에만 배정할 수 있습니다.'
+    }
+    // 진행 중 경기 이동은 경고
+    if (item.status === 'IN_PROGRESS' && courtName !== item.court) {
+      if (!confirm(`진행 중인 경기입니다.\n${courtName ? `${courtName}으로 이동` : '배정 해제'}하시겠습니까?`)) {
+        return 'cancelled'
+      }
+    }
+    if (item.is_team_tie) {
+      const tieId = item.id.replace(/^tie_/, '')
+      if (courtName === null) {
+        const { error } = await supabase.from('ties')
+          .update({ court_number: null, court_order: null }).eq('id', tieId)
+        return error?.message || null
+      }
+      const idx = allVenueCourtNames.indexOf(courtName)
+      if (idx < 0) return `코트 "${courtName}" 글로벌 인덱스를 찾을 수 없음`
+      const courtNum = idx + 1
+      const nextOrd = await nextCourtOrderForTies(courtNum)
+      const { error } = await supabase.from('ties')
+        .update({ court_number: courtNum, court_order: nextOrd }).eq('id', tieId)
+      return error?.message || null
+    } else {
+      if (courtName === null) {
+        const { error } = await supabase.from('matches')
+          .update({ court: null, court_order: null }).eq('id', item.id)
+        return error?.message || null
+      }
+      const nextOrd = await nextCourtOrderForMatches(courtName)
+      const { error } = await supabase.from('matches')
+        .update({ court: courtName, court_order: nextOrd }).eq('id', item.id)
+      return error?.message || null
+    }
+  }
+
+  async function handleAssign(item: VenueMatch, courtName: string | null) {
+    setAssignMsg('')
+    const err = await assignItem(item, courtName)
+    if (err === 'cancelled') return
+    if (err) { setAssignMsg('❌ ' + err); return }
+    setAssignMsg(courtName ? `✅ ${courtName}에 배정됨` : '✅ 배정 해제됨')
+    setTimeout(() => setAssignMsg(''), 3000)
+    await loadData()
+  }
+
+  // 자동 배정: 미배정 경기를 부하 적은 코트에 분배
+  async function autoAssign() {
+    if (sessionCourts.length === 0) { setAssignMsg('❌ 이 경기장에 코트가 없습니다.'); return }
+    const targets = filteredUnassigned
+    if (targets.length === 0) { setAssignMsg('배정할 미배정 경기가 없습니다.'); return }
+
+    setAssigning(true)
+    setAssignMsg('')
+    try {
+      // 각 코트의 현재 로드 (완료 제외)
+      const loadMap: Record<string, number> = {}
+      for (const c of sessionCourts) loadMap[c] = 0
+      for (const m of matches) {
+        if (m.court && sessionCourts.includes(m.court) && m.status !== 'FINISHED') {
+          loadMap[m.court] = (loadMap[m.court] || 0) + 1
+        }
+      }
+
+      // 경기 번호순 정렬 (안정적인 순서)
+      const sorted = [...targets].sort((a, b) =>
+        (a.match_num || '').localeCompare(b.match_num || '')
+      )
+
+      let successCount = 0
+      for (const item of sorted) {
+        // 로드 최소 코트 선택
+        const court = sessionCourts.reduce((min, c) =>
+          loadMap[c] < loadMap[min] ? c : min, sessionCourts[0])
+        const err = await assignItem(item, court)
+        if (!err) {
+          loadMap[court]++
+          successCount++
+        }
+      }
+      setAssignMsg(`✅ ${successCount}/${sorted.length}경기 자동 배정 완료`)
+      setTimeout(() => setAssignMsg(''), 4000)
+      await loadData()
+    } finally {
+      setAssigning(false)
+    }
+  }
+
   function handleLogout() {
     sessionStorage.removeItem('venue_session')
     router.push('/venue')
@@ -217,18 +345,37 @@ export default function VenueManagePage() {
         ) : (
           <div className="space-y-4">
 
-            {/* [FIX V2] 미배정 배너: filterDiv 적용된 숫자 표시 */}
+            {/* 배정 메시지 */}
+            {assignMsg && (
+              <div className={`p-2.5 rounded-xl text-sm font-medium ${
+                assignMsg.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'
+              }`}>
+                {assignMsg}
+              </div>
+            )}
+
+            {/* 미배정 배너 — 드롭다운 + 자동배정 */}
             {filteredUnassigned.length > 0 && (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-3">
-                <span className="text-2xl flex-shrink-0">⏳</span>
-                <div>
-                  <p className="text-sm font-bold text-amber-800">
-                    코트 배정 대기 {filteredUnassigned.length}경기
-                    {filterDiv !== 'ALL' && <span className="text-amber-600 font-normal ml-1">({filterDiv})</span>}
-                  </p>
-                  <p className="text-xs text-amber-600 mt-0.5">
-                    운영자 대시보드 → 코트 배정에서 배정해주세요.
-                  </p>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">⏳</span>
+                    <p className="text-sm font-bold text-amber-800">
+                      배정 대기 {filteredUnassigned.length}경기
+                      {filterDiv !== 'ALL' && <span className="text-amber-600 font-normal ml-1">({filterDiv})</span>}
+                    </p>
+                  </div>
+                  <button onClick={autoAssign} disabled={assigning || sessionCourts.length === 0}
+                    className="text-xs bg-amber-600 hover:bg-amber-700 disabled:opacity-40 text-white px-3 py-2 rounded-lg font-bold whitespace-nowrap">
+                    {assigning ? '배정중...' : '🎯 자동 배정'}
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {filteredUnassigned.map(m => (
+                    <CourtAssignRow key={m.id} m={m} courts={sessionCourts}
+                      onAssign={(c) => handleAssign(m, c)} />
+                  ))}
                 </div>
               </div>
             )}
@@ -302,6 +449,8 @@ export default function VenueManagePage() {
                             canStart={false}
                             onStart={() => {}}
                             onScore={() => openScoreEdit(inProgressMatch)}
+                            courts={sessionCourts}
+                            onAssign={(c) => handleAssign(inProgressMatch, c)}
                           />
                         )}
 
@@ -328,6 +477,8 @@ export default function VenueManagePage() {
                               canStart={canStart}
                               onStart={() => startMatch(m.id)}
                               onScore={() => openScoreEdit(m)}
+                              courts={sessionCourts}
+                              onAssign={(c) => handleAssign(m, c)}
                             />
                           )
                         })}
@@ -455,16 +606,19 @@ export default function VenueManagePage() {
   )
 }
 
-// ── 코트 경기 카드
-function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore }: {
+// ── 코트 경기 카드 (재배정 드롭다운 포함)
+function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore, courts, onAssign }: {
   m: VenueMatch
   badge: string
   badgeStyle: string
   canStart: boolean
   onStart: () => void
   onScore: () => void
+  courts: string[]
+  onAssign: (court: string | null) => void
 }) {
   const isInProgress = m.status === 'IN_PROGRESS'
+  const [showMove, setShowMove] = useState(false)
   return (
     <div className={`rounded-xl border-2 p-3 transition-all ${badgeStyle}`}>
       <div className="flex items-center justify-between mb-2">
@@ -501,6 +655,11 @@ function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore }: {
               {isInProgress ? '점수입력' : '✏'}
             </button>
           )}
+          <button onClick={() => setShowMove(!showMove)}
+            className="text-xs text-stone-400 hover:text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg transition-all"
+            title="코트 이동/해제">
+            📍
+          </button>
         </div>
       </div>
       <div className="space-y-0.5">
@@ -519,6 +678,65 @@ function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore }: {
       {isInProgress && m.score && (
         <div className="mt-2 text-right text-base font-bold text-red-600">{m.score}</div>
       )}
+
+      {/* 코트 이동/해제 드롭다운 */}
+      {showMove && (
+        <div className="mt-2 pt-2 border-t border-stone-100 flex items-center gap-2">
+          <select
+            defaultValue={m.court || ''}
+            onChange={e => {
+              const val = e.target.value
+              if (val !== m.court) { onAssign(val || null); setShowMove(false) }
+            }}
+            className="flex-1 border rounded-lg px-2 py-1.5 text-sm">
+            <option value="">(해제)</option>
+            {courts.map(c => (
+              <option key={c} value={c}>{c}{c === m.court ? ' (현재)' : ''}</option>
+            ))}
+          </select>
+          <button onClick={() => setShowMove(false)}
+            className="text-xs text-stone-400 px-2 py-1.5">취소</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 미배정 경기용 코트 선택 Row
+function CourtAssignRow({ m, courts, onAssign }: {
+  m: VenueMatch
+  courts: string[]
+  onAssign: (court: string) => void
+}) {
+  const [selected, setSelected] = useState('')
+  return (
+    <div className="bg-white rounded-lg border border-amber-200 p-3">
+      <div className="flex items-start gap-2 mb-2">
+        <span className="text-xs font-mono text-stone-400 flex-shrink-0 mt-0.5">#{m.match_num}</span>
+        {m.is_team_tie && (
+          <span className="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full flex-shrink-0 mt-0.5">단체</span>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold leading-tight">
+            {m.team_a_name || 'TBD'}
+            <span className="text-stone-300 font-normal mx-1">vs</span>
+            {m.team_b_name || 'TBD'}
+          </div>
+          <div className="text-[11px] text-stone-400 mt-0.5">{m.division_name} · {m.round}</div>
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <select value={selected} onChange={e => setSelected(e.target.value)}
+          className="flex-1 border rounded-lg px-2 py-1.5 text-sm">
+          <option value="">코트 선택...</option>
+          {courts.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <button disabled={!selected}
+          onClick={() => { onAssign(selected); setSelected('') }}
+          className="bg-green-600 hover:bg-green-700 disabled:opacity-40 text-white text-xs px-3 py-1.5 rounded-lg font-bold whitespace-nowrap">
+          배정
+        </button>
+      </div>
     </div>
   )
 }
