@@ -39,6 +39,10 @@ export default function AdminPinManagePage() {
   const [memberMap, setMemberMap] = useState<Record<string, ClubMember>>({})
   const [tieRubbers, setTieRubbers] = useState<any[]>([])
 
+  // ── 단체전 부서 필터 ──
+  const [divisions, setDivisions] = useState<{id: string; name: string; sort_order: number}[]>([])
+  const [selectedDivId, setSelectedDivId] = useState<string>('')
+
   // 단체전 점수 입력 state
   const [scoringRubber, setScoringRubber] = useState<string | null>(null)
   const [set1a, setSet1a] = useState('')
@@ -76,10 +80,19 @@ export default function AdminPinManagePage() {
   async function loadTiesData(eventId: string) {
     setTiesLoading(true)
     try {
-      const { data: ev } = await supabase.from('events').select('team_sets_per_rubber').eq('id', eventId).single()
-      setSetsPerRubber(ev?.team_sets_per_rubber || 1)
-      const data = await fetchTies(eventId)
-      setTies(data)
+      const [evRes, tieData, divsRes] = await Promise.all([
+        supabase.from('events').select('team_sets_per_rubber').eq('id', eventId).single(),
+        fetchTies(eventId),
+        supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
+      ])
+      setSetsPerRubber(evRes.data?.team_sets_per_rubber || 1)
+      setTies(tieData)
+      const divList = divsRes.data || []
+      setDivisions(divList)
+      // 기본: 첫 부서 자동 선택 (부서 있으면)
+      if (divList.length > 0) {
+        setSelectedDivId(prev => prev || divList[0].id)
+      }
     } catch {}
     setTiesLoading(false)
   }
@@ -159,15 +172,45 @@ export default function AdminPinManagePage() {
       || (m.round||'').toLowerCase().includes(q)
   })
 
-  // 단체전 필터
+  // 단체전 필터 — 부서 먼저, 그 안에서 검색(선택)
   const filteredTies = ties.filter(tie => {
-    if (!tieSearchQuery) return false
+    // 1. 부서 필터 (선택된 부서가 있으면 해당 부서만, 없으면 전체)
+    if (selectedDivId) {
+      const tDiv = (tie as any).division_id as string | null | undefined
+      if (tDiv !== selectedDivId) return false
+    }
+    // 2. 검색어가 있으면 추가 필터 (없으면 부서 전체 표시)
+    if (!tieSearchQuery) return true
     const q = tieSearchQuery.toLowerCase()
     return (tie.club_a?.name||'').toLowerCase().includes(q)
       || (tie.club_b?.name||'').toLowerCase().includes(q)
       || (tie.tie_order?.toString()||'').includes(q)
       || (tie.round||'').toLowerCase().includes(q)
   })
+
+  // 라운드별 그룹핑 — 조별/16강/8강/4강/결승 순
+  const ROUND_ORDER: Record<string, number> = {
+    'group': 0, 'full_league': 0,
+    'round_of_32': 1, 'round_of_16': 2,
+    'quarter': 3, 'semi': 4, 'final': 5,
+  }
+  const ROUND_LABEL: Record<string, string> = {
+    'group': '조별리그', 'full_league': '풀리그',
+    'round_of_32': '32강', 'round_of_16': '16강',
+    'quarter': '8강', 'semi': '4강', 'final': '결승',
+  }
+  const groupedTies = (() => {
+    const map: Record<string, TieWithClubs[]> = {}
+    for (const t of filteredTies) {
+      const r = t.round || 'etc'
+      if (!map[r]) map[r] = []
+      map[r].push(t)
+    }
+    // 라운드 순서대로 정렬
+    return Object.entries(map).sort((a, b) =>
+      (ROUND_ORDER[a[0]] ?? 99) - (ROUND_ORDER[b[0]] ?? 99)
+    )
+  })()
 
   async function selectMatch(m: any) {
     setSelectedMatch(m)
@@ -491,12 +534,37 @@ export default function AdminPinManagePage() {
                 {tieMsg}
               </div>
             )}
+            {/* 부서 탭 */}
+            {divisions.length > 0 && (
+              <div className="flex gap-1 overflow-x-auto pb-1">
+                {divisions.map(d => {
+                  const count = ties.filter(t => (t as any).division_id === d.id).length
+                  return (
+                    <button key={d.id}
+                      onClick={() => { setSelectedDivId(d.id); setSelectedTie(null); setScoringRubber(null); setTieSearchQuery('') }}
+                      className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                        selectedDivId === d.id
+                          ? 'bg-blue-600 text-white shadow'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}>
+                      {d.name}
+                      {count > 0 && (
+                        <span className={`ml-1 text-xs ${
+                          selectedDivId === d.id ? 'text-white/70' : 'text-gray-400'
+                        }`}>({count})</span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* 선택 부서 내 검색 (선택) */}
             <div className="relative">
-              <input type="text" placeholder="클럽명, 라운드, 번호 검색..."
+              <input type="text" placeholder={selectedDivId ? '부서 내에서 클럽·라운드 검색 (선택)' : '클럽·라운드 검색'}
                 value={tieSearchQuery}
                 onChange={e => { setTieSearchQuery(e.target.value); setSelectedTie(null); setScoringRubber(null) }}
-                className="w-full border-2 rounded-xl px-4 py-3 pr-10 focus:border-blue-500 outline-none"
-                autoFocus
+                className="w-full border-2 rounded-xl px-4 py-2.5 pr-10 text-sm focus:border-blue-500 outline-none"
               />
               {tieSearchQuery && (
                 <button onClick={() => { setTieSearchQuery(''); setSelectedTie(null); setScoringRubber(null) }}
@@ -504,20 +572,29 @@ export default function AdminPinManagePage() {
               )}
             </div>
 
-            {!tieSearchQuery && (
+            {tiesLoading && <div className="text-center py-8 text-gray-400">로딩중...</div>}
+            {!tiesLoading && divisions.length === 0 && ties.length === 0 && (
               <div className="text-center py-10 text-gray-400">
-                <div className="text-3xl mb-2">🔍</div>
-                <p>클럽명 또는 라운드를 검색하세요</p>
-                <p className="text-xs mt-1 text-gray-300">예: "우도", "16강", "1"</p>
+                <div className="text-3xl mb-2">📭</div>
+                <p>이 대회에 단체전 대전이 없습니다.</p>
               </div>
             )}
-            {tiesLoading && <div className="text-center py-8 text-gray-400">로딩중...</div>}
-            {tieSearchQuery && !tiesLoading && filteredTies.length === 0 && (
-              <div className="text-center py-8 text-gray-400">검색 결과가 없습니다.</div>
+            {!tiesLoading && filteredTies.length === 0 && ties.length > 0 && (
+              <div className="text-center py-8 text-gray-400">
+                {tieSearchQuery ? '검색 결과가 없습니다.' : '이 부서에 대전이 없습니다.'}
+              </div>
             )}
 
-            <div className="space-y-3">
-              {filteredTies.map(tie => {
+            {/* 라운드별 그룹 */}
+            {groupedTies.map(([round, tieList]) => (
+              <div key={round} className="space-y-2">
+                <div className="flex items-center justify-between px-1">
+                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                    {ROUND_LABEL[round] || round} <span className="text-gray-400 font-normal">({tieList.length})</span>
+                  </h3>
+                </div>
+                <div className="space-y-3">
+                  {tieList.map(tie => {
                 const isSelected = selectedTie?.id === tie.id
                 const maj = getMajority(tie.rubber_count)
                 const aWin = tie.club_a_rubbers_won >= maj
@@ -631,7 +708,9 @@ export default function AdminPinManagePage() {
                   </div>
                 )
               })}
-            </div>
+                </div>
+              </div>
+            ))}
           </>
         )}
 
