@@ -472,6 +472,116 @@ async function scenario4() {
 }
 
 // ============================================================
+// SCENARIO 5: 다부서 풀리그 (C3 근본 수정 검증)
+// ============================================================
+async function scenario5() {
+  scen(5, 'multi_division full_league (C3 검증)');
+  const ev = await createTestEvent(newName('S5'));
+  const { data: divA } = await sb.from('divisions').insert({
+    event_id: ev.id, name: 'M부', sort_order: 1,
+  }).select().single();
+  const { data: divB } = await sb.from('divisions').insert({
+    event_id: ev.id, name: 'W부', sort_order: 2,
+  }).select().single();
+
+  const { clubs: clubsA, members: mA } = await createClubsWithMembers(
+    ev.id, divA.id, ['MA1', 'MA2', 'MA3']);
+  const { clubs: clubsB, members: mB } = await createClubsWithMembers(
+    ev.id, divB.id, ['WA1', 'WA2', 'WA3']);
+  ok('2부서 × 3팀 생성');
+
+  await sb.rpc('rpc_generate_full_league', { p_event_id: ev.id, p_division_id: divA.id });
+  await sb.rpc('rpc_generate_full_league', { p_event_id: ev.id, p_division_id: divB.id });
+
+  const { data: ties } = await sb.from('ties').select('*').eq('event_id', ev.id);
+  assertEq(ties.length, 6, '3C2×2=6');
+
+  for (const tie of ties) {
+    const allClubs = [...clubsA, ...clubsB];
+    const ca = allClubs.find(c => c.id === tie.club_a_id);
+    const cb = allClubs.find(c => c.id === tie.club_b_id);
+    const mm = { ...mA, ...mB };
+    const aWins = ca.seed_number < cb.seed_number;
+    const scores = aWins ?
+      [{winner:'a',s1a:6,s1b:2}, {winner:'a',s1a:6,s1b:3}, {winner:'b',s1a:3,s1b:6}] :
+      [{winner:'b',s1a:2,s1b:6}, {winner:'b',s1a:3,s1b:6}, {winner:'a',s1a:6,s1b:3}];
+    await submitLineupAndScore(tie, ca, cb, mm[ca.id], mm[cb.id], scores);
+  }
+  ok('6 ties 점수 입력');
+
+  await sb.rpc('rpc_calculate_standings', { p_event_id: ev.id, p_group_id: null, p_division_id: divA.id });
+  await sb.rpc('rpc_calculate_standings', { p_event_id: ev.id, p_group_id: null, p_division_id: divB.id });
+
+  const { data: allStandings } = await sb
+    .from('team_standings')
+    .select('*, club:clubs(name, division_id, seed_number)')
+    .eq('event_id', ev.id);
+
+  const aStandings = allStandings.filter(s => s.club.division_id === divA.id).sort((a, b) => a.rank - b.rank);
+  const bStandings = allStandings.filter(s => s.club.division_id === divB.id).sort((a, b) => a.rank - b.rank);
+
+  assertEq(aStandings.map(s => s.rank).join(','), '1,2,3', 'A부서 순위 1,2,3');
+  assertEq(bStandings.map(s => s.rank).join(','), '1,2,3', 'B부서 순위 1,2,3');
+  ok('부서별 순위 분리 확인 (1,2,3 / 1,2,3)');
+}
+
+// ============================================================
+// SCENARIO 6: PIN rate limit (lockout 검증)
+// ============================================================
+async function scenario6() {
+  scen(6, 'PIN rate limit (5회 실패 → 10분 잠금)');
+  const ev = await createTestEvent(newName('S6'), {
+    lineup_mode: 'captain_pin',
+  });
+  const div = await createDivision(ev.id);
+  const { clubs } = await createClubsWithMembers(
+    ev.id, div.id, ['LA', 'LB'], 2);
+  ok('2팀 생성 (captain_pin 모드)');
+
+  const r = await sb.rpc('rpc_generate_full_league', { p_event_id: ev.id, p_division_id: div.id });
+  if (r.error) throw new Error(r.error.message);
+  const { data: ties } = await sb.from('ties').select('*').eq('event_id', ev.id);
+  assertEq(ties.length, 1, '2C2=1 tie');
+  const tie = ties[0];
+  const clubA = clubs.find(c => c.id === tie.club_a_id);
+
+  // 잘못된 PIN으로 5번 시도
+  const wrongPin = '999999';
+  assertTrue(clubA.captain_pin !== wrongPin, 'wrong PIN이 실제 PIN과 달라야 함');
+
+  for (let i = 1; i <= 5; i++) {
+    const { data } = await sb.rpc('rpc_submit_lineup', {
+      p_tie_id: tie.id, p_club_id: clubA.id,
+      p_captain_pin: wrongPin, p_lineups: [],
+    });
+    assertTrue(data && !data.success, `시도 ${i}: 실패 기대`);
+    assertTrue((data.error || '').includes('PIN'), `시도 ${i}: PIN 에러 메시지 기대: ${data.error}`);
+  }
+  ok('5회 실패 기록');
+
+  // 6번째 — 올바른 PIN이어도 잠금 상태라 거부
+  const { data: d6 } = await sb.rpc('rpc_submit_lineup', {
+    p_tie_id: tie.id, p_club_id: clubA.id,
+    p_captain_pin: clubA.captain_pin,
+    p_lineups: [],
+  });
+  assertTrue(d6 && !d6.success, '6번째 (올바른 PIN) 도 실패해야 함');
+  assertTrue((d6.error || '').includes('시도 횟수 초과'), `잠금 메시지 기대, 실제: ${d6.error}`);
+  ok(`잠금 작동: "${d6.error}"`);
+
+  // pin_attempts 레코드 존재 확인
+  const { data: attempts } = await sb.from('pin_attempts')
+    .select('*').eq('target_key', `club:${clubA.id}`).maybeSingle();
+  assertTrue(attempts !== null, 'pin_attempts 레코드 존재');
+  assertTrue(attempts.fail_count >= 5, `fail_count >= 5 (실제: ${attempts.fail_count})`);
+  assertTrue(attempts.locked_until !== null, 'locked_until 설정됨');
+  ok(`pin_attempts: fail=${attempts.fail_count}, locked_until 설정됨`);
+
+  // 정리
+  await sb.from('pin_attempts').delete().eq('target_key', `club:${clubA.id}`);
+}
+
+// ============================================================
 async function main() {
   console.log(`🎾 단체전 E2E 다중 시나리오\n   대상: ${URL_}`);
 
@@ -480,10 +590,12 @@ async function main() {
 
   const results = [];
   const scenarios = [
-    ['#1 full_league',      scenario1],
-    ['#2 tied_results',     scenario2],
-    ['#3 group_tournament', scenario3],
-    ['#4 five_doubles',     scenario4],
+    ['#1 full_league',       scenario1],
+    ['#2 tied_results',      scenario2],
+    ['#3 group_tournament',  scenario3],
+    ['#4 five_doubles',      scenario4],
+    ['#5 multi_division',    scenario5],
+    ['#6 pin_rate_limit',    scenario6],
   ];
 
   for (const [name, fn] of scenarios) {

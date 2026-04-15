@@ -214,7 +214,7 @@ export default function SettingsPage() {
     const courts = makeCourtNames(newVenueShortName, newCourtCount)
     const { error } = await supabase.from('venues').insert({
       event_id: eventId, name: newVenueName.trim(), short_name: newVenueShortName.trim(),
-      courts, court_count: newCourtCount, pin_plain: newVenuePin.trim(), pin_hash: newVenuePin.trim(),
+      courts, court_count: newCourtCount, pin_plain: newVenuePin.trim(),
       manager_name: newVenueManager.trim() || newVenueName.trim() + ' 관리자',
       division_ids: newDivisionIds.length > 0 ? newDivisionIds : null,
     })
