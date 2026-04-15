@@ -267,7 +267,7 @@ export default function LineupPage() {
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-lg mx-auto p-6 space-y-6">
         <div className="text-center">
-          <h1 className="text-xl font-bold">🎾 단체전</h1>
+          <h1 className="text-xl font-bold">단체전</h1>
           {/* ★ 수정: 경기방식 라벨 표시 */}
           {clubA && clubB && (
             <p className="text-gray-600 mt-1">

@@ -307,7 +307,7 @@ export default function TeamPinScorePage() {
       <div className="max-w-md mx-auto p-6 space-y-6">
 
         <div className="text-center">
-          <h1 className="text-xl font-bold">🎾 단체전 점수입력</h1>
+          <h1 className="text-xl font-bold">단체전 점수입력</h1>
           <div className="flex justify-center gap-2 mt-3">
             {['PIN', '점수', '확인'].map((label, i) => {
               const stepIdx = ['pin', 'score', 'confirm'].indexOf(step);
