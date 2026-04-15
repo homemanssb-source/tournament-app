@@ -78,7 +78,14 @@ export default function StandingsPage() {
     setRecalculating(true);
     try {
       if (config?.team_format === 'full_league') {
-        await calculateStandings(eventId, null);
+        // ✅ C3 근본: 부서별로 따로 재계산 (순위가 division 내부에서만 부여됨)
+        if (divisions.length > 0) {
+          await Promise.all(
+            divisions.map(d => calculateStandings(eventId, null, d.id))
+          );
+        } else {
+          await calculateStandings(eventId, null);
+        }
       } else {
         await Promise.all(groups.map(g => calculateStandings(eventId, g.id)));
       }

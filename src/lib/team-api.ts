@@ -425,10 +425,15 @@ export async function advanceTournamentWinner(tieId: string): Promise<RpcResult>
   return data as RpcResult;
 }
 
-export async function calculateStandings(eventId: string, groupId?: string | null): Promise<RpcResult> {
+export async function calculateStandings(
+  eventId: string,
+  groupId?: string | null,
+  divisionId?: string | null,
+): Promise<RpcResult> {
   const { data, error } = await supabase.rpc('rpc_calculate_standings', {
     p_event_id: eventId,
     p_group_id: groupId ?? null,
+    p_division_id: divisionId ?? null,
   });
   if (error) throw error;
   return data as RpcResult;
