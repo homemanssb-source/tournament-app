@@ -35,6 +35,7 @@ export default function VenueManagePage() {
   const [allVenueCourtNames, setAllVenueCourtNames] = useState<string[]>([])
   const [assigning, setAssigning] = useState(false)
   const [assignMsg, setAssignMsg] = useState('')
+  const [filterRound, setFilterRound] = useState<string>('ALL')
 
   // ── 세션 로드
   useEffect(() => {
@@ -128,9 +129,36 @@ export default function VenueManagePage() {
 
   // [FIX V2] 미배정 배너: 부서 필터 적용 (배너 숫자 ↔ 코트 내용 일치)
   const allUnassigned = matches.filter(m => !m.court && m.status !== 'FINISHED')
-  const filteredUnassigned = filterDiv === 'ALL'
+  const filteredUnassignedByDiv = filterDiv === 'ALL'
     ? allUnassigned
     : allUnassigned.filter(m => m.division_name === filterDiv)
+
+  // 라운드 정규화 (개인전·단체전 다양한 표기 통일)
+  function roundCategory(round: string | null | undefined): string {
+    if (!round) return '기타'
+    const raw = String(round)
+    const lower = raw.toLowerCase()
+    if (lower === 'group' || lower === 'full_league' || raw === 'GROUP') return '예선'
+    if (raw === '128강' || lower === 'r128') return '128강'
+    if (raw === '64강'  || lower === 'r64')  return '64강'
+    if (raw === '32강'  || lower === 'r32'   || lower === 'round_of_32') return '32강'
+    if (raw === '16강'  || lower === 'r16'   || lower === 'round_of_16') return '16강'
+    if (raw === '8강'   || lower === 'qf'    || lower === 'quarter')     return '8강'
+    if (raw === '4강'   || lower === 'sf'    || lower === 'semi')        return '4강'
+    if (raw === '결승'  || lower === 'f'     || lower === 'final')       return '결승'
+    return raw
+  }
+
+  const ROUND_ORDER_LABEL = ['예선', '128강', '64강', '32강', '16강', '8강', '4강', '결승']
+  const availableRounds = Array.from(new Set(filteredUnassignedByDiv.map(m => roundCategory(m.round))))
+  const sortedRounds = [
+    ...ROUND_ORDER_LABEL.filter(r => availableRounds.includes(r)),
+    ...availableRounds.filter(r => !ROUND_ORDER_LABEL.includes(r)),  // 기타/알수없는 라운드 뒤로
+  ]
+
+  const filteredUnassigned = filterRound === 'ALL'
+    ? filteredUnassignedByDiv
+    : filteredUnassignedByDiv.filter(m => roundCategory(m.round) === filterRound)
 
   // ── 점수 입력 모달 열기 [FIX V3] 열 때 msg 초기화
   function openScoreEdit(m: VenueMatch) {
@@ -374,15 +402,16 @@ export default function VenueManagePage() {
               </div>
             )}
 
-            {/* 미배정 배너 — 드롭다운 + 자동배정 */}
-            {filteredUnassigned.length > 0 && (
+            {/* 미배정 배너 — 라운드 필터 + 드롭다운 + 자동배정 */}
+            {filteredUnassignedByDiv.length > 0 && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <span className="text-xl">⏳</span>
                     <p className="text-sm font-bold text-amber-800">
                       배정 대기 {filteredUnassigned.length}경기
-                      {filterDiv !== 'ALL' && <span className="text-amber-600 font-normal ml-1">({filterDiv})</span>}
+                      {filterRound !== 'ALL' && <span className="text-amber-600 font-normal ml-1">({filterRound})</span>}
+                      {filterDiv !== 'ALL' && <span className="text-amber-600 font-normal ml-1">· {filterDiv}</span>}
                     </p>
                   </div>
                   <button onClick={autoAssign} disabled={assigning || sessionCourts.length === 0}
@@ -391,12 +420,45 @@ export default function VenueManagePage() {
                   </button>
                 </div>
 
-                <div className="space-y-2">
-                  {filteredUnassigned.map(m => (
-                    <CourtAssignRow key={m.id} m={m} courts={sessionCourts}
-                      onAssign={(c) => handleAssign(m, c)} />
-                  ))}
-                </div>
+                {/* 라운드 탭 */}
+                {sortedRounds.length > 1 && (
+                  <div className="flex gap-1 overflow-x-auto -mx-1 px-1 pb-1">
+                    <button onClick={() => setFilterRound('ALL')}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
+                        filterRound === 'ALL'
+                          ? 'bg-amber-600 text-white shadow'
+                          : 'bg-white text-amber-700 border border-amber-200 hover:bg-amber-100'
+                      }`}>
+                      전체 <span className="opacity-70">({filteredUnassignedByDiv.length})</span>
+                    </button>
+                    {sortedRounds.map(r => {
+                      const count = filteredUnassignedByDiv.filter(m => roundCategory(m.round) === r).length
+                      return (
+                        <button key={r} onClick={() => setFilterRound(r)}
+                          className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
+                            filterRound === r
+                              ? 'bg-amber-600 text-white shadow'
+                              : 'bg-white text-amber-700 border border-amber-200 hover:bg-amber-100'
+                          }`}>
+                          {r} <span className="opacity-70">({count})</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {filteredUnassigned.length === 0 ? (
+                  <div className="text-center py-6 text-amber-500 text-sm">
+                    이 라운드에 미배정 경기가 없습니다.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {filteredUnassigned.map(m => (
+                      <CourtAssignRow key={m.id} m={m} courts={sessionCourts}
+                        onAssign={(c) => handleAssign(m, c)} />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
