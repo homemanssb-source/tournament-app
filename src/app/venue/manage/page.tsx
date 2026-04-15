@@ -241,12 +241,26 @@ export default function VenueManagePage() {
 
   async function handleAssign(item: VenueMatch, courtName: string | null) {
     setAssignMsg('')
+    // 🔍 진단 로그
+    console.log('[assign] before', { itemId: item.id, is_tie: item.is_team_tie, courtName,
+      allVenueCourtNames, sessionCourts })
     const err = await assignItem(item, courtName)
+    console.log('[assign] result', { err })
     if (err === 'cancelled') return
     if (err) { setAssignMsg('❌ ' + err); return }
     setAssignMsg(courtName ? `✅ ${courtName}에 배정됨` : '✅ 배정 해제됨')
     setTimeout(() => setAssignMsg(''), 3000)
     await loadData()
+    // 🔍 진단: 최신 matches에 이 item이 여전히 있는지 + court 값
+    setTimeout(() => {
+      const found = matches.find(m => m.id === item.id)
+      console.log('[assign] after loadData', {
+        itemStillInList: !!found,
+        court: found?.court,
+        status: found?.status,
+        totalMatches: matches.length,
+      })
+    }, 100)
   }
 
   // 자동 배정: 미배정 경기를 부하 적은 코트에 분배
