@@ -49,13 +49,20 @@ ALTER TABLE ties
   ADD CONSTRAINT ties_winning_club_id_fkey
   FOREIGN KEY (winning_club_id) REFERENCES clubs(id) ON DELETE SET NULL;
 
--- 4. (선택) tie_rubbers (tie_id, rubber_number) UNIQUE 제약 추가
+-- 4. (선택) tie_rubbers (tie_id, rubber_number) UNIQUE 제약 — 조건부 추가
 --    프론트의 동시 insert 방지 race window 완전 차단
 --    ※ 기존 데이터에 중복 없음을 확인 후 실행:
 --    SELECT tie_id, rubber_number, COUNT(*) FROM tie_rubbers
 --    GROUP BY tie_id, rubber_number HAVING COUNT(*) > 1;
-ALTER TABLE tie_rubbers
-  ADD CONSTRAINT tie_rubbers_tie_rubber_uq UNIQUE (tie_id, rubber_number);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'tie_rubbers_tie_rubber_uq'
+  ) THEN
+    ALTER TABLE tie_rubbers
+      ADD CONSTRAINT tie_rubbers_tie_rubber_uq UNIQUE (tie_id, rubber_number);
+  END IF;
+END $$;
 
 COMMIT;
 

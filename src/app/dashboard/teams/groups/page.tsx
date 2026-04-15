@@ -222,6 +222,7 @@ export default function GroupsPage() {
                   <div className="flex flex-wrap gap-2">
                     {distribution.map((size, i) => (
                       <span key={i} className={`px-3 py-1 rounded text-sm ${
+                        size === 1 ? 'bg-red-100 text-red-800 font-bold' :
                         size < groupSize ? 'bg-yellow-100 text-yellow-800' : 'bg-blue-100 text-blue-800'
                       }`}>
                         {String.fromCharCode(65 + i)}조: {size}팀
@@ -231,12 +232,18 @@ export default function GroupsPage() {
                   <p className="text-xs text-blue-600">
                     총 {distribution.reduce((a, b) => a + b, 0)}팀 배정 (등록: {filteredClubs.length}팀)
                   </p>
+                  {distribution.includes(1) && (
+                    <p className="text-xs text-red-600 font-medium bg-red-50 border border-red-200 rounded p-2">
+                      ⚠️ 1팀 조가 발생합니다. 조당 팀 수를 조정해주세요.
+                      (현재 팀 수 {filteredClubs.length}팀 ÷ 조당 {groupSize}팀)
+                    </p>
+                  )}
                 </div>
               )}
 
               <button onClick={handleCreateGroups}
-                disabled={generating || distribution.length === 0}
-                className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50">
+                disabled={generating || distribution.length === 0 || distribution.includes(1)}
+                className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
                 {generating ? '생성 중...' : hasGroups ? '조편성 재생성' : '조편성 생성'}
               </button>
               {hasGroups && <p className="text-xs text-red-500">재생성하면 기존 조가 모두 초기화됩니다.</p>}
