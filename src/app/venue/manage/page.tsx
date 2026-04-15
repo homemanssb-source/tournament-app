@@ -43,14 +43,15 @@ export default function VenueManagePage() {
     const s = JSON.parse(raw)
     setSession(s)
     // 전체 경기장의 코트 이름 배열 (단체전 court_number 글로벌 인덱스 계산용)
+    // ✅ dashboard/courts와 동일한 fallback 순서: short_name || name (리터럴 '코트'는 최후)
     if (s?.event_id) {
       supabase.from('venues')
-        .select('courts, short_name, court_count')
+        .select('name, short_name, courts, court_count')
         .eq('event_id', s.event_id)
         .order('created_at')
         .then(({ data }) => {
           const names: string[] = (data || []).flatMap((v: any) => {
-            const sn = v.short_name?.trim() || '코트'
+            const sn = (v.short_name?.trim() || v.name?.trim() || '코트')
             const count = v.court_count || v.courts?.length || 0
             return Array.from({ length: count }, (_, i) => `${sn}-${i + 1}`)
           })
