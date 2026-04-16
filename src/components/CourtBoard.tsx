@@ -9,6 +9,23 @@ interface CourtMatch {
   team_a_name: string; team_b_name: string
   team_a_id: string; team_b_id: string
   winner_team_id: string | null; is_team_tie?: boolean; ended_at?: string | null
+  group_label?: string | null
+}
+
+// round 값 → 짧은 한국어 라벨 (대시보드와 동일 규칙)
+function roundLabel(round: string): string {
+  const map: Record<string, string> = {
+    'GROUP': '예선', 'group': '예선', 'full_league': '리그',
+    'R128': '128강', 'R64': '64강', 'R32': '32강', 'R16': '16강',
+    'QF': '8강', 'SF': '4강', 'F': '결승',
+    'r128': '128강', 'r64': '64강', 'r32': '32강', 'r16': '16강',
+    'qf': '8강', 'sf': '4강', 'f': '결승',
+    'round_of_32': '32강', 'round_of_16': '16강',
+    'quarter': '8강', 'semi': '4강', 'final': '결승',
+    '128강': '128강', '64강': '64강', '32강': '32강', '16강': '16강',
+    '8강': '8강', '4강': '4강', '결승': '결승',
+  }
+  return map[round] || round
 }
 
 export default function CourtBoard({ eventId, initialDate }: { eventId: string; initialDate?: string }) {
@@ -36,7 +53,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
       in_progress: 'IN_PROGRESS', completed: 'FINISHED',
     }
 
-    const [matchRes, tieRes, divRes, venueRes] = await Promise.all([
+    const [matchRes, tieRes, divRes, venueRes, grpRes] = await Promise.all([
       supabase.from('v_matches_with_teams').select('*')
         .eq('event_id', eventId).not('court', 'is', null)
         .order('court').order('court_order'),
@@ -46,7 +63,12 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
         .order('court_number').order('tie_order'),
       supabase.from('divisions').select('id, match_date').eq('event_id', eventId),
       supabase.from('venues').select('id, short_name, name, court_count').eq('event_id', eventId).order('created_at'),
+      supabase.from('groups').select('id, group_label').eq('event_id', eventId),
     ])
+    const grpMap: Record<string, string> = {}
+    for (const g of (grpRes.data || []) as any[]) {
+      if (g.group_label) grpMap[g.id] = g.group_label
+    }
 
     // ✅ court_number(숫자) → short_name-N 포맷 변환 (timetable/page.tsx와 동일 로직)
     const venueList = (venueRes.data || []) as { short_name: string; name: string; court_count: number }[]
@@ -87,6 +109,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
       team_a_id: t.club_a_id || '', team_b_id: t.club_b_id || '',
       winner_team_id: t.winning_club_id || null, is_team_tie: true,
       ended_at: t.ended_at ?? null,
+      group_label: t.group_id ? (grpMap[t.group_id] || null) : null,
     }))
 
     setMatches([...indivMatches, ...tieMatches])
@@ -135,13 +158,18 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
-  // ✅ 날짜 필터 적용 — 단체전 부서도 match_date 존중 (is_team_tie 바이패스 제거)
+  // ✅ 날짜 필터 — match_date가 설정된 부서만 날짜로 거름.
+  //    match_date가 없는 부서의 경기는 항상 표시 (날짜 미지정 = 모든 날짜).
   const dateFilteredMatches = React.useMemo(() => {
     if (dateFilter === 'ALL') return matches
-    const divIds = Object.entries(divMatchDates)
-      .filter(([, d]) => d === dateFilter).map(([id]) => id)
-    if (divIds.length === 0) return []
-    return matches.filter(m => m.division_id && divIds.includes(m.division_id))
+    const sameDateDivs = new Set(
+      Object.entries(divMatchDates).filter(([, d]) => d === dateFilter).map(([id]) => id)
+    )
+    return matches.filter(m => {
+      if (!m.division_id) return true
+      if (!divMatchDates[m.division_id]) return true   // 날짜 미지정 부서 → 항상 표시
+      return sameDateDivs.has(m.division_id)
+    })
   }, [matches, dateFilter, divMatchDates])
 
   const byCourt = new Map<string, CourtMatch[]>()
@@ -401,11 +429,20 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
 
 function CourtSlot({ label, labelColor, match, highlight }: { label: string; labelColor: string; match: CourtMatch; highlight?: boolean }) {
   const isTeam = match.is_team_tie
+  const rLabel = roundLabel(match.round)
+  const roundText = match.group_label ? `${rLabel} ${match.group_label}` : rLabel
   return (
     <div className={`rounded-lg border p-2.5 ${highlight ? 'ring-2 ring-blue-400 ' : ''}${labelColor}`}>
-      <div className="flex items-center justify-between mb-1.5">
+      <div className="flex items-center justify-between mb-1.5 gap-1">
         <span className="text-xs font-bold">{label}</span>
-        <span className="text-xs opacity-70">{match.round}</span>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${isTeam ? 'bg-blue-100 text-blue-700' : 'bg-stone-100 text-stone-600'}`}>
+            {isTeam ? '단체' : match.division_name}
+          </span>
+          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${isTeam ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-700'}`}>
+            {roundText}
+          </span>
+        </div>
       </div>
       <div className="flex items-center gap-2">
         <div className="flex-1 min-w-0">
@@ -429,12 +466,11 @@ function CourtSlot({ label, labelColor, match, highlight }: { label: string; lab
             <div className="font-bold text-sm truncate">{match.team_b_name || 'TBD'}</div>
           )}
         </div>
-        <div className="text-right flex-shrink-0">
-          <div className={`text-xs font-medium px-2 py-0.5 rounded-full ${isTeam ? 'bg-blue-100 text-blue-700' : 'bg-white/50'}`}>
-            {isTeam ? '📋 단체전' : match.division_name}
+        {match.score && (
+          <div className={`text-right flex-shrink-0 text-base font-bold ${isTeam ? 'text-blue-700' : ''}`}>
+            {match.score}
           </div>
-          {match.score && <div className={`text-sm font-bold mt-1 ${isTeam ? 'text-blue-700' : ''}`}>{match.score}</div>}
-        </div>
+        )}
       </div>
     </div>
   )
@@ -455,12 +491,16 @@ function RemainingMatches({ matches, searchName }: { matches: CourtMatch[]; sear
               m.team_a_name.toLowerCase().includes(searchName.toLowerCase()) ||
               m.team_b_name.toLowerCase().includes(searchName.toLowerCase())
             )
+            const rl = roundLabel(m.round)
+            const rt = m.group_label ? `${rl} ${m.group_label}` : rl
             return (
               <div key={m.id} className={`text-xs py-1 border-b border-stone-50 last:border-0 ${isHit ? 'font-bold text-blue-700 bg-blue-50 px-1 rounded' : ''}`}>
                 <span className="text-stone-400">{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
-                {m.is_team_tie && <span className="text-blue-600 mr-1">[단체]</span>}
+                <span className={`text-[10px] px-1 py-0.5 rounded mr-1 ${m.is_team_tie ? 'bg-blue-100 text-blue-700' : 'bg-stone-100 text-stone-600'}`}>
+                  {m.is_team_tie ? '단체' : m.division_name}
+                </span>
+                <span className="text-[10px] px-1 py-0.5 rounded mr-1 bg-amber-50 text-amber-700">{rt}</span>
                 <span>{m.team_a_name}</span><span className="text-stone-300"> vs </span><span>{m.team_b_name}</span>
-                {!m.is_team_tie && <span className="text-stone-400 ml-1">({m.division_name})</span>}
                 {isHit && <span className="ml-1 text-blue-500">← 검색한 팀</span>}
               </div>
             )
@@ -480,15 +520,22 @@ function FinishedMatches({ matches }: { matches: CourtMatch[] }) {
       </button>
       {open && (
         <div className="space-y-1 mt-1 ml-3">
-          {matches.map(m => (
-            <div key={m.id} className="text-xs py-1 text-stone-400 border-b border-stone-50 last:border-0">
-              <span>{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
-              {m.is_team_tie && <span className="text-blue-500 mr-1">[단체]</span>}
-              <span>{m.team_a_name} vs {m.team_b_name}</span>
-              {m.score && <span className={`font-bold ml-1 ${m.is_team_tie ? 'text-blue-600' : 'text-tennis-600'}`}>{m.score}</span>}
-              {m.ended_at && <span className="ml-1.5 text-stone-300">종료 {new Date(m.ended_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Seoul' })}</span>}
-            </div>
-          ))}
+          {matches.map(m => {
+            const rl = roundLabel(m.round)
+            const rt = m.group_label ? `${rl} ${m.group_label}` : rl
+            return (
+              <div key={m.id} className="text-xs py-1 text-stone-400 border-b border-stone-50 last:border-0">
+                <span>{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
+                <span className={`text-[10px] px-1 py-0.5 rounded mr-1 ${m.is_team_tie ? 'bg-blue-50 text-blue-600' : 'bg-stone-100 text-stone-500'}`}>
+                  {m.is_team_tie ? '단체' : m.division_name}
+                </span>
+                <span className="text-[10px] px-1 py-0.5 rounded mr-1 bg-stone-50">{rt}</span>
+                <span>{m.team_a_name} vs {m.team_b_name}</span>
+                {m.score && <span className={`font-bold ml-1 ${m.is_team_tie ? 'text-blue-600' : 'text-tennis-600'}`}>{m.score}</span>}
+                {m.ended_at && <span className="ml-1.5 text-stone-300">종료 {new Date(m.ended_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Seoul' })}</span>}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

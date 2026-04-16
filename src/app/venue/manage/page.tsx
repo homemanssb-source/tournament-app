@@ -139,12 +139,18 @@ export default function VenueManagePage() {
     return () => clearInterval(interval)
   }, [session, loadData])
 
-  // ── 날짜 필터 적용: 해당 날짜 부서의 경기만 표시 (단체전 부서도 동일하게 존중) ──
+  // ── 날짜 필터 적용: match_date가 설정된 부서만 날짜로 거름.
+  //    match_date가 없는 부서의 경기는 항상 표시 (날짜 미지정 = 모든 날짜).
   const dateFilteredMatches = (() => {
     if (dateFilter === 'ALL') return matches
-    const validDivIds = Object.entries(divMatchDates)
-      .filter(([, d]) => d === dateFilter).map(([id]) => id)
-    return matches.filter(m => m.division_id && validDivIds.includes(m.division_id))
+    const sameDateDivs = new Set(
+      Object.entries(divMatchDates).filter(([, d]) => d === dateFilter).map(([id]) => id)
+    )
+    return matches.filter(m => {
+      if (!m.division_id) return true
+      if (!divMatchDates[m.division_id]) return true   // 날짜 미지정 부서 → 항상 표시
+      return sameDateDivs.has(m.division_id)
+    })
   })()
 
   // ── 파생 데이터 (날짜 필터 적용된 matches 기준)
