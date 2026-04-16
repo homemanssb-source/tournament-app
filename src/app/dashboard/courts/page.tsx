@@ -256,9 +256,9 @@ export default function CourtsPage() {
     try {
       const [matchRes, tieRes, grpRes] = await Promise.all([
         supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
-          .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true }),
+          .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true }).order('id'),
         supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)')
-          .eq('event_id', eventId).order('tie_order', { ascending:true, nullsFirst:false }),
+          .eq('event_id', eventId).order('tie_order', { ascending:true, nullsFirst:false }).order('id'),
         supabase.from('groups').select('id, group_label').eq('event_id', eventId),
       ])
       const _grpMap: Record<string,string> = {}
@@ -318,7 +318,7 @@ export default function CourtsPage() {
   async function loadMatches() {
     if (!eventId) return
     const { data } = await supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
-      .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true })
+      .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true }).order('id')
     const list = (data || [])
       .filter((m: any) => m.score !== 'BYE')
       .sort((a: any, b: any) => {
@@ -335,7 +335,7 @@ export default function CourtsPage() {
   async function loadTies() {
     if (!eventId) return
     const [tieRes, grpRes] = await Promise.all([
-      supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)').eq('event_id', eventId).order('tie_order', { ascending:true, nullsFirst:false }),
+      supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)').eq('event_id', eventId).order('tie_order', { ascending:true, nullsFirst:false }).order('id'),
       supabase.from('groups').select('id, group_label').eq('event_id', eventId),
     ])
     const grpMap: Record<string,string> = {}
