@@ -86,24 +86,31 @@ export default function AdminPinManagePage() {
     loadPinData(s.event_id)
   }, [])
 
-  // ── PIN 확인용 데이터 로드 (팀관리 + 클럽관리만) ──
+  // ── PIN 확인용 데이터 로드 (팀관리 + 클럽관리) ──
+  // FK 조인이 PostgREST 스키마 캐시에 없어서 divisions를 별도로 가져와 클라이언트 매핑
   async function loadPinData(eventId: string) {
     setPinDataLoading(true)
     try {
-      const [teamsRes, clubsRes] = await Promise.all([
+      const [teamsRes, clubsRes, divsRes] = await Promise.all([
         supabase.from('teams').select('id, team_num, team_name, division_name, pin_plain')
           .eq('event_id', eventId).order('division_name').order('team_num'),
-        supabase.from('clubs').select('id, name, captain_name, captain_pin, division_id, divisions:division_id(name)')
-          .eq('event_id', eventId),
+        supabase.from('clubs').select('id, name, captain_name, captain_pin, division_id')
+          .eq('event_id', eventId).order('name'),
+        supabase.from('divisions').select('id, name').eq('event_id', eventId),
       ])
+      const divMap: Record<string, string> = {}
+      for (const d of (divsRes.data || []) as any[]) divMap[d.id] = d.name
+
       setPinTeams((teamsRes.data || []) as PinTeam[])
       setPinClubs((clubsRes.data || []).map((c: any) => ({
         id: c.id, name: c.name,
-        division_name: c.divisions?.name || '',
+        division_name: c.division_id ? (divMap[c.division_id] || '') : '',
         captain_name: c.captain_name,
         captain_pin: c.captain_pin,
       })))
-    } catch {} finally { setPinDataLoading(false) }
+    } catch (e) {
+      console.error('loadPinData 실패:', e)
+    } finally { setPinDataLoading(false) }
   }
 
   function togglePinReveal(key: string) {
