@@ -10,7 +10,10 @@ type Tab = 'individual' | 'team' | 'pins' | 'locks'
 
 interface PinTeam { id: string; team_num: string; team_name: string; division_name: string; pin_plain: string }
 interface PinClub { id: string; name: string; division_name: string; captain_name: string | null; captain_pin: string | null }
-interface PinRubber { id: string; rubber_number: number; pin_code: string | null; tie_id: string; tie_label: string }
+interface PinRubber {
+  id: string; rubber_number: number; pin_code: string | null; tie_id: string;
+  tie_order: number | null; club_a_name: string; club_b_name: string;
+}
 
 interface PinLock {
   target_key: string
@@ -104,12 +107,14 @@ export default function AdminPinManagePage() {
         captain_name: c.captain_name,
         captain_pin: c.captain_pin,
       })))
-      // 이 이벤트의 ties만 필터
+      // 이 이벤트의 ties만 필터 — 검색 시 매칭된 팀명만 표시하기 위해 양 클럽명 분리 보관
       setPinRubbers((ruRes.data || [])
         .filter((r: any) => r.ties?.event_id === eventId)
         .map((r: any) => ({
           id: r.id, rubber_number: r.rubber_number, pin_code: r.pin_code, tie_id: r.tie_id,
-          tie_label: `T#${r.ties?.tie_order ?? '-'} · ${r.ties?.club_a?.name || 'TBD'} vs ${r.ties?.club_b?.name || 'TBD'}`,
+          tie_order: r.ties?.tie_order ?? null,
+          club_a_name: r.ties?.club_a?.name || '',
+          club_b_name: r.ties?.club_b?.name || '',
         })) as PinRubber[])
     } catch {} finally { setPinDataLoading(false) }
   }
@@ -808,8 +813,19 @@ export default function AdminPinManagePage() {
                 c.name?.toLowerCase().includes(q) ||
                 (c.captain_name||'').toLowerCase().includes(q) ||
                 c.division_name?.toLowerCase().includes(q))
-              const rubbers = pinRubbers.filter(r =>
-                r.tie_label?.toLowerCase().includes(q))
+              // 러버: 양쪽 클럽명 중 매칭되는 것 기준 필터, 매칭된 클럽명만 표시
+              const rubbers = pinRubbers
+                .map(r => {
+                  const aMatch = r.club_a_name?.toLowerCase().includes(q)
+                  const bMatch = r.club_b_name?.toLowerCase().includes(q)
+                  if (!aMatch && !bMatch) return null
+                  // 매칭된 쪽 이름만 사용 (양쪽 다 매칭이면 둘 다)
+                  const matchedName = aMatch && bMatch
+                    ? `${r.club_a_name} / ${r.club_b_name}`
+                    : aMatch ? r.club_a_name : r.club_b_name
+                  return { ...r, matchedName }
+                })
+                .filter((r): r is PinRubber & { matchedName: string } => r !== null)
 
               if (teams.length === 0 && clubs.length === 0 && rubbers.length === 0) {
                 return <div className="text-center py-8 text-gray-400">검색 결과 없음</div>
@@ -865,7 +881,7 @@ export default function AdminPinManagePage() {
                     </div>
                   )}
 
-                  {/* 단체전 러버 PIN */}
+                  {/* 단체전 러버 PIN — 매칭된 팀명만 표시 (상대팀 라벨 제거) */}
                   {rubbers.length > 0 && (
                     <div className="bg-white rounded-xl border overflow-hidden">
                       <div className="bg-amber-50 px-4 py-2 font-bold text-sm text-amber-700">🎾 단체전 러버 PIN ({rubbers.length})</div>
@@ -873,7 +889,7 @@ export default function AdminPinManagePage() {
                         {rubbers.slice(0, 30).map(r => (
                           <div key={r.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
                             <div className="min-w-0 flex-1">
-                              <div className="text-sm font-medium truncate">{r.tie_label}</div>
+                              <div className="text-sm font-medium truncate">{r.matchedName}</div>
                               <div className="text-[10px] text-gray-400">러버 {r.rubber_number}</div>
                             </div>
                             {renderPin('rubber:'+r.id, r.pin_code)}
