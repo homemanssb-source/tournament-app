@@ -87,6 +87,8 @@ async function safeDeleteEvent(eventId) {
     () => sb.from('clubs').delete().eq('event_id', eventId),
     () => sb.from('matches').delete().eq('event_id', eventId),
     () => sb.from('divisions').delete().eq('event_id', eventId),
+    // ✅ sync_log 도 함께 제거 (앱A 재가져오기 가능하게 — 없으면 "이미 동기화됨" 스킵)
+    () => sb.from('sync_log').delete().eq('event_id', eventId),
     () => sb.from('events').delete().eq('id', eventId),
   ].filter(Boolean);
 
