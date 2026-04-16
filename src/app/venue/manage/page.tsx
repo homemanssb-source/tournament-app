@@ -37,6 +37,10 @@ export default function VenueManagePage() {
   const [assignMsg, setAssignMsg] = useState('')
   const [filterRound, setFilterRound] = useState<string>('ALL')
 
+  // ── 날짜 필터 (division.match_date 기반) ──
+  const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({}) // division_id → YYYY-MM-DD
+  const [dateFilter, setDateFilter] = useState<string>('ALL')
+
   // ── 세션 로드
   useEffect(() => {
     const raw = sessionStorage.getItem('venue_session')
@@ -58,8 +62,37 @@ export default function VenueManagePage() {
           })
           setAllVenueCourtNames(names)
         })
+
+      // 부서별 match_date 로드 (날짜 필터용)
+      supabase.from('divisions')
+        .select('id, match_date, name').eq('event_id', s.event_id)
+        .then(({ data }) => {
+          const map: Record<string, string> = {}
+          for (const d of (data || []) as any[]) {
+            if (d.match_date) map[d.id] = d.match_date
+          }
+          setDivMatchDates(map)
+        })
     }
   }, [router])
+
+  // 오늘 날짜 자동 선택 (매치 데이트 변경 시)
+  useEffect(() => {
+    const values = Object.values(divMatchDates)
+    if (values.length === 0) return
+    const dates = [...new Set(values)].sort()
+    if (dateFilter === 'ALL') {
+      const today = new Date().toISOString().split('T')[0]
+      const picked = dates.includes(today)
+        ? today
+        : dates.reduce((best, cur) => {
+            const bd = Math.abs(new Date(best).getTime() - new Date(today).getTime())
+            const cd = Math.abs(new Date(cur).getTime() - new Date(today).getTime())
+            return cd < bd ? cur : best
+          }, dates[0])
+      setDateFilter(picked)
+    }
+  }, [divMatchDates])
 
   // 단체전 상태 → 개인전 상태 규칙 (UI 필터가 UPPERCASE 기준이라 통일)
   //   pending, lineup_phase, lineup_ready → PENDING
@@ -106,29 +139,39 @@ export default function VenueManagePage() {
     return () => clearInterval(interval)
   }, [session, loadData])
 
-  // ── 파생 데이터
-  const divisionNames = Array.from(new Set(matches.map(m => m.division_name).filter(Boolean)))
+  // ── 날짜 필터 적용: 해당 날짜 부서의 경기 + 단체전 ties는 모두 유지 ──
+  // (ties의 division_name은 '단체전'으로 하드코딩되어 날짜 필터 대상 불명확 → 다 보여줌)
+  const dateFilteredMatches = (() => {
+    if (dateFilter === 'ALL') return matches
+    const validDivIds = Object.entries(divMatchDates)
+      .filter(([, d]) => d === dateFilter).map(([id]) => id)
+    // division_id가 유효한 부서에 속하거나 단체전이면 통과
+    return matches.filter(m => m.is_team_tie || (m.division_id && validDivIds.includes(m.division_id)))
+  })()
 
-  // 코트 목록: session.courts 기준, 실제 배정된 court로 보완
+  // ── 파생 데이터 (날짜 필터 적용된 matches 기준)
+  const divisionNames = Array.from(new Set(dateFilteredMatches.map(m => m.division_name).filter(Boolean)))
+
+  // 코트 목록: session.courts 기준, 실제 배정된 court로 보완 (날짜 필터 적용)
   const sessionCourts: string[] = session?.courts || []
-  const assignedCourtSet = new Set(matches.map(m => m.court).filter(Boolean) as string[])
+  const assignedCourtSet = new Set(dateFilteredMatches.map(m => m.court).filter(Boolean) as string[])
   const allCourtKeys = [
     ...sessionCourts,
     ...[...assignedCourtSet].filter(c => !sessionCourts.includes(c)),
   ]
 
-  // 코트별 경기 맵 (필터 무관 — 코트 카드는 항상 전체 표시)
+  // 코트별 경기 맵 (날짜 필터 기준)
   const byCourt = new Map<string, VenueMatch[]>()
   for (const c of allCourtKeys) byCourt.set(c, [])
-  for (const m of matches) {
+  for (const m of dateFilteredMatches) {
     if (m.court) {
       if (!byCourt.has(m.court)) byCourt.set(m.court, [])
       byCourt.get(m.court)!.push(m)
     }
   }
 
-  // [FIX V2] 미배정 배너: 부서 필터 적용 (배너 숫자 ↔ 코트 내용 일치)
-  const allUnassigned = matches.filter(m => !m.court && m.status !== 'FINISHED')
+  // [FIX V2] 미배정 배너 (날짜 필터 + 부서 필터)
+  const allUnassigned = dateFilteredMatches.filter(m => !m.court && m.status !== 'FINISHED')
   const filteredUnassignedByDiv = filterDiv === 'ALL'
     ? allUnassigned
     : allUnassigned.filter(m => m.division_name === filterDiv)
@@ -286,10 +329,10 @@ export default function VenueManagePage() {
     setAssigning(true)
     setAssignMsg('')
     try {
-      // 각 코트의 현재 로드 (완료 제외)
+      // 각 코트의 현재 로드 (완료 제외, 날짜 필터 기준)
       const loadMap: Record<string, number> = {}
       for (const c of sessionCourts) loadMap[c] = 0
-      for (const m of matches) {
+      for (const m of dateFilteredMatches) {
         if (m.court && sessionCourts.includes(m.court) && m.status !== 'FINISHED') {
           loadMap[m.court] = (loadMap[m.court] || 0) + 1
         }
@@ -380,6 +423,27 @@ export default function VenueManagePage() {
             </button>
           </div>
         </div>
+
+        {/* 날짜 탭 (부서 match_date가 2일 이상일 때만) */}
+        {(() => {
+          const dates = [...new Set(Object.values(divMatchDates))].sort()
+          if (dates.length < 2) return null
+          return (
+            <div className="max-w-6xl mx-auto px-4 pb-1 flex gap-1 overflow-x-auto">
+              {dates.map(d => {
+                const lbl = new Date(d).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric', weekday: 'short' })
+                return (
+                  <button key={d} onClick={() => setDateFilter(d)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-all ${
+                      dateFilter === d ? 'bg-white text-orange-600 font-bold' : 'bg-white/20 text-white'
+                    }`}>
+                    📅 {lbl}
+                  </button>
+                )
+              })}
+            </div>
+          )
+        })()}
 
         {/* 부서 필터 탭 */}
         {divisionNames.length > 1 && (
