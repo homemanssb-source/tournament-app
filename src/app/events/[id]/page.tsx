@@ -172,10 +172,11 @@ export default function EventDetailPage() {
       const { data: grps } = await supabase.from('groups').select('*').eq('event_id', eventId).order('group_num')
       const filteredGrps = divId ? (grps || []).filter((g: any) => g.division_id === divId) : (grps || [])
       setGroups(filteredGrps)
-      // ✅ 병렬 로드
-      await Promise.all(filteredGrps.map(async (g: any) => {
-        map[g.id] = await fetchStandings(eventId, g.id)
-      }))
+      // ✅ 병렬 fetch + 순서 보장 (group_num 정렬 그대로 map에 삽입)
+      const results = await Promise.all(
+        filteredGrps.map(async (g: any) => ({ id: g.id, standings: await fetchStandings(eventId, g.id) }))
+      )
+      for (const r of results) map[r.id] = r.standings
     }
     setStandingsMap(map)
   }, [eventId, selectedTeamDiv])
