@@ -108,11 +108,19 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     return () => clearInterval(i)
   }, [loadData])
 
-  // ✅ 첫 번째 날짜 자동 선택
+  // ✅ 오늘 기준 자동 선택 (없으면 가장 가까운 날짜)
   useEffect(() => {
     const dates = [...new Set(Object.values(divMatchDates))].sort()
     if (dates.length > 1 && dateFilter === 'ALL' && !initialDate) {
-      setDateFilter(dates[0])
+      const today = new Date().toISOString().split('T')[0]
+      const picked = dates.includes(today)
+        ? today
+        : dates.reduce((best, cur) => {
+            const bd = Math.abs(new Date(best).getTime() - new Date(today).getTime())
+            const cd = Math.abs(new Date(cur).getTime() - new Date(today).getTime())
+            return cd < bd ? cur : best
+          }, dates[0])
+      setDateFilter(picked)
     }
   }, [divMatchDates])
 
@@ -127,13 +135,13 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
-  // ✅ 날짜 필터 적용
+  // ✅ 날짜 필터 적용 — 단체전 부서도 match_date 존중 (is_team_tie 바이패스 제거)
   const dateFilteredMatches = React.useMemo(() => {
     if (dateFilter === 'ALL') return matches
     const divIds = Object.entries(divMatchDates)
       .filter(([, d]) => d === dateFilter).map(([id]) => id)
     if (divIds.length === 0) return []
-    return matches.filter(m => m.is_team_tie || divIds.includes(m.division_id))
+    return matches.filter(m => m.division_id && divIds.includes(m.division_id))
   }, [matches, dateFilter, divMatchDates])
 
   const byCourt = new Map<string, CourtMatch[]>()
