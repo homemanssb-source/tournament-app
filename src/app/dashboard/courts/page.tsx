@@ -176,7 +176,16 @@ export default function CourtsPage() {
     if (Object.keys(divMatchDates).length === 0) return
     const dates = [...new Set(Object.values(divMatchDates))].sort()
     if (dates.length > 0 && dateFilter === 'ALL') {
-      setDateFilter(dates[0])
+      // ✅ 오늘 날짜가 있으면 오늘, 없으면 가장 가까운 날짜(과거 포함)
+      const today = new Date().toISOString().split('T')[0]
+      const picked = dates.includes(today)
+        ? today
+        : dates.reduce((best, cur) => {
+            const bd = Math.abs(new Date(best).getTime() - new Date(today).getTime())
+            const cd = Math.abs(new Date(cur).getTime() - new Date(today).getTime())
+            return cd < bd ? cur : best
+          }, dates[0])
+      setDateFilter(picked)
     }
   }, [divMatchDates])
 
