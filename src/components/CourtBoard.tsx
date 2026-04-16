@@ -61,13 +61,17 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
         .select('*, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name)')
         .eq('event_id', eventId).not('court_number', 'is', null)
         .order('court_number').order('tie_order'),
-      supabase.from('divisions').select('id, match_date').eq('event_id', eventId),
+      supabase.from('divisions').select('id, name, match_date').eq('event_id', eventId),
       supabase.from('venues').select('id, short_name, name, court_count').eq('event_id', eventId).order('created_at'),
       supabase.from('groups').select('id, group_label').eq('event_id', eventId),
     ])
     const grpMap: Record<string, string> = {}
     for (const g of (grpRes.data || []) as any[]) {
       if (g.group_label) grpMap[g.id] = g.group_label
+    }
+    const divNameMap: Record<string, string> = {}
+    for (const d of (divRes.data || []) as any[]) {
+      if (d.name) divNameMap[d.id] = d.name
     }
 
     // ✅ court_number(숫자) → short_name-N 포맷 변환 (timetable/page.tsx와 동일 로직)
@@ -104,7 +108,8 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
       status: sMap[t.status] || 'PENDING',
       score: (t.status === 'completed' || t.status === 'in_progress')
         ? t.club_a_rubbers_won + '-' + t.club_b_rubbers_won : null,
-      division_name: '단체전', division_id: t.division_id || '',
+      division_name: t.division_id && divNameMap[t.division_id] ? divNameMap[t.division_id] : '단체전',
+      division_id: t.division_id || '',
       team_a_name: t.club_a?.name || 'TBD', team_b_name: t.club_b?.name || 'TBD',
       team_a_id: t.club_a_id || '', team_b_id: t.club_b_id || '',
       winner_team_id: t.winning_club_id || null, is_team_tie: true,
@@ -436,8 +441,11 @@ function CourtSlot({ label, labelColor, match, highlight }: { label: string; lab
       <div className="flex items-center justify-between mb-1.5 gap-1">
         <span className="text-xs font-bold">{label}</span>
         <div className="flex items-center gap-1 flex-shrink-0">
+          {isTeam && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-600 text-white">단체</span>
+          )}
           <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${isTeam ? 'bg-blue-100 text-blue-700' : 'bg-stone-100 text-stone-600'}`}>
-            {isTeam ? '단체' : match.division_name}
+            {match.division_name}
           </span>
           <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${isTeam ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-700'}`}>
             {roundText}
@@ -496,8 +504,9 @@ function RemainingMatches({ matches, searchName }: { matches: CourtMatch[]; sear
             return (
               <div key={m.id} className={`text-xs py-1 border-b border-stone-50 last:border-0 ${isHit ? 'font-bold text-blue-700 bg-blue-50 px-1 rounded' : ''}`}>
                 <span className="text-stone-400">{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
+                {m.is_team_tie && <span className="text-[10px] px-1 py-0.5 rounded mr-1 bg-blue-600 text-white font-bold">단체</span>}
                 <span className={`text-[10px] px-1 py-0.5 rounded mr-1 ${m.is_team_tie ? 'bg-blue-100 text-blue-700' : 'bg-stone-100 text-stone-600'}`}>
-                  {m.is_team_tie ? '단체' : m.division_name}
+                  {m.division_name}
                 </span>
                 <span className="text-[10px] px-1 py-0.5 rounded mr-1 bg-amber-50 text-amber-700">{rt}</span>
                 <span>{m.team_a_name}</span><span className="text-stone-300"> vs </span><span>{m.team_b_name}</span>
@@ -526,8 +535,9 @@ function FinishedMatches({ matches }: { matches: CourtMatch[] }) {
             return (
               <div key={m.id} className="text-xs py-1 text-stone-400 border-b border-stone-50 last:border-0">
                 <span>{m.is_team_tie ? m.match_num : m.court_order}</span>{' '}
+                {m.is_team_tie && <span className="text-[10px] px-1 py-0.5 rounded mr-1 bg-blue-500 text-white font-bold">단체</span>}
                 <span className={`text-[10px] px-1 py-0.5 rounded mr-1 ${m.is_team_tie ? 'bg-blue-50 text-blue-600' : 'bg-stone-100 text-stone-500'}`}>
-                  {m.is_team_tie ? '단체' : m.division_name}
+                  {m.division_name}
                 </span>
                 <span className="text-[10px] px-1 py-0.5 rounded mr-1 bg-stone-50">{rt}</span>
                 <span>{m.team_a_name} vs {m.team_b_name}</span>
