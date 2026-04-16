@@ -50,11 +50,13 @@ export default function TeamPublicViewPage() {
     if (cfg?.team_format === 'full_league') {
       map['full'] = await fetchStandings(eventId, null);
     } else {
+      // ✅ 부서 정보 + group_num 정렬 (group_index 컬럼은 없음)
       const { data: grps } = await supabase
         .from('groups')
-        .select('*')
+        .select('id, group_label, group_num, division_id, divisions:division_id(name)')
         .eq('event_id', eventId)
-        .order('group_index');
+        .order('division_id')
+        .order('group_num');
       setGroups(grps || []);
       for (const g of (grps || [])) {
         map[g.id] = await fetchStandings(eventId, g.id);
@@ -131,9 +133,16 @@ export default function TeamPublicViewPage() {
         {tab === 'standings' && (
           <div className="space-y-4">
             {Object.entries(standingsMap).map(([key, standings]) => {
-              const title = key === 'full'
-                ? '풀리그 순위'
-                : groups.find(g => g.id === key)?.group_name || '';
+              // ✅ 조 이름 표시: "[부서명] A조" 형식 (없으면 group_num→A조 변환)
+              let title = '풀리그 순위';
+              if (key !== 'full') {
+                const g = groups.find(gg => gg.id === key);
+                if (g) {
+                  const divName = (g as any).divisions?.name || '';
+                  const grpName = g.group_label || (g.group_num ? String.fromCharCode(64 + g.group_num) + '조' : '');
+                  title = divName ? `${divName} · ${grpName}` : grpName;
+                }
+              }
 
               return (
                 <div key={key} className="bg-white rounded-xl border overflow-hidden">
