@@ -57,7 +57,8 @@ export default function AdminPinPage() {
 
     if (err) { setError(err.message || '마스터 PIN이 올바르지 않습니다.'); return }
 
-    sessionStorage.setItem('admin_pin_session', JSON.stringify(data))
+    // ✅ 화면 닫아도 세션 유지 (서버 토큰 만료 시까지)
+    localStorage.setItem('admin_pin_session', JSON.stringify(data))
     router.push('/admin-pin/manage')
   }
 
