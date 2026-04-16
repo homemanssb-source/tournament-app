@@ -319,6 +319,37 @@ export default function VenueManagePage() {
     }
   }
 
+  // ── 코트 내 순서 변경 (▲▼) ──
+  async function handleMoveOrder(item: VenueMatch, direction: 'up' | 'down') {
+    if (!item.court) return
+    const courtMatches = matches
+      .filter(m => m.court === item.court)
+      .sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
+    const idx = courtMatches.findIndex(m => m.id === item.id)
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (swapIdx < 0 || swapIdx >= courtMatches.length) return
+    const other = courtMatches[swapIdx]
+
+    if (item.is_team_tie && other.is_team_tie) {
+      const tieId = item.id.replace(/^tie_/, '')
+      const otherId = other.id.replace(/^tie_/, '')
+      await supabase.from('ties').update({ court_order: other.court_order }).eq('id', tieId)
+      await supabase.from('ties').update({ court_order: item.court_order }).eq('id', otherId)
+    } else if (item.is_team_tie) {
+      const tieId = item.id.replace(/^tie_/, '')
+      await supabase.from('ties').update({ court_order: other.court_order }).eq('id', tieId)
+      await supabase.from('matches').update({ court_order: item.court_order }).eq('id', other.id)
+    } else if (other.is_team_tie) {
+      const otherId = other.id.replace(/^tie_/, '')
+      await supabase.from('matches').update({ court_order: other.court_order }).eq('id', item.id)
+      await supabase.from('ties').update({ court_order: item.court_order }).eq('id', otherId)
+    } else {
+      await supabase.from('matches').update({ court_order: other.court_order }).eq('id', item.id)
+      await supabase.from('matches').update({ court_order: item.court_order }).eq('id', other.id)
+    }
+    await loadData()
+  }
+
   function handleLogout() {
     sessionStorage.removeItem('venue_session')
     router.push('/venue')
@@ -561,6 +592,8 @@ export default function VenueManagePage() {
                               onScore={() => openScoreEdit(m)}
                               courts={sessionCourts}
                               onAssign={(c) => handleAssign(m, c)}
+                              onMoveUp={allIdx > 0 ? () => handleMoveOrder(m, 'up') : undefined}
+                              onMoveDown={allIdx < courtMatches.length - 1 ? () => handleMoveOrder(m, 'down') : undefined}
                             />
                           )
                         })}
@@ -689,7 +722,7 @@ export default function VenueManagePage() {
 }
 
 // ── 코트 경기 카드 (재배정 드롭다운 포함)
-function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore, courts, onAssign }: {
+function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore, courts, onAssign, onMoveUp, onMoveDown }: {
   m: VenueMatch
   badge: string
   badgeStyle: string
@@ -698,6 +731,8 @@ function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore, cour
   onScore: () => void
   courts: string[]
   onAssign: (court: string | null) => void
+  onMoveUp?: () => void
+  onMoveDown?: () => void
 }) {
   const isInProgress = m.status === 'IN_PROGRESS'
   const [showMove, setShowMove] = useState(false)
@@ -736,6 +771,12 @@ function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore, cour
               }`}>
               {isInProgress ? '점수입력' : '✏'}
             </button>
+          )}
+          {onMoveUp && (
+            <button onClick={onMoveUp} className="text-stone-400 hover:text-stone-700 px-1 text-base leading-none" title="위로">▲</button>
+          )}
+          {onMoveDown && (
+            <button onClick={onMoveDown} className="text-stone-400 hover:text-stone-700 px-1 text-base leading-none" title="아래로">▼</button>
           )}
           <button onClick={() => setShowMove(!showMove)}
             className="text-xs text-stone-400 hover:text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg transition-all"
