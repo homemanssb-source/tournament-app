@@ -6,7 +6,11 @@ import { fetchTies, fetchClubMembers } from '@/lib/team-api'
 import { getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority } from '@/lib/team-utils'
 import type { TieWithClubs, TeamLineup, ClubMember } from '@/types/team'
 
-type Tab = 'individual' | 'team' | 'locks'
+type Tab = 'individual' | 'team' | 'pins' | 'locks'
+
+interface PinTeam { id: string; team_num: string; team_name: string; division_name: string; pin_plain: string }
+interface PinClub { id: string; name: string; division_name: string; captain_name: string | null; captain_pin: string | null }
+interface PinRubber { id: string; rubber_number: number; pin_code: string | null; tie_id: string; tie_label: string }
 
 interface PinLock {
   target_key: string
@@ -62,6 +66,14 @@ export default function AdminPinManagePage() {
   const [pinLockMsg, setPinLockMsg] = useState('')
   const [clubNameMap, setClubNameMap] = useState<Record<string, string>>({})
 
+  // ── PIN 확인 (현장에서 캡틴/러버 PIN 알려줄 때) ──
+  const [pinSearchQuery, setPinSearchQuery] = useState('')
+  const [pinTeams, setPinTeams] = useState<PinTeam[]>([])
+  const [pinClubs, setPinClubs] = useState<PinClub[]>([])
+  const [pinRubbers, setPinRubbers] = useState<PinRubber[]>([])
+  const [pinDataLoading, setPinDataLoading] = useState(false)
+  const [revealedPins, setRevealedPins] = useState<Set<string>>(new Set())
+
   useEffect(() => {
     const raw = sessionStorage.getItem('admin_pin_session')
     if (!raw) { router.push('/admin-pin'); return }
@@ -70,7 +82,45 @@ export default function AdminPinManagePage() {
     loadAllMatches(s.event_id)
     loadTiesData(s.event_id)
     loadPinLocks(s.event_id)
+    loadPinData(s.event_id)
   }, [])
+
+  // ── PIN 확인용 데이터 로드 ──
+  async function loadPinData(eventId: string) {
+    setPinDataLoading(true)
+    try {
+      const [teamsRes, clubsRes, ruRes] = await Promise.all([
+        supabase.from('teams').select('id, team_num, team_name, division_name, pin_plain')
+          .eq('event_id', eventId).order('division_name').order('team_num'),
+        supabase.from('clubs').select('id, name, captain_name, captain_pin, division_id, divisions:division_id(name)')
+          .eq('event_id', eventId),
+        supabase.from('tie_rubbers').select('id, rubber_number, pin_code, tie_id, ties:tie_id(event_id, tie_order, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name))')
+          .order('rubber_number'),
+      ])
+      setPinTeams((teamsRes.data || []) as PinTeam[])
+      setPinClubs((clubsRes.data || []).map((c: any) => ({
+        id: c.id, name: c.name,
+        division_name: c.divisions?.name || '',
+        captain_name: c.captain_name,
+        captain_pin: c.captain_pin,
+      })))
+      // 이 이벤트의 ties만 필터
+      setPinRubbers((ruRes.data || [])
+        .filter((r: any) => r.ties?.event_id === eventId)
+        .map((r: any) => ({
+          id: r.id, rubber_number: r.rubber_number, pin_code: r.pin_code, tie_id: r.tie_id,
+          tie_label: `T#${r.ties?.tie_order ?? '-'} · ${r.ties?.club_a?.name || 'TBD'} vs ${r.ties?.club_b?.name || 'TBD'}`,
+        })) as PinRubber[])
+    } catch {} finally { setPinDataLoading(false) }
+  }
+
+  function togglePinReveal(key: string) {
+    setRevealedPins(prev => {
+      const s = new Set(prev)
+      if (s.has(key)) s.delete(key); else s.add(key)
+      return s
+    })
+  }
 
   async function loadAllMatches(eventId: string) {
     const { data } = await supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId).order('slot')
@@ -407,17 +457,21 @@ export default function AdminPinManagePage() {
       </header>
 
       <div className="max-w-2xl mx-auto px-4 pt-4">
-        <div className="flex gap-2 mb-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
           <button onClick={() => { setTab('individual'); setSelectedMatch(null); setMsg('') }}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition ${tab==='individual'?'bg-red-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='individual'?'bg-red-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
             🎾 개인전
           </button>
           <button onClick={() => { setTab('team'); setSelectedTie(null); setScoringRubber(null); setTieMsg('') }}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition ${tab==='team'?'bg-blue-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='team'?'bg-blue-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
             📋 단체전
           </button>
+          <button onClick={() => { setTab('pins'); setRevealedPins(new Set()); setPinSearchQuery('') }}
+            className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='pins'?'bg-purple-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            🔑 PIN 확인
+          </button>
           <button onClick={() => { setTab('locks'); if (session) loadPinLocks(session.event_id) }}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition relative ${tab==='locks'?'bg-amber-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            className={`py-2.5 rounded-lg text-sm font-medium transition relative ${tab==='locks'?'bg-amber-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
             🔒 PIN 잠금
             {pinLocks.length > 0 && (
               <span className="ml-1 text-xs bg-red-500 text-white rounded-full px-1.5">{pinLocks.length}</span>
@@ -711,6 +765,127 @@ export default function AdminPinManagePage() {
                 </div>
               </div>
             ))}
+          </>
+        )}
+
+        {/* ══════ PIN 확인 ══════ */}
+        {tab === 'pins' && (
+          <>
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 text-sm text-purple-800">
+              <p className="font-bold mb-1">🔑 PIN 확인 (현장 안내용)</p>
+              <p className="text-xs">팀명·클럽명·대전번호로 검색 후 👁 버튼 눌러 PIN 확인</p>
+            </div>
+
+            <div className="relative">
+              <input type="text" placeholder="팀명, 클럽명, 대전번호..."
+                value={pinSearchQuery}
+                onChange={e => setPinSearchQuery(e.target.value)}
+                className="w-full border-2 rounded-xl px-4 py-3 pr-10 focus:border-purple-500 outline-none"
+                autoFocus />
+              {pinSearchQuery && (
+                <button onClick={() => setPinSearchQuery('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">✕</button>
+              )}
+            </div>
+
+            {pinDataLoading && <div className="text-center py-8 text-gray-400">불러오는 중...</div>}
+
+            {!pinDataLoading && !pinSearchQuery && (
+              <div className="text-center py-10 text-gray-400">
+                <div className="text-3xl mb-2">🔍</div>
+                <p>검색어를 입력하세요</p>
+                <p className="text-xs mt-1 text-gray-300">개인전 팀, 단체전 클럽, 또는 대전 번호</p>
+              </div>
+            )}
+
+            {!pinDataLoading && pinSearchQuery && (() => {
+              const q = pinSearchQuery.toLowerCase()
+              const teams = pinTeams.filter(t =>
+                t.team_name?.toLowerCase().includes(q) ||
+                t.team_num?.toLowerCase().includes(q) ||
+                t.division_name?.toLowerCase().includes(q))
+              const clubs = pinClubs.filter(c =>
+                c.name?.toLowerCase().includes(q) ||
+                (c.captain_name||'').toLowerCase().includes(q) ||
+                c.division_name?.toLowerCase().includes(q))
+              const rubbers = pinRubbers.filter(r =>
+                r.tie_label?.toLowerCase().includes(q))
+
+              if (teams.length === 0 && clubs.length === 0 && rubbers.length === 0) {
+                return <div className="text-center py-8 text-gray-400">검색 결과 없음</div>
+              }
+
+              const renderPin = (key: string, pin: string | null) => {
+                const revealed = revealedPins.has(key)
+                return (
+                  <button onClick={() => togglePinReveal(key)}
+                    className="text-xs font-mono bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded">
+                    {revealed ? (pin || '없음') : '••••••'} {revealed ? '🙈' : '👁'}
+                  </button>
+                )
+              }
+
+              return (
+                <div className="space-y-4">
+                  {/* 개인전 팀 PIN */}
+                  {teams.length > 0 && (
+                    <div className="bg-white rounded-xl border overflow-hidden">
+                      <div className="bg-red-50 px-4 py-2 font-bold text-sm text-red-700">🎾 개인전 팀 ({teams.length})</div>
+                      <div className="divide-y">
+                        {teams.slice(0, 30).map(t => (
+                          <div key={t.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium truncate">{t.team_name}</div>
+                              <div className="text-[10px] text-gray-400">{t.team_num} · {t.division_name}</div>
+                            </div>
+                            {renderPin('team:'+t.id, t.pin_plain)}
+                          </div>
+                        ))}
+                        {teams.length > 30 && <div className="text-xs text-gray-400 text-center py-2">... 더 자세한 검색어 입력</div>}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 단체전 클럽 캡틴 PIN */}
+                  {clubs.length > 0 && (
+                    <div className="bg-white rounded-xl border overflow-hidden">
+                      <div className="bg-blue-50 px-4 py-2 font-bold text-sm text-blue-700">📋 단체전 클럽 캡틴 ({clubs.length})</div>
+                      <div className="divide-y">
+                        {clubs.slice(0, 30).map(c => (
+                          <div key={c.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium truncate">{c.name}</div>
+                              <div className="text-[10px] text-gray-400">{c.division_name} · 주장: {c.captain_name || '-'}</div>
+                            </div>
+                            {renderPin('club:'+c.id, c.captain_pin)}
+                          </div>
+                        ))}
+                        {clubs.length > 30 && <div className="text-xs text-gray-400 text-center py-2">... 더 자세한 검색어 입력</div>}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 단체전 러버 PIN */}
+                  {rubbers.length > 0 && (
+                    <div className="bg-white rounded-xl border overflow-hidden">
+                      <div className="bg-amber-50 px-4 py-2 font-bold text-sm text-amber-700">🎾 단체전 러버 PIN ({rubbers.length})</div>
+                      <div className="divide-y">
+                        {rubbers.slice(0, 30).map(r => (
+                          <div key={r.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-medium truncate">{r.tie_label}</div>
+                              <div className="text-[10px] text-gray-400">러버 {r.rubber_number}</div>
+                            </div>
+                            {renderPin('rubber:'+r.id, r.pin_code)}
+                          </div>
+                        ))}
+                        {rubbers.length > 30 && <div className="text-xs text-gray-400 text-center py-2">... 더 자세한 검색어 입력</div>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
           </>
         )}
 
