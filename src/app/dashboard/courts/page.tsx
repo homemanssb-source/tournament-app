@@ -266,13 +266,12 @@ export default function CourtsPage() {
       const matchList = (matchRes.data || [])
         .filter((m: any) => m.score !== 'BYE')
         .sort((a: any, b: any) => {
-          // court 없는 것은 뒤로
           if ((a.court ?? '') !== (b.court ?? '')) return (a.court ?? '').localeCompare(b.court ?? '', undefined, { numeric: true })
-          // court_order 오름차순, null → 9999
           const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)
           if (od !== 0) return od
-          // 동점 시 match_num으로 안정 정렬 (숫자 자연순)
-          return (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
+          const nm = (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
+          if (nm !== 0) return nm
+          return (a.id || '').localeCompare(b.id || '')
         }) as MatchSlim[]
       const tieList = ((tieRes.data||[]) as any[]).map(t=>({...t,_group_label:t.group_id?(_grpMap[t.group_id]||null):null})) as TieWithClubs[]
       setMatches(matchList); matchesRef.current = matchList
@@ -326,7 +325,9 @@ export default function CourtsPage() {
         if ((a.court ?? '') !== (b.court ?? '')) return (a.court ?? '').localeCompare(b.court ?? '', undefined, { numeric: true })
         const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)
         if (od !== 0) return od
-        return (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
+        const nm = (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
+        if (nm !== 0) return nm
+        return (a.id || '').localeCompare(b.id || '')
       }) as MatchSlim[]
     setMatches(list); matchesRef.current = list
     syncCourtOrderRef(list, tiesRef.current)
@@ -708,7 +709,11 @@ export default function CourtsPage() {
   const filteredAll = viewFilter==='ALL' ? dateFilteredItems : dateFilteredItems.filter(m=>m.division_id===viewFilter)
   const unassigned  = filteredAll
     .filter(m => !m.court && m.status !== 'FINISHED')
-    .sort((a,b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true }))
+    .sort((a,b) => {
+      const nm = (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
+      if (nm !== 0) return nm
+      return a.id.localeCompare(b.id)
+    })
 
   return (
     <div>
@@ -906,7 +911,9 @@ export default function CourtsPage() {
             const courtItems = (byCourt.get(court)||[]).sort((a,b)=> {
               const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)
               if (od !== 0) return od
-              return (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
+              const nm = (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
+              if (nm !== 0) return nm
+              return a.id.localeCompare(b.id)
             })
             const finished   = courtItems.filter(m=>m.status==='FINISHED').length
             const activeIdx  = courtItems.findIndex(m=>m.status==='IN_PROGRESS')
