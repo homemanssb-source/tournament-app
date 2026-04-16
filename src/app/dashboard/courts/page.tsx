@@ -546,17 +546,31 @@ export default function CourtsPage() {
     if (itemId.startsWith('tie_')) { await supabase.from('ties').update({ court_number:null, court_order:null }).eq('id', itemId.replace('tie_','')); loadTies() }
     else { await supabase.from('matches').update({ court:null, court_order:null }).eq('id', itemId); loadMatches() }
   }
-  async function moveMatchOrder(matchId: string, direction: 'up' | 'down') {
-    if (matchId.startsWith('tie_')) return
-    const m = matches.find(mm => mm.id === matchId); if (!m || !m.court || !m.court_order) return
-    const cms = matches.filter(mm => mm.court === m.court).sort((a,b) => (a.court_order||0)-(b.court_order||0))
-    const idx = cms.findIndex(mm => mm.id === matchId)
+  async function moveMatchOrder(itemId: string, direction: 'up' | 'down') {
+    // 개인전(matches) + 단체전(ties) 모두 지원
+    const allList = [...matches, ...tiesToMatchSlim(ties)]
+    const m = allList.find(mm => mm.id === itemId)
+    if (!m || !m.court || !m.court_order) return
+    const cms = allList.filter(mm => mm.court === m.court).sort((a,b) => (a.court_order||0)-(b.court_order||0))
+    const idx = cms.findIndex(mm => mm.id === itemId)
     const swapIdx = direction === 'up' ? idx - 1 : idx + 1
     if (swapIdx < 0 || swapIdx >= cms.length) return
     const other = cms[swapIdx]
-    await supabase.from('matches').update({ court_order:other.court_order }).eq('id', m.id)
-    await supabase.from('matches').update({ court_order:m.court_order   }).eq('id', other.id)
-    loadMatches()
+    const aOrder = m.court_order
+    const bOrder = other.court_order
+
+    const updateOne = async (item: any, newOrder: number | null) => {
+      if (item.id.startsWith('tie_')) {
+        await supabase.from('ties').update({ court_order: newOrder }).eq('id', item.id.replace('tie_',''))
+      } else {
+        await supabase.from('matches').update({ court_order: newOrder }).eq('id', item.id)
+      }
+    }
+    await updateOne(m, bOrder)
+    await updateOne(other, aOrder)
+
+    if (m.is_team_tie || other.is_team_tie) loadTies()
+    if (!m.is_team_tie || !other.is_team_tie) loadMatches()
   }
 
   async function clearDivisionAssignments(divId: string) {
@@ -1005,8 +1019,8 @@ export default function CourtsPage() {
                         onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
                         onClickStart={canStart?()=>startMatch(m.id):undefined}
                         onClickUnassign={() => unassignItem(m.id)}
-                        onMoveUp={!m.is_team_tie&&allIdx>0?()=>moveMatchOrder(m.id,'up'):undefined}
-                        onMoveDown={!m.is_team_tie&&allIdx<courtItems.length-1?()=>moveMatchOrder(m.id,'down'):undefined} />
+                        onMoveUp={allIdx>0?()=>moveMatchOrder(m.id,'up'):undefined}
+                        onMoveDown={allIdx<courtItems.length-1?()=>moveMatchOrder(m.id,'down'):undefined} />
                     )
                   })}
 
