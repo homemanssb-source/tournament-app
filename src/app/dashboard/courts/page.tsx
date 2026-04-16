@@ -623,24 +623,59 @@ export default function CourtsPage() {
   function handleDragOver(e: React.DragEvent) { e.preventDefault() }
   function handleDropOnCourt(court: string) { if (!dragMatch) return; assignItemToCourt(dragMatch, court); setDragMatch(null) }
   function handleDropOnUnassigned() { if (!dragMatch) return; unassignItem(dragMatch); setDragMatch(null) }
-  function handleTouchStart(id: string) { touchDragIdRef.current = id; setTouchDragId(id) }
+
+  // ── 터치 드래그: 롱프레스(300ms) 후에만 드래그 시작 (스크롤 실수 방지) ──
+  const touchStartInfo = useRef<{ id: string; x: number; y: number; timer: ReturnType<typeof setTimeout> | null }>({ id: '', x: 0, y: 0, timer: null })
   const touchOverRef = useRef<string | null>(null)
+
+  function handleTouchStart(id: string) {
+    // 이전 타이머 취소
+    if (touchStartInfo.current.timer) clearTimeout(touchStartInfo.current.timer)
+    touchStartInfo.current = { id, x: 0, y: 0, timer: null }
+    // 300ms 후 드래그 시작 (롱프레스)
+    touchStartInfo.current.timer = setTimeout(() => {
+      touchStartInfo.current.timer = null
+      touchDragIdRef.current = id
+      setTouchDragId(id)
+      if ('vibrate' in navigator) navigator.vibrate(50)
+    }, 300)
+  }
+
   function handleTouchMove(e: React.TouchEvent) {
-    // 드래그 중이 아니면 즉시 리턴 — 일반 스크롤 시 리렌더 방지
+    const touch = e.touches[0]
+    // 롱프레스 타이머 살아있으면: 10px 이상 이동 = 스크롤 의도 → 타이머 취소
+    if (touchStartInfo.current.timer) {
+      if (!touchStartInfo.current.x) {
+        touchStartInfo.current.x = touch.clientX
+        touchStartInfo.current.y = touch.clientY
+      }
+      const dx = Math.abs(touch.clientX - touchStartInfo.current.x)
+      const dy = Math.abs(touch.clientY - touchStartInfo.current.y)
+      if (dx > 10 || dy > 10) {
+        clearTimeout(touchStartInfo.current.timer)
+        touchStartInfo.current.timer = null
+        return // 일반 스크롤 계속
+      }
+    }
+    // 드래그 중이 아니면 즉시 리턴
     if (!touchDragIdRef.current) return
     e.preventDefault()
-    const touch = e.touches[0]
     const el = document.elementFromPoint(touch.clientX, touch.clientY)
     const courtEl      = el?.closest('[data-court]') as HTMLElement | null
     const unassignedEl = el?.closest('[data-unassigned]') as HTMLElement | null
     const next = courtEl ? 'court:' + courtEl.dataset.court : unassignedEl ? 'unassigned' : null
-    // 값이 바뀔 때만 state 업데이트 — 불필요한 리렌더 제거
     if (next !== touchOverRef.current) {
       touchOverRef.current = next
       setTouchOver(next)
     }
   }
+
   function handleTouchEnd() {
+    // 롱프레스 타이머 취소 (짧은 탭)
+    if (touchStartInfo.current.timer) {
+      clearTimeout(touchStartInfo.current.timer)
+      touchStartInfo.current.timer = null
+    }
     const dragId = touchDragIdRef.current
     const over   = touchOverRef.current
     touchDragIdRef.current = null; touchOverRef.current = null
