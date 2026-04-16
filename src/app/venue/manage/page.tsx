@@ -853,8 +853,11 @@ function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore, cour
               {badge}
             </span>
           )}
+          {m.is_team_tie && (
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-600 text-white">단체</span>
+          )}
           <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${m.is_team_tie ? 'bg-blue-100 text-blue-700' : 'bg-stone-100 text-stone-600'}`}>
-            {m.is_team_tie ? '단체' : (m.division_name || '-')}
+            {m.division_name || '-'}
           </span>
           <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${m.is_team_tie ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-700'}`}>
             {roundText}
@@ -943,8 +946,11 @@ function CourtAssignRow({ m, courts, onAssign }: {
     <div className="bg-white rounded-lg border border-amber-200 p-3">
       <div className="flex items-center gap-1.5 mb-2 flex-wrap">
         <span className="text-xs font-mono text-stone-400 flex-shrink-0">#{m.match_num}</span>
+        {m.is_team_tie && (
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-600 text-white">단체</span>
+        )}
         <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${m.is_team_tie ? 'bg-blue-100 text-blue-700' : 'bg-stone-100 text-stone-600'}`}>
-          {m.is_team_tie ? '단체' : (m.division_name || '-')}
+          {m.division_name || '-'}
         </span>
         <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${m.is_team_tie ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-700'}`}>
           {roundText}
