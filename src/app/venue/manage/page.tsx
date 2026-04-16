@@ -297,7 +297,7 @@ export default function VenueManagePage() {
 
       // 경기 번호순 정렬 (안정적인 순서)
       const sorted = [...targets].sort((a, b) =>
-        (a.match_num || '').localeCompare(b.match_num || '')
+        (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
       )
 
       let successCount = 0
