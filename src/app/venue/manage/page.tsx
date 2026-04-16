@@ -14,7 +14,24 @@ interface VenueMatch {
   status: string; score: string | null; locked_by_participant: boolean
   team_a_name: string; team_b_name: string; team_a_id: string; team_b_id: string
   winner_team_id: string | null; division_name: string; division_id: string
+  group_id?: string | null; group_label?: string | null
   is_team_tie?: boolean
+}
+
+// round 값 → 짧은 한국어 라벨 (대시보드와 동일)
+function roundLabelKR(round: string): string {
+  const map: Record<string, string> = {
+    'GROUP': '예선', 'group': '예선', 'full_league': '리그',
+    'R128': '128강', 'R64': '64강', 'R32': '32강', 'R16': '16강',
+    'QF': '8강', 'SF': '4강', 'F': '결승',
+    'r128': '128강', 'r64': '64강', 'r32': '32강', 'r16': '16강',
+    'qf': '8강', 'sf': '4강', 'f': '결승',
+    'round_of_32': '32강', 'round_of_16': '16강',
+    'quarter': '8강', 'semi': '4강', 'final': '결승',
+    '128강': '128강', '64강': '64강', '32강': '32강', '16강': '16강',
+    '8강': '8강', '4강': '4강', '결승': '결승',
+  }
+  return map[round] || round
 }
 
 export default function VenueManagePage() {
@@ -40,6 +57,9 @@ export default function VenueManagePage() {
   // ── 날짜 필터 (division.match_date 기반) ──
   const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({}) // division_id → YYYY-MM-DD
   const [dateFilter, setDateFilter] = useState<string>('ALL')
+
+  // ── group_id → group_label 매핑 (배지 표시용) ──
+  const [groupLabels, setGroupLabels] = useState<Record<string, string>>({})
 
   // ── 세션 로드
   useEffect(() => {
@@ -72,6 +92,17 @@ export default function VenueManagePage() {
             if (d.match_date) map[d.id] = d.match_date
           }
           setDivMatchDates(map)
+        })
+
+      // 조 라벨 로드 (배지 표시용)
+      supabase.from('groups')
+        .select('id, group_label').eq('event_id', s.event_id)
+        .then(({ data }) => {
+          const map: Record<string, string> = {}
+          for (const g of (data || []) as any[]) {
+            if (g.group_label) map[g.id] = g.group_label
+          }
+          setGroupLabels(map)
         })
     }
   }, [router])
@@ -120,17 +151,19 @@ export default function VenueManagePage() {
       const individual: VenueMatch[] = (data.matches || []).map((m: any) => ({
         ...m, is_team_tie: false,
         status: normalizeStatus(m.status),
+        group_label: m.group_id ? (groupLabels[m.group_id] || null) : null,
       }))
       const ties: VenueMatch[] = (data.ties || []).map((t: any) => ({
         ...t, is_team_tie: true,
         status: normalizeStatus(t.status),
+        group_label: t.group_id ? (groupLabels[t.group_id] || null) : null,
       }))
       setMatches([...individual, ...ties])
       setLastUpdate(new Date())
     } finally {
       setLoading(false)
     }
-  }, [session, router])
+  }, [session, router, groupLabels])
 
   useEffect(() => { loadData() }, [loadData])
   useEffect(() => {
@@ -804,14 +837,13 @@ function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore, cour
 }) {
   const isInProgress = m.status === 'IN_PROGRESS'
   const [showMove, setShowMove] = useState(false)
+  const rLabel = roundLabelKR(m.round)
+  const roundText = m.group_label ? `${rLabel} ${m.group_label}` : rLabel
   return (
     <div className={`rounded-xl border-2 p-3 transition-all ${badgeStyle}`}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+      <div className="flex items-center justify-between mb-2 gap-1">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1 flex-wrap">
           <span className="text-xs font-mono text-stone-400 flex-shrink-0">#{m.court_order}</span>
-          {m.is_team_tie && (
-            <span className="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full flex-shrink-0">단체</span>
-          )}
           {badge && (
             <span className={`text-[10px] font-bold flex-shrink-0 ${
               badge.includes('진행') ? 'text-red-600' :
@@ -821,7 +853,12 @@ function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore, cour
               {badge}
             </span>
           )}
-          <span className="text-[11px] text-stone-400 truncate">{m.division_name} · {m.round}</span>
+          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${m.is_team_tie ? 'bg-blue-100 text-blue-700' : 'bg-stone-100 text-stone-600'}`}>
+            {m.is_team_tie ? '단체' : (m.division_name || '-')}
+          </span>
+          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${m.is_team_tie ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-700'}`}>
+            {roundText}
+          </span>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0 ml-1">
           {canStart && (
@@ -900,21 +937,23 @@ function CourtAssignRow({ m, courts, onAssign }: {
   onAssign: (court: string) => void
 }) {
   const [selected, setSelected] = useState('')
+  const rLabel = roundLabelKR(m.round)
+  const roundText = m.group_label ? `${rLabel} ${m.group_label}` : rLabel
   return (
     <div className="bg-white rounded-lg border border-amber-200 p-3">
-      <div className="flex items-start gap-2 mb-2">
-        <span className="text-xs font-mono text-stone-400 flex-shrink-0 mt-0.5">#{m.match_num}</span>
-        {m.is_team_tie && (
-          <span className="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full flex-shrink-0 mt-0.5">단체</span>
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold leading-tight">
-            {m.team_a_name || 'TBD'}
-            <span className="text-stone-300 font-normal mx-1">vs</span>
-            {m.team_b_name || 'TBD'}
-          </div>
-          <div className="text-[11px] text-stone-400 mt-0.5">{m.division_name} · {m.round}</div>
-        </div>
+      <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+        <span className="text-xs font-mono text-stone-400 flex-shrink-0">#{m.match_num}</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${m.is_team_tie ? 'bg-blue-100 text-blue-700' : 'bg-stone-100 text-stone-600'}`}>
+          {m.is_team_tie ? '단체' : (m.division_name || '-')}
+        </span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${m.is_team_tie ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-700'}`}>
+          {roundText}
+        </span>
+      </div>
+      <div className="text-sm font-semibold leading-tight mb-2">
+        {m.team_a_name || 'TBD'}
+        <span className="text-stone-300 font-normal mx-1">vs</span>
+        {m.team_b_name || 'TBD'}
       </div>
       <div className="flex gap-2">
         <select value={selected} onChange={e => setSelected(e.target.value)}
