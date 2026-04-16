@@ -1006,9 +1006,7 @@ export default function CourtsPage() {
                         onClickStart={canStart?()=>startMatch(m.id):undefined}
                         onClickUnassign={() => unassignItem(m.id)}
                         onMoveUp={!m.is_team_tie&&allIdx>0?()=>moveMatchOrder(m.id,'up'):undefined}
-                        onMoveDown={!m.is_team_tie&&allIdx<courtItems.length-1?()=>moveMatchOrder(m.id,'down'):undefined}
-                        onTouchStart={()=>handleTouchStart(m.id)}
-                        onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd} />
+                        onMoveDown={!m.is_team_tie&&allIdx<courtItems.length-1?()=>moveMatchOrder(m.id,'down'):undefined} />
                     )
                   })}
 
@@ -1169,8 +1167,7 @@ function MatchChip({ m, badge, divColor, isCurrentSlot, allMatches, onDragStart,
   }
   return (
     <div draggable onDragStart={() => onDragStart(m.id)}
-      onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
-      className={`rounded-lg border p-2 text-xs cursor-grab active:cursor-grabbing transition-all ${
+      className={`rounded-lg border p-2 text-xs lg:cursor-grab lg:active:cursor-grabbing transition-all ${
         isTeam
           ? (live?'bg-blue-50 border-blue-300':done?'bg-blue-50 border-blue-200':'bg-white border-blue-200 hover:border-blue-400')
           : live?'bg-red-50 border-red-200':done?'bg-tennis-50 border-tennis-200':isCurrentSlot?'bg-amber-50 border-amber-300':'bg-white border-stone-200 hover:border-stone-300'
@@ -1298,9 +1295,7 @@ function UnassignedColumn({ unassigned, divColors, touchOver, onDragOver, onDrop
             {unassigned.map(m => (
               <MatchChip key={m.id} m={m} divColor={divColors[m.division_id]}
                 onDragStart={onDragStart} onClickScore={() => onClickScore(m)}
-                onClickUnassign={() => onClickUnassign(m.id)}
-                onTouchStart={() => onTouchStart(m.id)}
-                onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} />
+                onClickUnassign={() => onClickUnassign(m.id)} />
             ))}
             {unassigned.length === 0 && <div className="text-xs text-stone-300 text-center py-6">없음</div>}
           </div>
