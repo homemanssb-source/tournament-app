@@ -677,10 +677,17 @@ function TeamStandingsView({ standingsMap, groups }: { standingsMap: Record<stri
   return (
     <div className="space-y-4">
       {Object.entries(standingsMap).map(([key, standings]) => {
-        const title = key === 'full' ? '풀리그 순위' : groups.find(g => g.id === key)?.group_name || ''
+        // ✅ 조 이름 표시: group_label 우선, 없으면 group_num→A/B/C…
+        let title = '풀리그 순위'
+        if (key !== 'full') {
+          const g = groups.find(gg => gg.id === key)
+          if (g) {
+            title = g.group_label || (g.group_num ? String.fromCharCode(64 + g.group_num) + '조' : '조')
+          }
+        }
         return (
           <div key={key} className="bg-white rounded-xl border overflow-hidden">
-            <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">{title}</div>
+            <div className="bg-gray-50 px-4 py-3 font-semibold text-sm">📋 {title}</div>
             <table className="w-full text-sm">
               <thead className="border-t bg-gray-50">
                 <tr>
