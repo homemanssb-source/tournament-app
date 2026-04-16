@@ -753,11 +753,13 @@ export default function CourtsPage() {
     ? null
     : Object.entries(divMatchDates).filter(([, d]) => d === dateFilter).map(([id]) => id)
 
+  // ✅ 단체전 부서도 match_date가 설정되어 있으면 그 날짜에만 표시
+  //    (이전에는 is_team_tie/teamDivIds 로 날짜 무관 항상 표시하던 바이패스 제거)
   const filteredDivisions = dateDivIds
-    ? divisions.filter(d => dateDivIds.includes(d.id) || teamDivIds.has(d.id))
+    ? divisions.filter(d => dateDivIds.includes(d.id))
     : divisions
   const dateFilteredItems = dateDivIds
-    ? allItems.filter(m => dateDivIds.includes(m.division_id) || m.is_team_tie)
+    ? allItems.filter(m => m.division_id && dateDivIds.includes(m.division_id))
     : allItems
 
   const byCourt = new Map<string, MatchSlim[]>()

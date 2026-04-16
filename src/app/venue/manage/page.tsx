@@ -139,14 +139,12 @@ export default function VenueManagePage() {
     return () => clearInterval(interval)
   }, [session, loadData])
 
-  // ── 날짜 필터 적용: 해당 날짜 부서의 경기 + 단체전 ties는 모두 유지 ──
-  // (ties의 division_name은 '단체전'으로 하드코딩되어 날짜 필터 대상 불명확 → 다 보여줌)
+  // ── 날짜 필터 적용: 해당 날짜 부서의 경기만 표시 (단체전 부서도 동일하게 존중) ──
   const dateFilteredMatches = (() => {
     if (dateFilter === 'ALL') return matches
     const validDivIds = Object.entries(divMatchDates)
       .filter(([, d]) => d === dateFilter).map(([id]) => id)
-    // division_id가 유효한 부서에 속하거나 단체전이면 통과
-    return matches.filter(m => m.is_team_tie || (m.division_id && validDivIds.includes(m.division_id)))
+    return matches.filter(m => m.division_id && validDivIds.includes(m.division_id))
   })()
 
   // ── 파생 데이터 (날짜 필터 적용된 matches 기준)
