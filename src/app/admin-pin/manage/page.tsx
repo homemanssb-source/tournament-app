@@ -10,7 +10,6 @@ type Tab = 'individual' | 'team' | 'pins' | 'locks'
 
 interface PinTeam { id: string; team_num: string; team_name: string; division_name: string; pin_plain: string }
 interface PinClub { id: string; name: string; division_name: string; captain_name: string | null; captain_pin: string | null }
-interface PinRubber { id: string; rubber_number: number; pin_code: string | null; tie_id: string; tie_label: string }
 
 interface PinLock {
   target_key: string
@@ -66,18 +65,20 @@ export default function AdminPinManagePage() {
   const [pinLockMsg, setPinLockMsg] = useState('')
   const [clubNameMap, setClubNameMap] = useState<Record<string, string>>({})
 
-  // ── PIN 확인 (현장에서 캡틴/러버 PIN 알려줄 때) ──
+  // ── PIN 확인 (대시보드 팀관리/클럽관리 데이터) ──
   const [pinSearchQuery, setPinSearchQuery] = useState('')
   const [pinTeams, setPinTeams] = useState<PinTeam[]>([])
   const [pinClubs, setPinClubs] = useState<PinClub[]>([])
-  const [pinRubbers, setPinRubbers] = useState<PinRubber[]>([])
   const [pinDataLoading, setPinDataLoading] = useState(false)
   const [revealedPins, setRevealedPins] = useState<Set<string>>(new Set())
 
   useEffect(() => {
-    const raw = sessionStorage.getItem('admin_pin_session')
+    // ✅ localStorage 우선, 호환성 위해 sessionStorage 폴백 후 localStorage로 이전
+    const raw = localStorage.getItem('admin_pin_session') || sessionStorage.getItem('admin_pin_session')
     if (!raw) { router.push('/admin-pin'); return }
     const s = JSON.parse(raw)
+    localStorage.setItem('admin_pin_session', raw)
+    sessionStorage.removeItem('admin_pin_session')
     setSession(s)
     loadAllMatches(s.event_id)
     loadTiesData(s.event_id)
@@ -85,17 +86,15 @@ export default function AdminPinManagePage() {
     loadPinData(s.event_id)
   }, [])
 
-  // ── PIN 확인용 데이터 로드 ──
+  // ── PIN 확인용 데이터 로드 (팀관리 + 클럽관리만) ──
   async function loadPinData(eventId: string) {
     setPinDataLoading(true)
     try {
-      const [teamsRes, clubsRes, ruRes] = await Promise.all([
+      const [teamsRes, clubsRes] = await Promise.all([
         supabase.from('teams').select('id, team_num, team_name, division_name, pin_plain')
           .eq('event_id', eventId).order('division_name').order('team_num'),
         supabase.from('clubs').select('id, name, captain_name, captain_pin, division_id, divisions:division_id(name)')
           .eq('event_id', eventId),
-        supabase.from('tie_rubbers').select('id, rubber_number, pin_code, tie_id, ties:tie_id(event_id, tie_order, club_a:clubs!ties_club_a_id_fkey(name), club_b:clubs!ties_club_b_id_fkey(name))')
-          .order('rubber_number'),
       ])
       setPinTeams((teamsRes.data || []) as PinTeam[])
       setPinClubs((clubsRes.data || []).map((c: any) => ({
@@ -104,13 +103,6 @@ export default function AdminPinManagePage() {
         captain_name: c.captain_name,
         captain_pin: c.captain_pin,
       })))
-      // 이 이벤트의 ties만 필터
-      setPinRubbers((ruRes.data || [])
-        .filter((r: any) => r.ties?.event_id === eventId)
-        .map((r: any) => ({
-          id: r.id, rubber_number: r.rubber_number, pin_code: r.pin_code, tie_id: r.tie_id,
-          tie_label: `T#${r.ties?.tie_order ?? '-'} · ${r.ties?.club_a?.name || 'TBD'} vs ${r.ties?.club_b?.name || 'TBD'}`,
-        })) as PinRubber[])
     } catch {} finally { setPinDataLoading(false) }
   }
 
@@ -440,7 +432,11 @@ export default function AdminPinManagePage() {
     return id && memberMap[id] ? memberMap[id].name : '-'
   }
 
-  function handleLogout() { sessionStorage.removeItem('admin_pin_session'); router.push('/admin-pin') }
+  function handleLogout() {
+    localStorage.removeItem('admin_pin_session')
+    sessionStorage.removeItem('admin_pin_session')
+    router.push('/admin-pin')
+  }
 
   if (!session) return null
 
@@ -808,10 +804,7 @@ export default function AdminPinManagePage() {
                 c.name?.toLowerCase().includes(q) ||
                 (c.captain_name||'').toLowerCase().includes(q) ||
                 c.division_name?.toLowerCase().includes(q))
-              const rubbers = pinRubbers.filter(r =>
-                r.tie_label?.toLowerCase().includes(q))
-
-              if (teams.length === 0 && clubs.length === 0 && rubbers.length === 0) {
+              if (teams.length === 0 && clubs.length === 0) {
                 return <div className="text-center py-8 text-gray-400">검색 결과 없음</div>
               }
 
@@ -865,24 +858,6 @@ export default function AdminPinManagePage() {
                     </div>
                   )}
 
-                  {/* 단체전 러버 PIN */}
-                  {rubbers.length > 0 && (
-                    <div className="bg-white rounded-xl border overflow-hidden">
-                      <div className="bg-amber-50 px-4 py-2 font-bold text-sm text-amber-700">🎾 단체전 러버 PIN ({rubbers.length})</div>
-                      <div className="divide-y">
-                        {rubbers.slice(0, 30).map(r => (
-                          <div key={r.id} className="px-4 py-2.5 flex items-center justify-between gap-2">
-                            <div className="min-w-0 flex-1">
-                              <div className="text-sm font-medium truncate">{r.tie_label}</div>
-                              <div className="text-[10px] text-gray-400">러버 {r.rubber_number}</div>
-                            </div>
-                            {renderPin('rubber:'+r.id, r.pin_code)}
-                          </div>
-                        ))}
-                        {rubbers.length > 30 && <div className="text-xs text-gray-400 text-center py-2">... 더 자세한 검색어 입력</div>}
-                      </div>
-                    </div>
-                  )}
                 </div>
               )
             })()}
