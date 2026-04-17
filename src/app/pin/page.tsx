@@ -7,6 +7,12 @@ import { usePushSubscription } from '@/hooks/usePushSubscription'
 
 type Mode = 'select' | 'individual' | 'team';
 
+interface DivisionChoice {
+  division_id: string | null
+  division_name: string
+  clubs: { id: string; name: string }[]
+}
+
 const NOTIF_DONE_KEY = 'pin_notif_done'
 
 export default function PinPage() {
@@ -17,6 +23,8 @@ export default function PinPage() {
   const [loading, setLoading] = useState(false)
   const [mode, setMode] = useState<Mode>('select')
   const [teamTies, setTeamTies] = useState<any[]>([])
+  const [divisionChoices, setDivisionChoices] = useState<DivisionChoice[]>([])
+  const [selectedDivName, setSelectedDivName] = useState<string>('')
 
   const { status: pushStatus, message: pushMessage, subscribeWithPin } = usePushSubscription()
   const [loginSuccess, setLoginSuccess] = useState(false)
@@ -154,11 +162,45 @@ export default function PinPage() {
     try {
       // 같은 팀이 여러 부서로 신청한 경우 clubs 테이블에 부서별 row가 생기므로 전체 조회
       const { data: clubs } = await supabase
-        .from('clubs').select('id, name, event_id')
+        .from('clubs').select('id, name, event_id, division_id')
         .eq('captain_pin', pin)
       if (!clubs || clubs.length === 0) { setError('팀 PIN에 해당하는 클럽을 찾을 수 없습니다.'); setLoading(false); return }
 
-      const clubIds = clubs.map(c => c.id)
+      // 부서 이름 맵핑 — 여러 부서에 걸친 경우만 조회
+      const divIds = [...new Set(clubs.map(c => c.division_id).filter(Boolean))] as string[]
+      const divNameMap: Record<string, string> = {}
+      if (divIds.length > 0) {
+        const { data: divs } = await supabase.from('divisions').select('id, name').in('id', divIds)
+        for (const d of (divs || [])) divNameMap[(d as any).id] = (d as any).name
+      }
+
+      // 부서별 그룹핑
+      const divMap = new Map<string, DivisionChoice>()
+      for (const c of clubs) {
+        const key = c.division_id || '_nodiv'
+        const name = c.division_id ? (divNameMap[c.division_id] || '(부서 미지정)') : '단체전'
+        if (!divMap.has(key)) divMap.set(key, { division_id: c.division_id, division_name: name, clubs: [] })
+        divMap.get(key)!.clubs.push({ id: c.id, name: c.name })
+      }
+
+      sessionStorage.setItem('captain_pin', pin)
+
+      // 부서가 여러 개면 → 부서 선택 화면으로
+      if (divMap.size > 1) {
+        setDivisionChoices([...divMap.values()])
+        setLoading(false)
+        return
+      }
+
+      // 부서가 하나면 바로 ties 조회
+      await loadTiesForClubs(clubs.map(c => c.id))
+    } catch { setError('서버 오류가 발생했습니다.') }
+    finally { setLoading(false) }
+  }
+
+  async function loadTiesForClubs(clubIds: string[], divName?: string) {
+    setError(''); setLoading(true)
+    try {
       const orFilter = clubIds
         .flatMap(id => [`club_a_id.eq.${id}`, `club_b_id.eq.${id}`])
         .join(',')
@@ -170,14 +212,18 @@ export default function PinPage() {
         .in('status', ['pending', 'lineup_phase', 'lineup_ready', 'in_progress'])
         .order('tie_order')
 
-      if (!ties || ties.length === 0) { setError('진행중인 타이가 없습니다.'); setLoading(false); return }
+      if (!ties || ties.length === 0) { setError(`${divName ? divName + ' · ' : ''}진행중인 타이가 없습니다.`); return }
 
-      sessionStorage.setItem('captain_pin', pin)
+      if (divName) setSelectedDivName(divName)
 
       if (ties.length === 1) { router.push(`/lineup/${ties[0].id}`); return }
       setTeamTies(ties)
-    } catch { setError('서버 오류가 발생했습니다.') }
-    finally { setLoading(false) }
+    } finally { setLoading(false) }
+  }
+
+  async function pickDivision(choice: DivisionChoice) {
+    setDivisionChoices([])
+    await loadTiesForClubs(choice.clubs.map(c => c.id), choice.division_name)
   }
 
   function goToTie(tieId: string) {
@@ -185,7 +231,10 @@ export default function PinPage() {
     router.push(`/lineup/${tieId}`)
   }
 
-  function resetMode() { setMode('select'); setPin(''); setError(''); setTeamTies([]) }
+  function resetMode() {
+    setMode('select'); setPin(''); setError('')
+    setTeamTies([]); setDivisionChoices([]); setSelectedDivName('')
+  }
 
   if (loginSuccess) {
     return (
@@ -280,7 +329,7 @@ export default function PinPage() {
           </>
         )}
 
-        {mode === 'team' && teamTies.length === 0 && (
+        {mode === 'team' && teamTies.length === 0 && divisionChoices.length === 0 && (
           <>
             <p className="text-center text-sm text-stone-600 font-medium">단체전</p>
             <p className="text-xs text-stone-400 text-center">팀장 PIN 6자리를 입력하세요</p>
@@ -298,9 +347,37 @@ export default function PinPage() {
           </>
         )}
 
+        {mode === 'team' && divisionChoices.length > 0 && (
+          <>
+            <p className="text-center text-sm text-stone-600 font-medium">부서를 선택하세요</p>
+            <p className="text-xs text-stone-400 text-center">동일 팀장 PIN으로 여러 부서에 신청되어 있습니다</p>
+            <div className="space-y-2">
+              {divisionChoices.map(c => (
+                <button key={c.division_id || '_nodiv'} onClick={() => pickDivision(c)}
+                  disabled={loading}
+                  className="w-full bg-white border-2 border-blue-200 rounded-xl p-4 text-left hover:border-blue-400 disabled:opacity-50 transition-all">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-blue-700">{c.division_name}</div>
+                      <div className="text-xs text-stone-500 mt-0.5">
+                        {c.clubs.map(cl => cl.name).join(', ')}
+                      </div>
+                    </div>
+                    <span className="text-stone-400">→</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+            {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+            <button onClick={resetMode} className="w-full text-stone-400 text-sm py-2 hover:text-stone-600">← 뒤로가기</button>
+          </>
+        )}
+
         {mode === 'team' && teamTies.length > 0 && (
           <>
-            <p className="text-center text-sm text-stone-600 font-medium">타이를 선택하세요</p>
+            <p className="text-center text-sm text-stone-600 font-medium">
+              {selectedDivName ? `${selectedDivName} · 대전 선택` : '타이를 선택하세요'}
+            </p>
             <div className="space-y-2">
               {teamTies.map((tie: any) => (
                 <button key={tie.id} onClick={() => goToTie(tie.id)}
