@@ -227,7 +227,13 @@ export default function PinPage() {
   }
 
   function goToTie(tieId: string) {
+    // ✅ tie별 키 + 일반 키 + localStorage(12시간) 모두 저장
+    //    /lineup 페이지가 tie별 키를 먼저 보므로 반드시 같이 저장해야 PIN 재입력 방지
     sessionStorage.setItem('captain_pin', pin)
+    sessionStorage.setItem(`captain_pin_${tieId}`, pin)
+    try {
+      localStorage.setItem('captain_pin_session', JSON.stringify({ pin, _savedAt: Date.now() }))
+    } catch {}
     router.push(`/lineup/${tieId}`)
   }
 

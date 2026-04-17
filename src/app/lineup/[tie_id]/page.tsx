@@ -84,10 +84,29 @@ export default function LineupPage() {
         await loadRubbers(tieId);
         setLoading(false); return;
       }
-      const savedPin = sessionStorage.getItem(`captain_pin_${tieId}`);
+      // ✅ tie별 키 → 일반 키 → localStorage 순으로 폴백 (12시간 유효)
+      let savedPin: string | null = sessionStorage.getItem(`captain_pin_${tieId}`);
+      if (!savedPin) savedPin = sessionStorage.getItem('captain_pin');
+      if (!savedPin) {
+        try {
+          const lsRaw = localStorage.getItem('captain_pin_session');
+          if (lsRaw) {
+            const parsed = JSON.parse(lsRaw);
+            if (parsed._savedAt && Date.now() - parsed._savedAt < 12 * 60 * 60 * 1000) {
+              savedPin = parsed.pin;
+            } else {
+              localStorage.removeItem('captain_pin_session');
+            }
+          }
+        } catch {}
+      }
       if (savedPin && ca && cb) {
         const ok = await tryAutoLogin(savedPin, ca, cb, t);
-        if (ok) { setLoading(false); return; }
+        if (ok) {
+          // ✅ 자동 인증 성공 → tie별 키에도 저장해 다음 폴링/새로고침 시 빠르게 복원
+          sessionStorage.setItem(`captain_pin_${tieId}`, savedPin);
+          setLoading(false); return;
+        }
       }
       setLoading(false);
     })();
@@ -155,6 +174,10 @@ export default function LineupPage() {
     else if (clubB?.captain_pin === pinInput) { setMyClub(clubB); setOpponentClub(clubA); }
     else { setError('PIN이 일치하지 않습니다.'); return; }
     sessionStorage.setItem(`captain_pin_${tieId}`, pinInput);
+    sessionStorage.setItem('captain_pin', pinInput);
+    try {
+      localStorage.setItem('captain_pin_session', JSON.stringify({ pin: pinInput, _savedAt: Date.now() }));
+    } catch {}
     const club = clubA?.captain_pin === pinInput ? clubA : clubB!;
     const ml = await fetchClubMembers(club.id); setMembers(ml);
     const existing = await fetchLineups(tieId, club.id);
