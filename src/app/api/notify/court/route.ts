@@ -17,23 +17,34 @@ function savePushLog(
   Promise.resolve(supabaseAdmin.from('push_logs').insert(data)).catch(() => {})
 }
 
-// 단건 발송 헬퍼
+// 단건 발송 헬퍼 — 에러 세부 정보도 함께 반환
+type SendResult =
+  | { kind: 'ok' }
+  | { kind: 'expired'; reason: string }
+  | { kind: 'retry'; reason: string }
+
 async function sendOne(
   webpush: any,
   sub: SubRow,
   payload: string,
   pushOptions: object
-): Promise<'ok' | 'expired' | 'retry'> {
+): Promise<SendResult> {
   try {
     await webpush.sendNotification(
       { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
       payload,
       pushOptions
     )
-    return 'ok'
+    return { kind: 'ok' }
   } catch (err: any) {
-    if (err.statusCode === 410 || err.statusCode === 404) return 'expired'
-    return 'retry'
+    const code = err.statusCode || err.status || 0
+    const body = (err.body || err.message || '').toString().slice(0, 200)
+    const reason = `status=${code} ${body}`
+    // 410 Gone, 404 Not Found, 또는 permanently-removed endpoint는 영구 만료
+    if (code === 410 || code === 404 || /permanently-removed/.test(sub.endpoint)) {
+      return { kind: 'expired', reason }
+    }
+    return { kind: 'retry', reason }
   }
 }
 
@@ -200,14 +211,15 @@ export async function POST(req: NextRequest) {
     let failed = 0
     const expiredEndpoints: string[] = []
     const retryTargets: SubRow[] = []
+    const failReasons: string[] = []
 
     // ── 1차 발송 ──────────────────────────────────────────────
     await Promise.all(
       (subscriptions as SubRow[]).map(async (sub) => {
         const result = await sendOne(webpush, sub, payload, pushOptions)
-        if (result === 'ok')           { sent++ }
-        else if (result === 'expired') { failed++; expiredEndpoints.push(sub.endpoint) }
-        else                           { retryTargets.push(sub) }
+        if (result.kind === 'ok')            { sent++ }
+        else if (result.kind === 'expired')  { failed++; expiredEndpoints.push(sub.endpoint); failReasons.push('expired: ' + result.reason) }
+        else                                  { retryTargets.push(sub) }
       })
     )
 
@@ -219,23 +231,21 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 2차 발송: 재시도 대상 있으면 3초 대기 후 재시도 ────────
-    // ✅ [FIX] setTimeout 대신 await sleep
-    //    Vercel 서버리스는 return 이후 실행을 보장하지 않으므로
-    //    return 전에 await로 완료해야 재시도가 실제로 실행됨
     if (retryTargets.length > 0) {
       await sleep(3000)
       await Promise.all(
         retryTargets.map(async (sub) => {
           const result = await sendOne(webpush, sub, payload, pushOptions)
-          if (result === 'ok')           { sent++ }
-          else if (result === 'expired') { failed++; expiredEndpoints.push(sub.endpoint) }
-          else                           { failed++ }
+          if (result.kind === 'ok')            { sent++ }
+          else if (result.kind === 'expired')  { failed++; expiredEndpoints.push(sub.endpoint); failReasons.push('expired-retry: ' + result.reason) }
+          else                                  { failed++; failReasons.push('retry-failed: ' + result.reason) }
         })
       )
     }
 
-    // 최종 결과 로그 저장 (fire-and-forget)
-    savePushLog(supabaseAdmin, { ...logData, sent, failed, no_sub: false })
+    // 최종 결과 로그 저장 (fire-and-forget) — 실패 원인도 포함
+    const errorMsg = failReasons.length > 0 ? failReasons.slice(0, 5).join(' | ').slice(0, 500) : null
+    savePushLog(supabaseAdmin, { ...logData, sent, failed, no_sub: false, error_msg: errorMsg })
 
     return NextResponse.json({
       sent,

@@ -25,6 +25,8 @@ export default function PinPage() {
   const [teamTies, setTeamTies] = useState<any[]>([])
   const [divisionChoices, setDivisionChoices] = useState<DivisionChoice[]>([])
   const [selectedDivName, setSelectedDivName] = useState<string>('')
+  const [teamNotifPrompt, setTeamNotifPrompt] = useState(false)
+  const [teamNextState, setTeamNextState] = useState<{ choices?: DivisionChoice[]; clubIds?: string[] } | null>(null)
 
   const { status: pushStatus, message: pushMessage, subscribeWithPin } = usePushSubscription()
   const [loginSuccess, setLoginSuccess] = useState(false)
@@ -184,18 +186,54 @@ export default function PinPage() {
       }
 
       sessionStorage.setItem('captain_pin', pin)
+      setLoginPin(pin)
 
-      // 부서가 여러 개면 → 부서 선택 화면으로
-      if (divMap.size > 1) {
-        setDivisionChoices([...divMap.values()])
-        setLoading(false)
+      const allChoices = [...divMap.values()]
+      const allClubIds = clubs.map(c => c.id)
+
+      // 이미 알림 등록한 PIN이면 바로 다음 단계로
+      let alreadyDone = false
+      try {
+        const donePins = JSON.parse(localStorage.getItem(NOTIF_DONE_KEY) || '[]') as string[]
+        alreadyDone = donePins.includes(pin)
+      } catch {}
+
+      if (alreadyDone) {
+        if (divMap.size > 1) { setDivisionChoices(allChoices); setLoading(false); return }
+        await loadTiesForClubs(allClubIds)
         return
       }
 
-      // 부서가 하나면 바로 ties 조회
-      await loadTiesForClubs(clubs.map(c => c.id))
+      // 알림 등록 안 한 PIN → 알림 켜기 화면 표시 후 계속
+      setTeamNextState(divMap.size > 1 ? { choices: allChoices } : { clubIds: allClubIds })
+      setTeamNotifPrompt(true)
     } catch { setError('서버 오류가 발생했습니다.') }
     finally { setLoading(false) }
+  }
+
+  async function handleTeamAllowNotification() {
+    setCheckinLoading(true)
+    try {
+      await subscribeWithPin(loginPin)
+      markNotifDone(loginPin)
+    } finally {
+      setCheckinLoading(false)
+    }
+    proceedTeamAfterNotif()
+  }
+
+  function handleTeamSkipNotification() {
+    proceedTeamAfterNotif()
+  }
+
+  function proceedTeamAfterNotif() {
+    setTeamNotifPrompt(false)
+    if (teamNextState?.choices) {
+      setDivisionChoices(teamNextState.choices)
+    } else if (teamNextState?.clubIds) {
+      loadTiesForClubs(teamNextState.clubIds)
+    }
+    setTeamNextState(null)
   }
 
   async function loadTiesForClubs(clubIds: string[], divName?: string) {
@@ -227,13 +265,20 @@ export default function PinPage() {
   }
 
   function goToTie(tieId: string) {
+    // ✅ tie별 키 + 일반 키 + localStorage(12시간) 모두 저장
+    //    /lineup 페이지가 tie별 키를 먼저 보므로 반드시 같이 저장해야 PIN 재입력 방지
     sessionStorage.setItem('captain_pin', pin)
+    sessionStorage.setItem(`captain_pin_${tieId}`, pin)
+    try {
+      localStorage.setItem('captain_pin_session', JSON.stringify({ pin, _savedAt: Date.now() }))
+    } catch {}
     router.push(`/lineup/${tieId}`)
   }
 
   function resetMode() {
     setMode('select'); setPin(''); setError('')
     setTeamTies([]); setDivisionChoices([]); setSelectedDivName('')
+    setTeamNotifPrompt(false); setTeamNextState(null)
   }
 
   if (loginSuccess) {
@@ -329,7 +374,38 @@ export default function PinPage() {
           </>
         )}
 
-        {mode === 'team' && teamTies.length === 0 && divisionChoices.length === 0 && (
+        {mode === 'team' && teamNotifPrompt && (
+          <div className="space-y-4 text-center">
+            <div className="text-5xl">🔔</div>
+            <h2 className="font-bold text-lg">알림 받기 (휴대폰 꺼져 있어도 OK)</h2>
+            <p className="text-xs text-stone-500">
+              내 팀 코트 차례가 오면 앱이 꺼져 있어도 알림이 와요.<br />
+              <span className="text-stone-400">여러 부서 등록시 모든 부서 알림 한 번에 등록됩니다.</span>
+            </p>
+            {pushStatus === 'success' ? (
+              <div className="py-2">
+                <div className="text-3xl mb-2">✅</div>
+                <p className="text-green-600 font-bold">알림 설정 완료!</p>
+                <button onClick={proceedTeamAfterNotif}
+                  className="mt-3 w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700">다음</button>
+              </div>
+            ) : (
+              <>
+                <button onClick={handleTeamAllowNotification}
+                  disabled={pushStatus === 'loading' || checkinLoading}
+                  className="w-full bg-green-600 text-white font-bold py-4 rounded-xl hover:bg-green-700 disabled:opacity-50 transition-all text-lg shadow-lg">
+                  {(pushStatus === 'loading' || checkinLoading) ? '⏳ 처리 중...' : '✅ 알림 켜기'}
+                </button>
+                {pushStatus === 'error' && <p className="text-xs text-red-500">{pushMessage}</p>}
+                <button onClick={handleTeamSkipNotification} className="w-full text-stone-400 text-sm py-3 hover:text-stone-600">
+                  건너뛰기
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {mode === 'team' && !teamNotifPrompt && teamTies.length === 0 && divisionChoices.length === 0 && (
           <>
             <p className="text-center text-sm text-stone-600 font-medium">단체전</p>
             <p className="text-xs text-stone-400 text-center">팀장 PIN 6자리를 입력하세요</p>
