@@ -17,23 +17,31 @@ import type { Club, EventTeamConfig, StandingWithClub, TieWithClubs } from '@/ty
 
 interface Division { id: string; name: string; sort_order: number; }
 
-// 개인전과 동일한 로직 — 1팀 조만 방지 (2팀 조는 허용)
+// 서버(rpc_create_team_groups v2)와 완전 동일한 분배 로직.
+// 1팀 조 방지 (2+1→3, 3+1→2+2, 4+1→3+2, 5+1→3+3, 6+1→4+3).
 function calcGroupDistribution(totalTeams: number, groupSize: number): number[] {
   if (totalTeams < 2) return [];
-  if (groupSize < 2) groupSize = 2;
-  const groupCount = Math.ceil(totalTeams / groupSize);
-  const distribution: number[] = [];
-  let remaining = totalTeams;
-  for (let i = 0; i < groupCount; i++) {
-    distribution.push(Math.min(groupSize, remaining));
-    remaining -= distribution[i];
+  const tpg = Math.max(2, Math.min(6, groupSize));
+  const remainder   = totalTeams % tpg;
+  const fullGroups  = Math.floor(totalTeams / tpg);
+  const result: number[] = [];
+
+  if (remainder === 0) {
+    for (let i = 0; i < fullGroups; i++) result.push(tpg);
+  } else if (remainder === 1) {
+    // 마지막 1팀을 앞 조에 병합해서 1팀 조 없앰
+    for (let i = 0; i < fullGroups - 1; i++) result.push(tpg);
+    if (tpg === 2)      result.push(3);
+    else if (tpg === 3) { result.push(2); result.push(2); }
+    else if (tpg === 4) { result.push(3); result.push(2); }
+    else if (tpg === 5) { result.push(3); result.push(3); }
+    else if (tpg === 6) { result.push(4); result.push(3); }
+    else                 result.push(tpg + 1);
+  } else {
+    for (let i = 0; i < fullGroups; i++) result.push(tpg);
+    result.push(remainder);
   }
-  // 1팀 조 방지: 마지막 조가 1팀이면 앞 조에서 1팀 당겨옴
-  if (distribution.length >= 2 && distribution[distribution.length - 1] === 1) {
-    distribution[distribution.length - 2] -= 1;
-    distribution[distribution.length - 1] += 1;
-  }
-  return distribution;
+  return result;
 }
 
 export default function GroupsPage() {
