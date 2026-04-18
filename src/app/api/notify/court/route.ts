@@ -139,18 +139,21 @@ export async function POST(req: NextRequest) {
         .neq('status', 'completed').order('court_order').order('tie_order')
 
       if (tieList && tieList.length > 0) {
-        // 2) "오늘 날짜" 결정: 입력 match_date > in_progress tie의 match_date > 첫 tie의 match_date
+        // 2) "오늘 날짜" 결정: 입력 match_date > in_progress tie의 match_date
+        //    > 서버 시간 KST 오늘 (날짜가 다른 ties 섞여있을 때 fallback)
         const liveTie = tieList.find((t: any) => t.status === 'in_progress')
         const liveMatchDate = (liveTie as any)?.divisions?.match_date || null
-        const todayDate = match_date || liveMatchDate || (tieList[0] as any)?.divisions?.match_date || null
+        const kstToday = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+        const todayDate = match_date || liveMatchDate || kstToday
 
-        // 3) 날짜 필터 (match_date가 있으면 그 날짜만, 없으면 모두)
-        const sameDateTies = todayDate
-          ? tieList.filter((t: any) => t.divisions?.match_date === todayDate || !t.divisions?.match_date)
-          : tieList
+        // 3) 날짜 필터: 같은 match_date의 ties 우선. 비어있으면(매칭 0건) 전체 사용
+        const sameDateTies = tieList.filter((t: any) =>
+          t.divisions?.match_date === todayDate || !t.divisions?.match_date
+        )
+        const candidates = sameDateTies.length > 0 ? sameDateTies : tieList
 
-        // 4) 다음 진행 대상: 진행중 > 첫 pending
-        const activeTie = sameDateTies.find((t: any) => t.status === 'in_progress') || sameDateTies[0]
+        // 4) 다음 진행 대상: 진행중 > 첫 pending/lineup_ready
+        const activeTie = candidates.find((t: any) => t.status === 'in_progress') || candidates[0]
         if (activeTie) {
           teamAId = activeTie.club_a_id; teamBId = activeTie.club_b_id
           targetId = activeTie.id
