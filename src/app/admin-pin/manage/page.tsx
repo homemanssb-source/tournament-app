@@ -46,6 +46,9 @@ export default function AdminPinManagePage() {
   const [divisions, setDivisions] = useState<{id: string; name: string; sort_order: number}[]>([])
   const [selectedDivId, setSelectedDivId] = useState<string>('')
 
+  // ── 코트 번호 → 이름 매핑 (글로벌 인덱스 기준) ──
+  const [courtNames, setCourtNames] = useState<string[]>([])
+
   // 단체전 점수 입력 state
   const [scoringRubber, setScoringRubber] = useState<string | null>(null)
   const [set1a, setSet1a] = useState('')
@@ -84,7 +87,28 @@ export default function AdminPinManagePage() {
     loadTiesData(s.event_id)
     loadPinLocks(s.event_id)
     loadPinData(s.event_id)
+    loadVenues(s.event_id)
   }, [])
+
+  // ── 베뉴 로드 → 글로벌 코트 이름 배열 생성 (dashboard/courts와 동일 로직) ──
+  async function loadVenues(eventId: string) {
+    const { data } = await supabase.from('venues')
+      .select('name, short_name, court_count, courts')
+      .eq('event_id', eventId).order('created_at')
+    const names: string[] = (data || []).flatMap((v: any) => {
+      const sn = (v.short_name?.trim() || v.name?.trim() || '코트')
+      const count = v.court_count || v.courts?.length || 0
+      return Array.from({ length: count }, (_, i) => `${sn}-${i + 1}`)
+    })
+    setCourtNames(names)
+  }
+
+  // tie의 court_number → 실제 코트 이름 변환
+  function courtNumToName(n: number | null | undefined): string | null {
+    if (!n) return null
+    if (courtNames.length > 0 && n >= 1 && n <= courtNames.length) return courtNames[n - 1]
+    return `코트-${n}`   // fallback
+  }
 
   // ── PIN 확인용 데이터 로드 (팀관리 + 클럽관리) ──
   // FK 조인이 PostgREST 스키마 캐시에 없어서 divisions를 별도로 가져와 클라이언트 매핑
@@ -676,9 +700,16 @@ export default function AdminPinManagePage() {
                           <span className="text-gray-400 text-xs">{isSelected?'▲':'▼'}</span>
                         </div>
                       </div>
-                      {tie.round && (
-                        <div className="text-xs text-gray-400 mt-1">{tie.round}</div>
-                      )}
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        {tie.round && (
+                          <span className="text-xs text-gray-400">{tie.round}</span>
+                        )}
+                        {courtNumToName((tie as any).court_number) && (
+                          <span className="text-xs bg-[#2d5016] text-white px-2 py-0.5 rounded-full font-semibold">
+                            📍 {courtNumToName((tie as any).court_number)}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     {isSelected && (
