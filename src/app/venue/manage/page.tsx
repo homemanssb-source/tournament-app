@@ -322,18 +322,24 @@ export default function VenueManagePage() {
     }
     if (item.is_team_tie) {
       const tieId = item.id.replace(/^tie_/, '')
-      if (courtName === null) {
-        const { error } = await supabase.from('ties')
-          .update({ court_number: null, court_order: null }).eq('id', tieId)
-        return error?.message || null
+      // ⚠️ ties 테이블은 RLS로 anon update 차단됨 → RPC 호출로 처리
+      let courtNum: number | null = null
+      let nextOrd: number | null = null
+      if (courtName !== null) {
+        const idx = allVenueCourtNames.indexOf(courtName)
+        if (idx < 0) return `코트 "${courtName}" 글로벌 인덱스를 찾을 수 없음`
+        courtNum = idx + 1
+        nextOrd = await nextCourtOrderForTies(courtNum)
       }
-      const idx = allVenueCourtNames.indexOf(courtName)
-      if (idx < 0) return `코트 "${courtName}" 글로벌 인덱스를 찾을 수 없음`
-      const courtNum = idx + 1
-      const nextOrd = await nextCourtOrderForTies(courtNum)
-      const { error } = await supabase.from('ties')
-        .update({ court_number: courtNum, court_order: nextOrd }).eq('id', tieId)
-      return error?.message || null
+      const { data, error } = await supabase.rpc('rpc_venue_assign_tie_court', {
+        p_token: session.token,
+        p_tie_id: tieId,
+        p_court_number: courtNum,
+        p_court_order: nextOrd,
+      })
+      if (error) return error.message
+      if (data && data.success === false) return data.error || '배정 실패'
+      return null
     } else {
       if (courtName === null) {
         const { error } = await supabase.from('matches')
@@ -400,6 +406,7 @@ export default function VenueManagePage() {
   }
 
   // ── 코트 내 순서 변경 (▲▼) ──
+  //    ties는 RLS로 anon update 차단되므로 RPC 사용
   async function handleMoveOrder(item: VenueMatch, direction: 'up' | 'down') {
     if (!item.court) return
     const courtMatches = matches
@@ -410,19 +417,32 @@ export default function VenueManagePage() {
     if (swapIdx < 0 || swapIdx >= courtMatches.length) return
     const other = courtMatches[swapIdx]
 
+    // tie용 court_order 업데이트 (RPC)
+    const updateTieOrder = async (tieRowId: string, newOrder: number | null, courtName: string) => {
+      const courtIdx = allVenueCourtNames.indexOf(courtName)
+      const courtNum = courtIdx >= 0 ? courtIdx + 1 : null
+      if (courtNum === null) return
+      await supabase.rpc('rpc_venue_assign_tie_court', {
+        p_token: session.token,
+        p_tie_id: tieRowId,
+        p_court_number: courtNum,
+        p_court_order: newOrder,
+      })
+    }
+
     if (item.is_team_tie && other.is_team_tie) {
       const tieId = item.id.replace(/^tie_/, '')
       const otherId = other.id.replace(/^tie_/, '')
-      await supabase.from('ties').update({ court_order: other.court_order }).eq('id', tieId)
-      await supabase.from('ties').update({ court_order: item.court_order }).eq('id', otherId)
+      await updateTieOrder(tieId, other.court_order, item.court)
+      await updateTieOrder(otherId, item.court_order, item.court)
     } else if (item.is_team_tie) {
       const tieId = item.id.replace(/^tie_/, '')
-      await supabase.from('ties').update({ court_order: other.court_order }).eq('id', tieId)
+      await updateTieOrder(tieId, other.court_order, item.court)
       await supabase.from('matches').update({ court_order: item.court_order }).eq('id', other.id)
     } else if (other.is_team_tie) {
       const otherId = other.id.replace(/^tie_/, '')
       await supabase.from('matches').update({ court_order: other.court_order }).eq('id', item.id)
-      await supabase.from('ties').update({ court_order: item.court_order }).eq('id', otherId)
+      await updateTieOrder(otherId, item.court_order, item.court)
     } else {
       await supabase.from('matches').update({ court_order: other.court_order }).eq('id', item.id)
       await supabase.from('matches').update({ court_order: item.court_order }).eq('id', other.id)
