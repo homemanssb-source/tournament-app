@@ -130,22 +130,39 @@ export async function POST(req: NextRequest) {
         divisionName = data.division_name; targetId = data.id
       }
     } else {
+      // ✅ 단체전 ties: 코트 + 날짜 필터링 (어제 못 끝낸 tie를 잘못 잡지 않게)
+      // 1) 같은 court_number의 모든 ties + division match_date 조인
       const { data: tieList } = await supabaseAdmin
         .from('ties')
-        .select('id, club_a_id, club_b_id, status, tie_order')
+        .select('id, club_a_id, club_b_id, status, tie_order, court_order, division_id, divisions:division_id(match_date,name)')
         .eq('event_id', event_id).eq('court_number', courtNum)
-        .neq('status', 'completed').order('tie_order')
+        .neq('status', 'completed').order('court_order').order('tie_order')
 
       if (tieList && tieList.length > 0) {
-        const activeTie = tieList.find((t: any) => t.status === 'in_progress') || tieList[0]
-        teamAId = activeTie.club_a_id; teamBId = activeTie.club_b_id
-        targetId = activeTie.id; divisionName = '단체전'
-        const [{ data: clubA }, { data: clubB }] = await Promise.all([
-          supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_a_id).single(),
-          supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_b_id).single(),
-        ])
-        teamAName = clubA?.name || ''; teamBName = clubB?.name || ''
-      } else {
+        // 2) "오늘 날짜" 결정: 입력 match_date > in_progress tie의 match_date > 첫 tie의 match_date
+        const liveTie = tieList.find((t: any) => t.status === 'in_progress')
+        const liveMatchDate = (liveTie as any)?.divisions?.match_date || null
+        const todayDate = match_date || liveMatchDate || (tieList[0] as any)?.divisions?.match_date || null
+
+        // 3) 날짜 필터 (match_date가 있으면 그 날짜만, 없으면 모두)
+        const sameDateTies = todayDate
+          ? tieList.filter((t: any) => t.divisions?.match_date === todayDate || !t.divisions?.match_date)
+          : tieList
+
+        // 4) 다음 진행 대상: 진행중 > 첫 pending
+        const activeTie = sameDateTies.find((t: any) => t.status === 'in_progress') || sameDateTies[0]
+        if (activeTie) {
+          teamAId = activeTie.club_a_id; teamBId = activeTie.club_b_id
+          targetId = activeTie.id
+          divisionName = (activeTie as any)?.divisions?.name || '단체전'
+          const [{ data: clubA }, { data: clubB }] = await Promise.all([
+            supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_a_id).single(),
+            supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_b_id).single(),
+          ])
+          teamAName = clubA?.name || ''; teamBName = clubB?.name || ''
+        }
+      }
+      if (!teamAId && !teamBId) {
         const { data: allCourtMatches } = await supabaseAdmin
           .from('v_matches_with_teams')
           .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status, score, match_date')

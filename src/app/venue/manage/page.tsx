@@ -360,13 +360,16 @@ export default function VenueManagePage() {
   }
 
   // 코트 변경/배정 알림 발송 (해당 코트 다음 대기 팀에 푸시)
+  // ✅ match_date 동봉: 어제 못 끝낸 tie를 잘못 매칭하지 않도록 현재 선택 날짜 명시
   async function notifyCourt(courtName: string, trigger: 'court_changed' | 'finished' = 'court_changed') {
     if (!session?.event_id || !courtName) return
     try {
+      const body: any = { event_id: session.event_id, court: courtName, trigger }
+      if (dateFilter && dateFilter !== 'ALL') body.match_date = dateFilter
       await fetch('/api/notify/court', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ event_id: session.event_id, court: courtName, trigger }),
+        body: JSON.stringify(body),
       })
     } catch {}
   }
