@@ -273,8 +273,11 @@ export default function VenueManagePage() {
         p_winner_team_id: winnerId,
       })
       if (error) { setMsg('❌ ' + error.message); return }
+      const finishedCourt = editMatch.court
       closeModal()
       await loadData()
+      // 경기 완료 → 다음 대기 팀에 알림
+      if (finishedCourt) notifyCourt(finishedCourt, 'finished')
     } finally {
       setSubmitting(false)
     }
@@ -284,12 +287,15 @@ export default function VenueManagePage() {
   async function startMatch(matchId: string) {
     if (matchId.startsWith('tie_')) return
     setMsg('')
+    const item = matches.find(m => m.id === matchId)
     const { error } = await supabase.rpc('rpc_venue_start_match', {
       p_token: session.token,
       p_match_id: matchId,
     })
     if (error) { setMsg('❌ ' + error.message); return }
     await loadData()
+    // 경기 시작 → 그 코트의 "다음 대기 팀"에 미리 알림 (선택적, 대시보드와 동일 패턴)
+    if (item?.court) notifyCourt(item.court, 'court_changed')
   }
 
   // ── 코트 배정 헬퍼 ────────────────────────────────────────
@@ -353,13 +359,31 @@ export default function VenueManagePage() {
     }
   }
 
+  // 코트 변경/배정 알림 발송 (해당 코트 다음 대기 팀에 푸시)
+  async function notifyCourt(courtName: string, trigger: 'court_changed' | 'finished' = 'court_changed') {
+    if (!session?.event_id || !courtName) return
+    try {
+      await fetch('/api/notify/court', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_id: session.event_id, court: courtName, trigger }),
+      })
+    } catch {}
+  }
+
   async function handleAssign(item: VenueMatch, courtName: string | null) {
     setAssignMsg('')
+    const prevCourt = item.court  // 이동 시 이전 코트도 갱신 알림
     const err = await assignItem(item, courtName)
     if (err === 'cancelled') return
     if (err) { setAssignMsg('❌ ' + err); return }
     setAssignMsg(courtName ? `✅ ${courtName}에 배정됨` : '✅ 배정 해제됨')
     setTimeout(() => setAssignMsg(''), 3000)
+    // 푸시 알림: 새로 배정된 코트 + (이동이라면) 이전 코트
+    const targets = new Set<string>()
+    if (courtName) targets.add(courtName)
+    if (prevCourt && prevCourt !== courtName) targets.add(prevCourt)
+    for (const c of targets) notifyCourt(c, 'court_changed')
     await loadData()
   }
 
@@ -387,6 +411,7 @@ export default function VenueManagePage() {
       )
 
       let successCount = 0
+      const touchedCourts = new Set<string>()
       for (const item of sorted) {
         // 로드 최소 코트 선택
         const court = sessionCourts.reduce((min, c) =>
@@ -395,10 +420,13 @@ export default function VenueManagePage() {
         if (!err) {
           loadMap[court]++
           successCount++
+          touchedCourts.add(court)
         }
       }
       setAssignMsg(`✅ ${successCount}/${sorted.length}경기 자동 배정 완료`)
       setTimeout(() => setAssignMsg(''), 4000)
+      // 새로 배정된 코트들에 일괄 알림 발송
+      for (const c of touchedCourts) notifyCourt(c, 'court_changed')
       await loadData()
     } finally {
       setAssigning(false)
