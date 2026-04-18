@@ -254,9 +254,29 @@ export default function PinPage() {
 
       if (divName) setSelectedDivName(divName)
 
+      // ✅ 같은 팀이 여러 라운드(예선+본선)에 있을 수 있어, tie 1개만 있어도 라운드를 보고
+      //    선택할 수 있도록 리스트로 표시 (자동 push 제거)
       if (ties.length === 1) { router.push(`/lineup/${ties[0].id}`); return }
       setTeamTies(ties)
     } finally { setLoading(false) }
+  }
+
+  // round 한글 라벨
+  function roundKR(round: string | null): string {
+    if (!round) return ''
+    const m: Record<string, string> = {
+      group: '예선', full_league: '풀리그',
+      round_of_32: '32강', round_of_16: '16강',
+      quarter: '8강', semi: '4강', final: '결승',
+    }
+    return m[round] || round
+  }
+  function roundColor(round: string | null): string {
+    if (!round) return 'bg-stone-100 text-stone-600'
+    const tournament = ['round_of_32','round_of_16','quarter','semi','final']
+    return tournament.includes(round)
+      ? 'bg-purple-100 text-purple-700 border border-purple-200'
+      : 'bg-blue-100 text-blue-700 border border-blue-200'
   }
 
   async function pickDivision(choice: DivisionChoice) {
@@ -455,19 +475,39 @@ export default function PinPage() {
               {selectedDivName ? `${selectedDivName} · 대전 선택` : '타이를 선택하세요'}
             </p>
             <div className="space-y-2">
-              {teamTies.map((tie: any) => (
-                <button key={tie.id} onClick={() => goToTie(tie.id)}
-                  className="w-full bg-white border-2 border-blue-200 rounded-xl p-4 text-left hover:border-blue-400 transition-all">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="font-semibold">{tie.club_a?.name}</span>
-                      <span className="text-stone-400 mx-2">vs</span>
-                      <span className="font-semibold">{tie.club_b?.name}</span>
-                    </div>
-                    <span className="text-xs text-stone-400">#{tie.tie_order}</span>
-                  </div>
-                </button>
-              ))}
+              {(() => {
+                // 같은 두 팀 조합이 여러 번 나타나면 표시 강조 (예선+본선 케이스)
+                const pairCount = new Map<string, number>()
+                for (const t of teamTies) {
+                  const key = [t.club_a?.id, t.club_b?.id].sort().join('|')
+                  pairCount.set(key, (pairCount.get(key) || 0) + 1)
+                }
+                return teamTies.map((tie: any) => {
+                  const key = [tie.club_a?.id, tie.club_b?.id].sort().join('|')
+                  const isDup = (pairCount.get(key) || 0) > 1
+                  return (
+                    <button key={tie.id} onClick={() => goToTie(tie.id)}
+                      className={`w-full bg-white border-2 rounded-xl p-4 text-left transition-all ${
+                        isDup ? 'border-amber-300 hover:border-amber-500' : 'border-blue-200 hover:border-blue-400'
+                      }`}>
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span className={`text-xs px-2 py-0.5 rounded font-bold ${roundColor(tie.round)}`}>
+                          {roundKR(tie.round)}
+                        </span>
+                        <span className="text-xs text-stone-400">#{tie.tie_order || '-'}</span>
+                      </div>
+                      <div className="flex items-center">
+                        <span className="font-semibold">{tie.club_a?.name}</span>
+                        <span className="text-stone-400 mx-2">vs</span>
+                        <span className="font-semibold">{tie.club_b?.name}</span>
+                      </div>
+                      {isDup && (
+                        <p className="text-[10px] text-amber-600 mt-1.5">⚠️ 같은 팀이 여러 라운드에 있어요. 라운드를 잘 확인하세요.</p>
+                      )}
+                    </button>
+                  )
+                })
+              })()}
             </div>
             <button onClick={resetMode} className="w-full text-stone-400 text-sm py-2 hover:text-stone-600">← 뒤로가기</button>
           </>

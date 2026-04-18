@@ -291,9 +291,27 @@ export default function LineupPage() {
       <div className="max-w-lg mx-auto p-6 space-y-6">
         <div className="text-center">
           <h1 className="text-xl font-bold">단체전</h1>
-          {/* ★ 수정: 경기방식 라벨 표시 */}
+          {/* ★ 라운드 배지를 크게 표시 — 같은 팀이 여러 라운드에 있을 때 혼동 방지 */}
+          {tie?.round && (() => {
+            const roundMap: Record<string, string> = {
+              group: '예선', full_league: '풀리그',
+              round_of_32: '32강', round_of_16: '16강',
+              quarter: '8강', semi: '4강', final: '결승',
+            }
+            const tournament = ['round_of_32','round_of_16','quarter','semi','final']
+            const isT = tournament.includes(tie.round)
+            return (
+              <div className="mt-2">
+                <span className={`inline-block text-sm font-bold px-3 py-1 rounded-full ${
+                  isT ? 'bg-purple-100 text-purple-700 border border-purple-300' : 'bg-blue-100 text-blue-700 border border-blue-300'
+                }`}>
+                  {roundMap[tie.round] || tie.round}
+                </span>
+              </div>
+            )
+          })()}
           {clubA && clubB && (
-            <p className="text-gray-600 mt-1">
+            <p className="text-gray-600 mt-2">
               {clubA.name} vs {clubB.name} · {tie?.rubber_count}복식
               {teamMatchType && (
                 <span className="ml-1 text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">
