@@ -88,6 +88,12 @@ export default function AdminPinManagePage() {
     loadPinLocks(s.event_id)
     loadPinData(s.event_id)
     loadVenues(s.event_id)
+
+    // ✅ 단체전 ties 상태 30초마다 자동 갱신 (라인업 제출/점수 변경 실시간 반영)
+    const iv = setInterval(() => {
+      loadTiesData(s.event_id)
+    }, 30000)
+    return () => clearInterval(iv)
   }, [])
 
   // ── 베뉴 로드 → 글로벌 코트 이름 배열 생성 (dashboard/courts와 동일 로직) ──
@@ -707,6 +713,9 @@ export default function AdminPinManagePage() {
                         {courtNumToName((tie as any).court_number) && (
                           <span className="text-xs bg-[#2d5016] text-white px-2 py-0.5 rounded-full font-semibold">
                             📍 {courtNumToName((tie as any).court_number)}
+                            {(tie as any).court_order != null && (
+                              <span className="ml-1 opacity-80">({(tie as any).court_order}번째)</span>
+                            )}
                           </span>
                         )}
                       </div>
