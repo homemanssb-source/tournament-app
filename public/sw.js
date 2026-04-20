@@ -1,5 +1,5 @@
 // JTA 제주테니스 Service Worker
-const CACHE_NAME = 'jta-ranking-v9';
+const CACHE_NAME = 'jta-ranking-v10';
 const STATIC_ASSETS = ['/icon-192x192.png', '/icon-512x512.png', '/manifest.json'];
 
 self.addEventListener('install', e => {
@@ -79,15 +79,17 @@ self.addEventListener('push', e => {
         });
       }
 
-      // ✅ requireInteraction: false → OS가 즉시 표시 (지연 현상 감소)
+      // ✅ requireInteraction: true → 사용자가 탭/닫기 누를 때까지 알림이 화면에 유지됨
+      //    (Android Chrome 완전 지원, iOS PWA는 제한 있음)
+      // ✅ 진동 패턴 강화: 길게-짧게-길게-짧게-길게-짧게-길게 (약 3초, 확실히 인지)
       return self.registration.showNotification(d.title || '🎾 JTA 제주테니스', {
         body: d.body || '새로운 알림이 있습니다.',
         icon: '/icon-192x192.png',
         badge: '/icon-72x72.png',
-        vibrate: [300, 100, 300, 100, 500],
+        vibrate: [500, 200, 500, 200, 500, 200, 800],
         tag: uniqueTag,
         renotify: true,
-        requireInteraction: false,
+        requireInteraction: true,
         silent: false,
         data: { url: d.url || '/pin/matches' },
         actions: [
