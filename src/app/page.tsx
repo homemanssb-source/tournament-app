@@ -9,6 +9,14 @@ const SOFT_SHADOW_LG = '0 2px 4px rgba(0,0,0,0.04), 0 16px 40px -8px rgba(0,0,0,
 const BG_COLOR = '#f5f3ee'
 const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 
+// 앱A (jeju-tennis-app) 외부 링크
+const APP_A_BASE = 'https://jeju-tennis-app.vercel.app'
+const QUICK_LINKS = [
+  { href: `${APP_A_BASE}/notice`,  title: '공지사항' },
+  { href: `${APP_A_BASE}/apply`,   title: '신청확인' },
+  { href: `${APP_A_BASE}/players`, title: '선수조회' },
+]
+
 // ── 유틸 ────────────────────────────────────────────────────
 function formatToday(): string {
   const d = new Date()
@@ -342,6 +350,36 @@ export default function HomePage() {
           title="내 경기"
           desc="점수 입력 · 알람 설정 · 오더 제출"
         />
+
+        {/* ========== 회원 서비스 퀵 링크 (앱A 외부 이동) ========== */}
+        <div className="mt-4">
+          <div className="flex items-center gap-2 mb-3 px-1">
+            <span className="text-[10px] font-black tracking-[0.22em] text-stone-400 uppercase">
+              회원 서비스
+            </span>
+            <div className="flex-1 h-px bg-stone-200" />
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            {QUICK_LINKS.map(link => (
+              <a
+                key={link.href}
+                href={link.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group bg-white rounded-2xl py-4 px-3 text-center relative transition-shadow hover:shadow-md active:scale-[0.97]"
+                style={{ boxShadow: SOFT_SHADOW }}
+              >
+                <span className="absolute top-2.5 right-2.5 text-[11px] text-stone-300 group-hover:text-stone-900 transition-colors">
+                  ↗
+                </span>
+                <div className="text-[13px] font-black text-stone-900 tracking-tight">
+                  {link.title}
+                </div>
+              </a>
+            ))}
+          </div>
+        </div>
 
         {/* 5) 푸터 */}
         <div className="pt-10 pb-4 flex flex-col items-center gap-5">
