@@ -131,33 +131,42 @@ export async function POST(req: NextRequest) {
       }
     } else {
       // ✅ 단체전 ties: 코트 + 날짜 필터링 (어제 못 끝낸 tie를 잘못 잡지 않게)
-      // 1) 같은 court_number의 모든 ties + division match_date 조인
+      // FK 조인이 PostgREST 캐시에서 못 찾아서 divisions 별도 조회로 우회
       const { data: tieList } = await supabaseAdmin
         .from('ties')
-        .select('id, club_a_id, club_b_id, status, tie_order, court_order, division_id, divisions:division_id(match_date,name)')
+        .select('id, club_a_id, club_b_id, status, tie_order, court_order, division_id')
         .eq('event_id', event_id).eq('court_number', courtNum)
         .neq('status', 'completed').order('court_order').order('tie_order')
 
       if (tieList && tieList.length > 0) {
-        // 2) "오늘 날짜" 결정: 입력 match_date > in_progress tie의 match_date
-        //    > 서버 시간 KST 오늘 (날짜가 다른 ties 섞여있을 때 fallback)
-        const liveTie = tieList.find((t: any) => t.status === 'in_progress')
-        const liveMatchDate = (liveTie as any)?.divisions?.match_date || null
+        // divisions 별도 조회 → division_id → {name, match_date} 매핑
+        const divIds = [...new Set((tieList as any[]).map((t: any) => t.division_id).filter(Boolean))]
+        const divMap: Record<string, { name: string; match_date: string | null }> = {}
+        if (divIds.length > 0) {
+          const { data: divs } = await supabaseAdmin
+            .from('divisions').select('id, name, match_date').in('id', divIds)
+          for (const d of (divs || [])) divMap[(d as any).id] = { name: (d as any).name, match_date: (d as any).match_date }
+        }
+
+        // "오늘 날짜" 결정: 입력 match_date > in_progress tie의 match_date > KST 오늘
+        const liveTie = (tieList as any[]).find((t: any) => t.status === 'in_progress')
+        const liveMatchDate = liveTie ? divMap[liveTie.division_id]?.match_date : null
         const kstToday = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
         const todayDate = match_date || liveMatchDate || kstToday
 
-        // 3) 날짜 필터: 같은 match_date의 ties 우선. 비어있으면(매칭 0건) 전체 사용
-        const sameDateTies = tieList.filter((t: any) =>
-          t.divisions?.match_date === todayDate || !t.divisions?.match_date
-        )
+        // 날짜 필터: 같은 match_date의 ties 우선. 비어있으면 전체 사용
+        const sameDateTies = (tieList as any[]).filter((t: any) => {
+          const d = divMap[t.division_id]
+          return d?.match_date === todayDate || !d?.match_date
+        })
         const candidates = sameDateTies.length > 0 ? sameDateTies : tieList
 
-        // 4) 다음 진행 대상: 진행중 > 첫 pending/lineup_ready
-        const activeTie = candidates.find((t: any) => t.status === 'in_progress') || candidates[0]
+        // 다음 진행 대상: 진행중 > 첫 pending/lineup_ready
+        const activeTie: any = (candidates as any[]).find((t: any) => t.status === 'in_progress') || candidates[0]
         if (activeTie) {
           teamAId = activeTie.club_a_id; teamBId = activeTie.club_b_id
           targetId = activeTie.id
-          divisionName = (activeTie as any)?.divisions?.name || '단체전'
+          divisionName = divMap[activeTie.division_id]?.name || '단체전'
           const [{ data: clubA }, { data: clubB }] = await Promise.all([
             supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_a_id).single(),
             supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_b_id).single(),
