@@ -3,53 +3,43 @@ import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 
-const MEMBER_CARDS = [
-  {
-    href: '/events',
-    emoji: '📺',
-    title: '대회 보기',
-    desc: '조별리그 · 토너먼트 · 경기결과 · 이벤트현황',
-    color: 'bg-gradient-to-br from-emerald-50 to-green-100 border-green-200 hover:border-green-400',
-    iconBg: 'bg-white/70',
-    badge: 'LIVE',
-  },
-  {
-    href: '/pin',
-    emoji: '📋',
-    title: '점수 직접입력',
-    desc: 'PIN으로 내 경기 결과 직접 입력',
-    color: 'bg-gradient-to-br from-amber-50 to-yellow-100 border-amber-200 hover:border-amber-400',
-    iconBg: 'bg-white/70',
-    badge: null,
-  },
-]
+// ── 스타일 토큰 ─────────────────────────────────────────────
+const SOFT_SHADOW = '0 1px 2px rgba(0,0,0,0.03), 0 8px 32px -4px rgba(0,0,0,0.06)'
+const SOFT_SHADOW_LG = '0 2px 4px rgba(0,0,0,0.04), 0 16px 40px -8px rgba(0,0,0,0.08)'
+const BG_COLOR = '#f5f3ee'
+const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 
-const ADMIN_CARDS = [
-  {
-    href: '/venue',
-    emoji: '🏟',
-    title: '현장 경기관리',
-    desc: '경기장 PIN으로 이벤트 관리',
-    color: 'bg-gradient-to-br from-orange-50 to-orange-100 border-orange-200 hover:border-orange-400',
-    wide: false,
-  },
-  {
-    href: '/admin-pin',
-    emoji: '🔑',
-    title: '관리자 모드',
-    desc: '마스터PIN으로 점수조정/설정',
-    color: 'bg-gradient-to-br from-red-50 to-rose-100 border-red-200 hover:border-red-400',
-    wide: false,
-  },
-  {
-    href: '/dashboard',
-    emoji: '📊',
-    title: '대회 운영 대시보드',
-    desc: '팀관리 · 조편성 · 경기 · 이벤트설정 전체 관리',
-    color: 'bg-gradient-to-br from-blue-50 to-sky-100 border-blue-200 hover:border-blue-400',
-    wide: true,
-  },
-]
+// ── 유틸 ────────────────────────────────────────────────────
+function formatToday(): string {
+  const d = new Date()
+  return `${d.getMonth() + 1}.${d.getDate()} · ${DAY_LABELS[d.getDay()]}`
+}
+
+function formatEventDate(ymd: string | null | undefined): string {
+  if (!ymd) return ''
+  return ymd.replaceAll('-', '.')
+}
+
+function daysUntil(ymd: string): number {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const target = new Date(ymd + 'T00:00:00')
+  return Math.ceil((target.getTime() - today.getTime()) / 86400000)
+}
+
+function ddayLabel(ymd: string): string {
+  const n = daysUntil(ymd)
+  if (n <= 0) return 'D-DAY'
+  return `D-${n}`
+}
+
+// ── 타입 ────────────────────────────────────────────────────
+interface EventInfo {
+  id: string
+  name: string
+  date: string
+  event_type: 'individual' | 'team'
+}
 
 interface Stats {
   inProgress: number
@@ -57,219 +47,437 @@ interface Stats {
   totalTeams: number
 }
 
+type PageState =
+  | { kind: 'live'; event: EventInfo }
+  | { kind: 'upcoming'; event: EventInfo }
+  | { kind: 'standby' }
+
+// ── 페이지 ──────────────────────────────────────────────────
 export default function HomePage() {
-  const [activeTab, setActiveTab] = useState<'member' | 'admin'>('member')
+  const [state, setState] = useState<PageState>({ kind: 'standby' })
   const [stats, setStats] = useState<Stats>({ inProgress: 0, activeCourts: 0, totalTeams: 0 })
   const [statsLoading, setStatsLoading] = useState(true)
+  const [todayLabel, setTodayLabel] = useState('')
+  const [sheetOpen, setSheetOpen] = useState(false)
 
+  // SSR 불일치 방지: 마운트 후에만 오늘 날짜 계산
   useEffect(() => {
-    async function fetchStats() {
+    setTodayLabel(formatToday())
+  }, [])
+
+  // 이벤트 + 통계 조회
+  useEffect(() => {
+    let cancelled = false
+
+    async function load() {
       try {
+        // 1) Live 먼저
         const { data: activeEvents } = await supabase
           .from('events')
-          .select('id')
+          .select('id, name, date, event_type')
           .eq('status', 'active')
+          .order('date', { ascending: false })
 
-        if (!activeEvents || activeEvents.length === 0) {
+        if (cancelled) return
+
+        if (activeEvents && activeEvents.length > 0) {
+          const ev = activeEvents[0] as EventInfo
+          setState({ kind: 'live', event: ev })
+          await loadStats(activeEvents.map((e: any) => e.id))
+          return
+        }
+
+        // 2) Upcoming
+        const today = new Date().toISOString().slice(0, 10)
+        const { data: nextEvents } = await supabase
+          .from('events')
+          .select('id, name, date, event_type')
+          .gte('date', today)
+          .neq('status', 'completed')
+          .order('date', { ascending: true })
+          .limit(1)
+
+        if (cancelled) return
+
+        if (nextEvents && nextEvents.length > 0) {
+          setState({ kind: 'upcoming', event: nextEvents[0] as EventInfo })
           setStatsLoading(false)
           return
         }
 
-        const eventIds = activeEvents.map(e => e.id)
+        // 3) Standby
+        setState({ kind: 'standby' })
+        setStatsLoading(false)
+      } catch (e) {
+        console.error('home load error', e)
+        if (!cancelled) setStatsLoading(false)
+      }
+    }
 
-        const matchInProgressPromise = supabase
-          .from('matches')
-          .select('*', { count: 'exact', head: true })
-          .in('event_id', eventIds)
-          .eq('status', 'IN_PROGRESS')
-
-        const tieInProgressPromise = supabase
-          .from('ties')
-          .select('*', { count: 'exact', head: true })
-          .in('event_id', eventIds)
-          .eq('status', 'in_progress')
-
-        const courtMatchesPromise = supabase
-          .from('matches')
-          .select('court')
-          .in('event_id', eventIds)
-          .eq('status', 'IN_PROGRESS')
-          .not('court', 'is', null)
-
-        const totalTeamsPromise = supabase
-          .from('teams')
-          .select('*', { count: 'exact', head: true })
-          .in('event_id', eventIds)
-
+    async function loadStats(eventIds: string[]) {
+      try {
         const [
           { count: matchInProgress },
           { count: tieInProgress },
           { data: courtMatches },
           { count: totalTeams },
         ] = await Promise.all([
-          matchInProgressPromise,
-          tieInProgressPromise,
-          courtMatchesPromise,
-          totalTeamsPromise,
+          supabase.from('matches').select('*', { count: 'exact', head: true })
+            .in('event_id', eventIds).eq('status', 'IN_PROGRESS'),
+          supabase.from('ties').select('*', { count: 'exact', head: true })
+            .in('event_id', eventIds).eq('status', 'in_progress'),
+          supabase.from('matches').select('court')
+            .in('event_id', eventIds).eq('status', 'IN_PROGRESS').not('court', 'is', null),
+          supabase.from('teams').select('*', { count: 'exact', head: true })
+            .in('event_id', eventIds),
         ])
 
-        const activeCourts = new Set(courtMatches?.map(m => m.court)).size
+        if (cancelled) return
 
+        const activeCourts = new Set((courtMatches ?? []).map((m: any) => m.court)).size
         setStats({
           inProgress: (matchInProgress ?? 0) + (tieInProgress ?? 0),
           activeCourts,
           totalTeams: totalTeams ?? 0,
         })
       } catch (e) {
-        console.error('stats fetch error', e)
+        console.error('stats load error', e)
       } finally {
-        setStatsLoading(false)
+        if (!cancelled) setStatsLoading(false)
       }
     }
 
-    fetchStats()
-    const timer = setInterval(fetchStats, 30000)
-    return () => clearInterval(timer)
+    load()
+    const iv = setInterval(load, 30000)
+    return () => {
+      cancelled = true
+      clearInterval(iv)
+    }
   }, [])
 
+  // 바텀시트: ESC + body scroll lock
+  useEffect(() => {
+    if (!sheetOpen) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setSheetOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [sheetOpen])
+
+  // ── 상태별 프리셋 ─────────────────────────────────────────
+  const cardPreset = (() => {
+    if (state.kind === 'live') {
+      return {
+        dotBg: 'bg-red-500',
+        dotLabel: 'LIVE',
+        dotLabelColor: 'text-red-500',
+        badgeText: '진행중',
+        badgeClass: 'text-stone-400 bg-stone-50',
+        radialStyle: { background: 'radial-gradient(circle, #fef3f2 0%, transparent 70%)' },
+      }
+    }
+    if (state.kind === 'upcoming') {
+      return {
+        dotBg: 'bg-blue-500',
+        dotLabel: 'UPCOMING',
+        dotLabelColor: 'text-blue-600',
+        badgeText: ddayLabel(state.event.date),
+        badgeClass: 'bg-blue-500 text-white',
+        radialStyle: { background: 'radial-gradient(circle, #eff6ff 0%, transparent 70%)' },
+      }
+    }
+    return {
+      dotBg: 'bg-stone-300',
+      dotLabel: 'STANDBY',
+      dotLabelColor: 'text-stone-400',
+      badgeText: '',
+      badgeClass: '',
+      radialStyle: { background: 'radial-gradient(circle, #f5f5f4 0%, transparent 70%)' },
+    }
+  })()
+
+  const currentEvent =
+    state.kind === 'live' || state.kind === 'upcoming' ? state.event : null
+
   return (
-    <div className="min-h-screen bg-stone-100 flex flex-col items-center justify-start py-8 px-4">
-      <div className="w-full max-w-sm">
+    <div className="min-h-screen" style={{ backgroundColor: BG_COLOR }}>
+      <div className="max-w-sm mx-auto py-6 px-5">
 
-        {/* Header */}
-        <div className="rounded-3xl overflow-hidden mb-4 shadow-lg"
-          style={{ background: 'linear-gradient(135deg, #1a2e1a 0%, #2d5016 50%, #3d6b1e 100%)' }}>
-          <div className="px-6 py-7 flex items-center gap-4 relative overflow-hidden">
-            <div className="absolute -top-8 -right-8 w-36 h-36 rounded-full bg-white/5" />
-            <div className="absolute -bottom-6 -left-6 w-24 h-24 rounded-full bg-white/5" />
-            <div className="relative z-10">
-              <h1 className="text-white text-xl font-black tracking-tight leading-tight">제주시테니스대회</h1>
-              <p className="text-white/50 text-xs tracking-widest uppercase mt-0.5">Tennis Tournament Manager</p>
-            </div>
+        {/* 1) 헤더 */}
+        <div className="flex items-center mb-6">
+          <div className="text-[10px] font-black tracking-[0.15em] text-stone-500 uppercase">
+            제주시테니스협회
+          </div>
+          <div
+            className="ml-auto rounded-full px-3 py-1.5 bg-white"
+            style={{ boxShadow: SOFT_SHADOW }}
+          >
+            <span className="text-[10px] tabular-nums text-stone-500 font-bold">
+              {todayLabel || '\u00A0'}
+            </span>
           </div>
         </div>
 
-        {/* Tab Bar */}
-        <div className="bg-white rounded-2xl shadow-sm flex mb-4 p-1 gap-1">
-          <button
-            onClick={() => setActiveTab('member')}
-            className={`flex-1 flex flex-col items-center py-3 rounded-xl text-xs font-bold transition-all gap-1
-              ${activeTab === 'member'
-                ? 'bg-green-600 text-white shadow-md shadow-green-200'
-                : 'text-stone-400 hover:text-stone-600'}`}
-          >
-            <span className="text-base">👥</span>
-            회원
-          </button>
-          <button
-            onClick={() => setActiveTab('admin')}
-            className={`flex-1 flex flex-col items-center py-3 rounded-xl text-xs font-bold transition-all gap-1
-              ${activeTab === 'admin'
-                ? 'bg-stone-700 text-white shadow-md shadow-stone-300'
-                : 'text-stone-400 hover:text-stone-600'}`}
-          >
-            <span className="text-base">⚙️</span>
-            관리자
-          </button>
-        </div>
+        {/* 2) 대회 대형 카드 */}
+        <div
+          className="relative overflow-hidden bg-white rounded-[28px] p-7 mb-4"
+          style={{ boxShadow: SOFT_SHADOW_LG }}
+        >
+          <div
+            aria-hidden="true"
+            className="absolute -top-16 -right-16 w-48 h-48 rounded-full pointer-events-none"
+            style={cardPreset.radialStyle}
+          />
 
-        {/* Member Tab */}
-        {activeTab === 'member' && (
-          <div className="flex flex-col gap-3">
-            <p className="text-xs font-bold tracking-widest uppercase text-stone-400 px-1">회원 메뉴</p>
+          <div className="relative">
+            {/* 상태 배지 행 */}
+            <div className="flex items-center gap-2 mb-5">
+              {state.kind === 'live' ? (
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full rounded-full bg-red-500 animate-ping opacity-80" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                </span>
+              ) : (
+                <span className={`inline-flex h-2 w-2 rounded-full ${cardPreset.dotBg}`} />
+              )}
 
-            {MEMBER_CARDS.map(card => (
-              <Link
-                key={card.href}
-                href={card.href}
-                className={`relative flex items-center gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm hover:shadow-md active:scale-[0.98] ${card.color}`}
+              <span
+                className={`text-[10px] font-black tracking-[0.2em] uppercase ${cardPreset.dotLabelColor}`}
               >
-                {card.badge && (
-                  <span className="absolute top-3 right-4 bg-red-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-full tracking-wide">
-                    {card.badge}
-                  </span>
-                )}
-                <div className={`w-13 h-13 min-w-[52px] min-h-[52px] rounded-2xl ${card.iconBg} flex items-center justify-center text-2xl shadow-sm`}>
-                  {card.emoji}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h2 className="font-black text-base text-stone-800 leading-tight">{card.title}</h2>
-                  <p className="text-xs text-stone-500 mt-1 leading-relaxed">{card.desc}</p>
-                </div>
-                <span className="text-stone-300 text-xl font-light">›</span>
-              </Link>
-            ))}
+                {cardPreset.dotLabel}
+              </span>
 
-            {/* Quick Stats */}
-            <div className="bg-white rounded-2xl p-4 shadow-sm mt-1">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-bold text-stone-400">현재 진행 현황</p>
-                {statsLoading && (
-                  <span className="text-[10px] text-stone-300 animate-pulse">불러오는 중...</span>
-                )}
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { num: statsLoading ? '·' : String(stats.inProgress), label: '진행중 경기' },
-                  { num: statsLoading ? '·' : String(stats.activeCourts), label: '사용 코트' },
-                  { num: statsLoading ? '·' : String(stats.totalTeams), label: '참가팀' },
-                ].map(s => (
-                  <div key={s.label} className="bg-stone-50 rounded-xl py-3 text-center">
-                    <div className="text-xl font-black text-green-700">{s.num}</div>
-                    <div className="text-[10px] text-stone-400 mt-0.5">{s.label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Admin Tab */}
-        {activeTab === 'admin' && (
-          <div className="flex flex-col gap-3">
-            <p className="text-xs font-bold tracking-widest uppercase text-stone-400 px-1">관리자 기능</p>
-
-            <div className="grid grid-cols-2 gap-3">
-              {ADMIN_CARDS.filter(c => !c.wide).map(card => (
-                <Link
-                  key={card.href}
-                  href={card.href}
-                  className={`flex flex-col p-4 rounded-2xl border-2 transition-all shadow-sm hover:shadow-md active:scale-[0.98] ${card.color}`}
+              {cardPreset.badgeText && (
+                <span
+                  className={`ml-auto text-[10px] font-bold rounded-full px-2.5 py-1 tabular-nums ${cardPreset.badgeClass}`}
+                  style={
+                    state.kind === 'upcoming'
+                      ? { letterSpacing: '0.05em' }
+                      : undefined
+                  }
                 >
-                  <div className="text-2xl mb-3">{card.emoji}</div>
-                  <h2 className="font-black text-sm text-stone-800 leading-tight">{card.title}</h2>
-                  <p className="text-[11px] text-stone-500 mt-1 leading-relaxed">{card.desc}</p>
-                  <div className="mt-3 inline-flex items-center gap-1 bg-black/8 rounded-full px-2 py-0.5 self-start">
-                    <span className="text-[10px]">🔒</span>
-                    <span className="text-[10px] font-bold text-stone-500">PIN 필요</span>
-                  </div>
-                </Link>
-              ))}
+                  {cardPreset.badgeText}
+                </span>
+              )}
             </div>
 
-            {ADMIN_CARDS.filter(c => c.wide).map(card => (
-              <Link
-                key={card.href}
-                href={card.href}
-                className={`flex items-center gap-4 p-5 rounded-2xl border-2 transition-all shadow-sm hover:shadow-md active:scale-[0.98] ${card.color}`}
-              >
-                <div className="text-3xl">{card.emoji}</div>
-                <div className="flex-1">
-                  <h2 className="font-black text-base text-stone-800 leading-tight">{card.title}</h2>
-                  <p className="text-xs text-stone-500 mt-1 leading-relaxed">{card.desc}</p>
-                  <div className="mt-2 inline-flex items-center gap-1 bg-black/8 rounded-full px-2 py-0.5">
-                    <span className="text-[10px]">🔒</span>
-                    <span className="text-[10px] font-bold text-stone-500">PIN 필요</span>
-                  </div>
+            {/* 대회명 */}
+            {currentEvent ? (
+              <>
+                <h1
+                  className="text-[24px] leading-[1.15] font-black text-stone-900"
+                  style={{ letterSpacing: '-0.03em' }}
+                >
+                  {currentEvent.name}
+                </h1>
+
+                <div className="mt-5 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-bold text-stone-600 bg-stone-100 rounded-full px-2.5 py-1">
+                    {currentEvent.event_type === 'team' ? '단체전' : '개인전'}
+                  </span>
+                  <span className="text-[11px] font-bold text-stone-600 bg-stone-100 rounded-full px-2.5 py-1 tabular-nums">
+                    {formatEventDate(currentEvent.date)}
+                  </span>
                 </div>
-                <span className="text-stone-300 text-xl font-light">›</span>
-              </Link>
+              </>
+            ) : (
+              <>
+                <h1
+                  className="text-[24px] leading-[1.15] font-black text-stone-900"
+                  style={{ letterSpacing: '-0.03em' }}
+                >
+                  다음 대회를
+                  <br />
+                  기다리고 있습니다
+                </h1>
+                <p className="mt-4 text-[12px] text-stone-400">
+                  현재 진행 중인 대회가 없습니다
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* 3) 통계 그리드 (Live 상태에만) */}
+        {state.kind === 'live' && (
+          <div className="grid grid-cols-3 gap-2.5 mb-4">
+            {[
+              { label: '진행경기', value: stats.inProgress },
+              { label: '사용코트', value: stats.activeCourts },
+              { label: '참가팀', value: stats.totalTeams },
+            ].map(s => (
+              <div
+                key={s.label}
+                className="bg-white rounded-2xl p-4"
+                style={{ boxShadow: SOFT_SHADOW }}
+              >
+                <div className="text-[10px] font-bold text-stone-400 mb-1.5">
+                  {s.label}
+                </div>
+                <div
+                  className="text-[26px] tabular-nums font-black text-stone-900 leading-none"
+                  style={{ letterSpacing: '-0.03em' }}
+                >
+                  {statsLoading ? '·' : s.value}
+                </div>
+              </div>
             ))}
           </div>
         )}
 
-        {/* Footer */}
-        <p className="text-center text-[11px] text-stone-400 mt-6">제주시테니스협회</p>
+        {/* 4) 메뉴 카드 2개 */}
+        <MenuCard
+          href="/events"
+          title="대회 보기"
+          desc="조별리그 · 토너먼트 · 경기결과"
+        />
+        <MenuCard
+          href="/pin"
+          title="내 경기"
+          desc="점수 입력 · 알람 설정 · 오더 제출"
+        />
+
+        {/* 5) 푸터 */}
+        <div className="pt-10 pb-4 flex flex-col items-center gap-5">
+          <button
+            type="button"
+            onClick={() => setSheetOpen(true)}
+            aria-label="관리자 메뉴 열기"
+            className="group w-10 h-10 rounded-full bg-white flex items-center justify-center gap-1"
+            style={{ boxShadow: SOFT_SHADOW }}
+          >
+            {[0, 1, 2].map(i => (
+              <span
+                key={i}
+                className="w-[3px] h-[3px] rounded-full bg-stone-300 group-hover:bg-stone-700 transition-colors"
+              />
+            ))}
+          </button>
+          <div className="text-[9px] text-stone-400 tracking-[0.25em] font-bold">
+            JEJU TENNIS ASSOCIATION
+          </div>
+        </div>
+      </div>
+
+      {/* 관리자 바텀시트 */}
+      {sheetOpen && (
+        <AdminSheet onClose={() => setSheetOpen(false)} />
+      )}
+
+      <style jsx global>{`
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes slideUpSheet {
+          from { transform: translate(-50%, 100%); }
+          to { transform: translate(-50%, 0); }
+        }
+      `}</style>
+    </div>
+  )
+}
+
+// ── 메뉴 카드 ──────────────────────────────────────────────
+function MenuCard({
+  href,
+  title,
+  desc,
+}: {
+  href: string
+  title: string
+  desc: string
+}) {
+  return (
+    <Link
+      href={href}
+      className="group block bg-white rounded-2xl p-5 mb-2.5 active:scale-[0.99] transition-transform"
+      style={{ boxShadow: SOFT_SHADOW }}
+    >
+      <div className="flex items-center">
+        <div className="flex-1 min-w-0">
+          <div className="text-[17px] font-black text-stone-900 tracking-tight">
+            {title}
+          </div>
+          <div className="text-[11px] text-stone-400 mt-1">{desc}</div>
+        </div>
+        <div className="w-9 h-9 rounded-full bg-stone-50 flex items-center justify-center group-hover:bg-stone-900 transition-colors">
+          <span className="text-stone-400 group-hover:text-white text-sm transition-colors">
+            →
+          </span>
+        </div>
+      </div>
+    </Link>
+  )
+}
+
+// ── 관리자 바텀시트 ────────────────────────────────────────
+const ADMIN_MENUS: { href: string; title: string; desc: string }[] = [
+  { href: '/venue', title: '현장 경기관리', desc: '경기장 PIN으로 이벤트 관리' },
+  { href: '/admin-pin', title: '관리자 모드', desc: '마스터 PIN으로 점수조정 · 설정' },
+  { href: '/dashboard', title: '대회 운영 대시보드', desc: '팀관리 · 조편성 · 전체 관리' },
+]
+
+function AdminSheet({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-label="관리자 메뉴"
+    >
+      <div
+        onClick={onClose}
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        style={{ animation: 'fadeIn 0.25s ease-out' }}
+      />
+      <div
+        className="absolute bottom-0 left-1/2 w-full max-w-sm bg-white rounded-t-3xl p-6 pb-10"
+        style={{
+          transform: 'translate(-50%, 0)',
+          animation: 'slideUpSheet 0.3s cubic-bezier(0.32, 0.72, 0, 1)',
+        }}
+      >
+        <div className="flex justify-center mb-5">
+          <div className="w-10 h-1 rounded-full bg-stone-200" />
+        </div>
+
+        <div className="text-[10px] font-black tracking-[0.22em] text-stone-400 uppercase mb-3">
+          관리자 기능
+        </div>
+
+        <div>
+          {ADMIN_MENUS.map((m, idx) => (
+            <Link
+              key={m.href}
+              href={m.href}
+              onClick={onClose}
+              className={`flex items-center py-4 px-2 -mx-2 rounded-xl hover:bg-stone-50 transition-colors ${
+                idx < ADMIN_MENUS.length - 1 ? 'border-b border-stone-100' : ''
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-[15px] font-black text-stone-900">{m.title}</div>
+                <div className="text-[11px] text-stone-400 mt-0.5">{m.desc}</div>
+              </div>
+              <span className="text-stone-300 text-lg font-light">→</span>
+            </Link>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-full mt-6 py-3.5 rounded-2xl bg-stone-100 text-stone-600 text-sm font-bold hover:bg-stone-200 transition-colors"
+        >
+          닫기
+        </button>
       </div>
     </div>
   )
