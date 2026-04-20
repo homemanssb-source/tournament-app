@@ -248,6 +248,8 @@ export default function PinPage() {
         .select('id, tie_order, status, round, club_a:clubs!ties_club_a_id_fkey(id, name), club_b:clubs!ties_club_b_id_fkey(id, name)')
         .or(orFilter)
         .in('status', ['pending', 'lineup_phase', 'lineup_ready', 'in_progress'])
+        // ✅ 승자 확정된 tie는 숨김 (예선 과반 후 winning_club_id 있어도 status는 in_progress 유지되므로 별도 필터 필요)
+        .is('winning_club_id', null)
         .order('tie_order')
 
       if (!ties || ties.length === 0) { setError(`${divName ? divName + ' · ' : ''}진행중인 타이가 없습니다.`); return }
