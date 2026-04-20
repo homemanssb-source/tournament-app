@@ -282,7 +282,7 @@ export default function PinMatchesPage() {
       if (perm === 'granted') {
         showInAppNotif('🎾 알림 활성화', '경기 알림이 설정되었습니다.')
         const pin = session?.pin || sessionStorage.getItem('venue_pin') || session?.token
-        if (pin) await subscribeWithPin(pin)
+        if (pin) await subscribeWithPin(pin, { mode: 'individual', eventId: session?.event_id })
         else autoResubscribe()
       } else if (perm === 'denied') {
         alert('알림이 차단되어 있습니다.\n브라우저 설정에서 알림 허용으로 변경해주세요.')

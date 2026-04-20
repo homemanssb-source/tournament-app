@@ -336,8 +336,8 @@ export default function LineupPage() {
         {step === 'edit' && myClub && tie && (
          <div className="space-y-4">
 
-          {/* 🔔 알림 구독 버튼 */}
-           <PinSubscribeButton pin={pinInput} />
+          {/* 🔔 알림 구독 버튼 — 단체전 팀장 모드 + 현재 대회 스코프 */}
+           <PinSubscribeButton pin={pinInput} mode="team" eventId={tie.event_id} />
 
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
               <p className="font-medium text-blue-800">📋 {myClub.name} 라인업 작성</p>

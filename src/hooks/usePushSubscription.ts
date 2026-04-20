@@ -19,12 +19,20 @@ function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
 }
 
 // 서버에 구독 정보 저장
-async function saveToServer(pin: string, sub: PushSubscription) {
+//   mode: 'individual' | 'team' — 개인/단체 구분
+//   eventId: 현재 대회로 스코프 (과거 대회 PIN 충돌 방지)
+async function saveToServer(
+  pin: string,
+  sub: PushSubscription,
+  opts?: { mode?: 'individual' | 'team'; eventId?: string }
+) {
   const res = await fetch('/api/push/subscribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       pin,
+      mode: opts?.mode,
+      event_id: opts?.eventId,
       subscription: {
         endpoint: sub.endpoint,
         keys: {
@@ -60,7 +68,12 @@ export function usePushSubscription() {
   const [message, setMessage] = useState('')
 
   // ── 최초 구독 (PIN 로그인 후 호출) ──────────────────────────
-  const subscribeWithPin = useCallback(async (pin: string): Promise<boolean> => {
+  //   opts.mode: 'individual' | 'team' — 개인/단체 PIN 충돌 방지
+  //   opts.eventId: 현재 대회로 스코프 (과거 대회 PIN 충돌 방지)
+  const subscribeWithPin = useCallback(async (
+    pin: string,
+    opts?: { mode?: 'individual' | 'team'; eventId?: string }
+  ): Promise<boolean> => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
       setStatus('unsupported')
       setMessage('이 브라우저는 푸시 알림을 지원하지 않습니다.')
@@ -92,8 +105,8 @@ export function usePushSubscription() {
         applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
       })
 
-      // 3. 서버에 저장
-      const res = await saveToServer(pin, sub)
+      // 3. 서버에 저장 (mode + event_id로 스코프)
+      const res = await saveToServer(pin, sub, opts)
       const data = await res.json()
 
       if (!res.ok) {
@@ -102,9 +115,13 @@ export function usePushSubscription() {
         return false
       }
 
-      // 4. ✅ localStorage에 PIN + endpoint 저장 (자동 재구독에 사용)
+      // 4. ✅ localStorage에 PIN + mode + eventId + endpoint 저장 (자동 재구독용)
       localStorage.setItem('push_pin', pin)
       localStorage.setItem('push_endpoint', sub.endpoint)
+      if (opts?.mode) localStorage.setItem('push_mode', opts.mode)
+      else localStorage.removeItem('push_mode')
+      if (opts?.eventId) localStorage.setItem('push_event_id', opts.eventId)
+      else localStorage.removeItem('push_event_id')
 
       setStatus('success')
       setMessage(`${data.team_name || ''} 알림 등록 완료!`)
@@ -126,7 +143,14 @@ export function usePushSubscription() {
 
     const savedPin      = localStorage.getItem('push_pin')
     const savedEndpoint = localStorage.getItem('push_endpoint')
+    const savedMode     = localStorage.getItem('push_mode') as 'individual' | 'team' | null
+    const savedEventId  = localStorage.getItem('push_event_id')
     if (!savedPin) return  // 한 번도 등록 안 한 사용자는 건드리지 않음
+
+    const opts = {
+      mode: savedMode || undefined,
+      eventId: savedEventId || undefined,
+    }
 
     try {
       const reg        = await navigator.serviceWorker.ready
@@ -139,7 +163,7 @@ export function usePushSubscription() {
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
         })
-        await saveToServer(savedPin, newSub)
+        await saveToServer(savedPin, newSub, opts)
         localStorage.setItem('push_endpoint', newSub.endpoint)
         return
       }
@@ -147,7 +171,7 @@ export function usePushSubscription() {
       // 케이스 2: endpoint가 변경된 경우
       if (currentSub.endpoint !== savedEndpoint) {
         console.log('[Push] endpoint 변경 → 재등록')
-        await saveToServer(savedPin, currentSub)
+        await saveToServer(savedPin, currentSub, opts)
         localStorage.setItem('push_endpoint', currentSub.endpoint)
         return
       }
@@ -156,7 +180,7 @@ export function usePushSubscription() {
       const existsOnServer = await checkOnServer(currentSub.endpoint)
       if (!existsOnServer) {
         console.log('[Push] 서버에 구독 없음 → 재등록')
-        await saveToServer(savedPin, currentSub)
+        await saveToServer(savedPin, currentSub, opts)
       }
 
     } catch (err) {

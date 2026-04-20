@@ -128,7 +128,7 @@ export default function PinPage() {
     setCheckinLoading(true)
     let subscribeOk = false
     try {
-      subscribeOk = await subscribeWithPin(loginPin)
+      subscribeOk = await subscribeWithPin(loginPin, { mode: 'individual', eventId: selectedEvent })
       await supabase
         .from('teams')
         .update({ checked_in: true, checked_in_at: new Date().toISOString() })
@@ -214,7 +214,7 @@ export default function PinPage() {
   async function handleTeamAllowNotification() {
     setCheckinLoading(true)
     try {
-      await subscribeWithPin(loginPin)
+      await subscribeWithPin(loginPin, { mode: 'team', eventId: selectedEvent })
       markNotifDone(loginPin)
     } finally {
       setCheckinLoading(false)

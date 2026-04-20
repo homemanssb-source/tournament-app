@@ -6,11 +6,13 @@
 import { usePushSubscription } from '@/hooks/usePushSubscription'
 
 interface Props {
-  pin: string          // 선수가 입력한 PIN
+  pin: string          // 선수/팀장이 입력한 PIN
+  mode?: 'individual' | 'team'   // 기본 undefined (자동 폴백, 구버전 호환)
+  eventId?: string                // 현재 대회 스코프
   onSuccess?: () => void
 }
 
-export default function PinSubscribeButton({ pin, onSuccess }: Props) {
+export default function PinSubscribeButton({ pin, mode, eventId, onSuccess }: Props) {
   const { status, message, subscribeWithPin } = usePushSubscription()
 
   // 브라우저 미지원이면 숨김
@@ -18,7 +20,7 @@ export default function PinSubscribeButton({ pin, onSuccess }: Props) {
 
   async function handleClick() {
     if (!pin || pin.length < 6) return
-    const ok = await subscribeWithPin(pin)
+    const ok = await subscribeWithPin(pin, { mode, eventId })
     if (ok && onSuccess) onSuccess()
   }
 
