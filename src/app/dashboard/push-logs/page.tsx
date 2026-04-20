@@ -43,12 +43,42 @@ function StatusBadge({ log }: { log: PushLog }) {
   return <span className="inline-flex items-center text-xs bg-gray-100 text-gray-400 px-2 py-0.5 rounded-full font-medium">—</span>
 }
 
+interface SubscriberRow {
+  kind: 'individual' | 'team'
+  id: string
+  label: string
+  sub_label: string
+  pin: string | null
+  checked_in: boolean
+  subscribed: boolean
+  sub_count: number
+  last_subscribed_at: string | null
+}
+
+interface SubscriberStats {
+  total: number
+  subscribed: number
+  unsubscribed: number
+  individual_total: number
+  individual_subscribed: number
+  team_total: number
+  team_subscribed: number
+}
+
 export default function PushLogsPage() {
   const eventId = useEventId()
+  const [tab, setTab] = useState<'logs' | 'subscribers'>('logs')
   const [logs, setLogs] = useState<PushLog[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<'ALL' | 'fail' | 'no_sub' | 'ok'>('ALL')
   const [limit, setLimit] = useState(50)
+
+  // 구독 현황
+  const [subRows, setSubRows] = useState<SubscriberRow[]>([])
+  const [subStats, setSubStats] = useState<SubscriberStats | null>(null)
+  const [subFilter, setSubFilter] = useState<'ALL' | 'subscribed' | 'unsubscribed' | 'individual' | 'team'>('ALL')
+  const [subQuery, setSubQuery] = useState('')
+  const [subsLoading, setSubsLoading] = useState(false)
 
   const loadLogs = useCallback(async () => {
     if (!eventId) return
@@ -72,6 +102,27 @@ export default function PushLogsPage() {
     const iv = setInterval(loadLogs, 30000)
     return () => clearInterval(iv)
   }, [loadLogs])
+
+  // 구독 현황 로드
+  const loadSubscribers = useCallback(async () => {
+    if (!eventId) return
+    setSubsLoading(true)
+    try {
+      const res = await fetch(`/api/push/subscribers?event_id=${eventId}`)
+      if (!res.ok) throw new Error('조회 실패')
+      const data = await res.json()
+      setSubRows(data.rows || [])
+      setSubStats(data.stats || null)
+    } catch (e) {
+      console.error('[Subscribers]', e)
+    } finally {
+      setSubsLoading(false)
+    }
+  }, [eventId])
+
+  useEffect(() => {
+    if (tab === 'subscribers') loadSubscribers()
+  }, [tab, loadSubscribers])
 
   const filtered = logs.filter(l => {
     if (filter === 'fail')   return (l.failed > 0 || !!l.error_msg) && !l.no_sub
@@ -103,12 +154,30 @@ export default function PushLogsPage() {
 
       {/* 헤더 */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">📡 푸시 알림 발송 로그</h1>
-        <button onClick={loadLogs} disabled={loading}
+        <h1 className="text-2xl font-bold">📡 푸시 알림</h1>
+        <button onClick={tab === 'logs' ? loadLogs : loadSubscribers} disabled={tab === 'logs' ? loading : subsLoading}
           className="text-sm bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors">
-          {loading ? '불러오는 중...' : '🔄 새로고침'}
+          {(tab === 'logs' ? loading : subsLoading) ? '불러오는 중...' : '🔄 새로고침'}
         </button>
       </div>
+
+      {/* 탭 */}
+      <div className="flex gap-1 bg-gray-100 p-1 rounded-xl">
+        <button onClick={() => setTab('logs')}
+          className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+            tab === 'logs' ? 'bg-white text-[#2d5016] shadow-sm' : 'text-gray-500 hover:text-gray-700'
+          }`}>
+          📤 발송 이력
+        </button>
+        <button onClick={() => setTab('subscribers')}
+          className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+            tab === 'subscribers' ? 'bg-white text-[#2d5016] shadow-sm' : 'text-gray-500 hover:text-gray-700'
+          }`}>
+          🔔 구독 현황
+        </button>
+      </div>
+
+      {tab === 'logs' && <>
 
       {/* 통계 카드 */}
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
@@ -265,6 +334,141 @@ export default function PushLogsPage() {
           </p>
         </div>
       )}
+
+      </>}
+
+      {tab === 'subscribers' && (
+        <SubscribersView
+          rows={subRows}
+          stats={subStats}
+          loading={subsLoading}
+          filter={subFilter}
+          setFilter={setSubFilter}
+          query={subQuery}
+          setQuery={setSubQuery}
+          fmt={fmt}
+        />
+      )}
     </div>
+  )
+}
+
+function SubscribersView({ rows, stats, loading, filter, setFilter, query, setQuery, fmt }: {
+  rows: SubscriberRow[]
+  stats: SubscriberStats | null
+  loading: boolean
+  filter: 'ALL' | 'subscribed' | 'unsubscribed' | 'individual' | 'team'
+  setFilter: (f: any) => void
+  query: string
+  setQuery: (q: string) => void
+  fmt: (iso: string) => string
+}) {
+  const filtered = rows.filter(r => {
+    if (filter === 'subscribed' && !r.subscribed) return false
+    if (filter === 'unsubscribed' && r.subscribed) return false
+    if (filter === 'individual' && r.kind !== 'individual') return false
+    if (filter === 'team' && r.kind !== 'team') return false
+    if (query.trim()) {
+      const q = query.toLowerCase().trim()
+      if (!r.label.toLowerCase().includes(q) && !r.sub_label.toLowerCase().includes(q) && !(r.pin || '').includes(q)) return false
+    }
+    return true
+  })
+
+  return (
+    <>
+      {/* 통계 카드 */}
+      {stats && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="bg-green-50 rounded-xl border p-3 text-center">
+            <div className="text-2xl font-black text-green-700">{stats.subscribed}<span className="text-sm text-green-400">/{stats.total}</span></div>
+            <div className="text-xs text-gray-500 mt-0.5">🔔 구독 완료</div>
+          </div>
+          <div className="bg-gray-50 rounded-xl border p-3 text-center">
+            <div className="text-2xl font-black text-gray-600">{stats.unsubscribed}</div>
+            <div className="text-xs text-gray-500 mt-0.5">📵 미구독</div>
+          </div>
+          <div className="bg-amber-50 rounded-xl border p-3 text-center">
+            <div className="text-2xl font-black text-amber-700">{stats.individual_subscribed}<span className="text-sm text-amber-400">/{stats.individual_total}</span></div>
+            <div className="text-xs text-gray-500 mt-0.5">🎾 개인전</div>
+          </div>
+          <div className="bg-blue-50 rounded-xl border p-3 text-center">
+            <div className="text-2xl font-black text-blue-700">{stats.team_subscribed}<span className="text-sm text-blue-400">/{stats.team_total}</span></div>
+            <div className="text-xs text-gray-500 mt-0.5">🏆 단체전</div>
+          </div>
+        </div>
+      )}
+
+      {/* 필터 + 검색 */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="flex gap-2 flex-wrap">
+          {([
+            { key: 'ALL', label: `전체 ${rows.length ? `(${rows.length})` : ''}` },
+            { key: 'subscribed', label: `🔔 구독 ${stats ? `(${stats.subscribed})` : ''}` },
+            { key: 'unsubscribed', label: `📵 미구독 ${stats ? `(${stats.unsubscribed})` : ''}` },
+            { key: 'individual', label: `🎾 개인전` },
+            { key: 'team', label: `🏆 단체전` },
+          ] as const).map(({ key, label }) => (
+            <button key={key} onClick={() => setFilter(key)}
+              className={`text-sm px-3 py-1.5 rounded-full border transition-all ${
+                filter === key
+                  ? 'bg-[#2d5016] text-white border-[#2d5016]'
+                  : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+              }`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <input type="text" value={query} onChange={e => setQuery(e.target.value)}
+          placeholder="팀명, 클럽명, PIN 검색"
+          className="sm:ml-auto border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-[#2d5016] w-full sm:w-64" />
+      </div>
+
+      {/* 리스트 */}
+      <div className="bg-white rounded-xl border overflow-hidden">
+        <div className="px-4 py-3 border-b bg-gray-50 text-sm font-semibold text-gray-700">
+          {filtered.length}건 표시
+        </div>
+        {loading ? (
+          <div className="text-center py-16 text-gray-400">불러오는 중...</div>
+        ) : filtered.length === 0 ? (
+          <div className="text-center py-16 text-gray-400">결과가 없습니다.</div>
+        ) : (
+          <div className="divide-y max-h-[65vh] overflow-y-auto">
+            {filtered.map(r => (
+              <div key={r.kind + ':' + r.id} className="px-4 py-3 hover:bg-gray-50 transition-colors flex items-center gap-3">
+                <div className="flex-shrink-0">
+                  <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${
+                    r.kind === 'individual' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'
+                  }`}>
+                    {r.kind === 'individual' ? '개인' : '단체'}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-gray-800 truncate">{r.label}</div>
+                  <div className="text-xs text-gray-400 truncate">{r.sub_label}</div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {r.subscribed ? (
+                    <>
+                      <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-semibold">
+                        🔔 {r.sub_count}
+                      </span>
+                      {r.last_subscribed_at && (
+                        <span className="text-xs text-gray-400 hidden sm:inline">
+                          {fmt(r.last_subscribed_at)}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full">미구독</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
   )
 }
