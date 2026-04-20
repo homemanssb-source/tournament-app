@@ -12,9 +12,9 @@ const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 // 앱A (jeju-tennis-app) 외부 링크
 const APP_A_BASE = 'https://jeju-tennis-app.vercel.app'
 const QUICK_LINKS = [
-  { href: `${APP_A_BASE}/notice`,  title: '공지사항' },
-  { href: `${APP_A_BASE}/apply`,   title: '신청확인' },
-  { href: `${APP_A_BASE}/players`, title: '선수조회' },
+  { href: `${APP_A_BASE}/notice`, title: '공지사항' },
+  { href: `${APP_A_BASE}/apply`,  title: '신청확인' },
+  { href: `${APP_A_BASE}/search`, title: '선수조회' },
 ]
 
 // ── 유틸 ────────────────────────────────────────────────────
