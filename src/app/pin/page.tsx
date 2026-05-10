@@ -160,12 +160,15 @@ export default function PinPage() {
 
   async function handleTeamSubmit() {
     if (pin.length !== 6) { setError('팀 PIN 6자리를 입력해주세요.'); return }
+    if (!selectedEvent) { setError('대회 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.'); return }
     setError(''); setLoading(true)
     try {
-      // 같은 팀이 여러 부서로 신청한 경우 clubs 테이블에 부서별 row가 생기므로 전체 조회
+      // ✅ event_id 필터: 과거 대회의 동일 PIN 매칭 차단
+      // 같은 팀이 여러 부서로 신청한 경우 clubs 테이블에 부서별 row가 생기므로 event 안에서 전체 조회
       const { data: clubs } = await supabase
         .from('clubs').select('id, name, event_id, division_id')
         .eq('captain_pin', pin)
+        .eq('event_id', selectedEvent)
       if (!clubs || clubs.length === 0) { setError('팀 PIN에 해당하는 클럽을 찾을 수 없습니다.'); setLoading(false); return }
 
       // 부서 이름 맵핑 — 여러 부서에 걸친 경우만 조회
@@ -247,6 +250,7 @@ export default function PinPage() {
         .from('ties')
         .select('id, tie_order, status, round, club_a:clubs!ties_club_a_id_fkey(id, name), club_b:clubs!ties_club_b_id_fkey(id, name)')
         .or(orFilter)
+        .eq('event_id', selectedEvent)   // ✅ 과거 대회 ties 차단 (defense in depth)
         .in('status', ['pending', 'lineup_phase', 'lineup_ready', 'in_progress'])
         // ✅ 승자 확정된 tie는 숨김 (예선 과반 후 winning_club_id 있어도 status는 in_progress 유지되므로 별도 필터 필요)
         .is('winning_club_id', null)
@@ -256,9 +260,8 @@ export default function PinPage() {
 
       if (divName) setSelectedDivName(divName)
 
-      // ✅ 같은 팀이 여러 라운드(예선+본선)에 있을 수 있어, tie 1개만 있어도 라운드를 보고
-      //    선택할 수 있도록 리스트로 표시 (자동 push 제거)
-      if (ties.length === 1) { router.push(`/lineup/${ties[0].id}`); return }
+      // ✅ 같은 팀이 여러 라운드(예선+본선)에 있을 수 있어, tie 1개만 있어도
+      //    라운드 보고 선택할 수 있도록 항상 리스트로 표시 (자동 push 제거)
       setTeamTies(ties)
     } finally { setLoading(false) }
   }
