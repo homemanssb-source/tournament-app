@@ -68,18 +68,18 @@ export async function POST(request: NextRequest) {
       if (matched) divisionMap[aDiv.division_id] = matched.id;
     }
 
-    // 4. 앱A event_entries 가져오기
-    //    entry_status = '신청' 이고 cancelled_at IS NULL 인 것만
-    const { data: allEntries, error: entErr } = await appA
+    // 4. 앱A event_entries 가져오기 (신청 + 취소 모두 포함하여 상태별 처리)
+    const { data: allEntriesRaw, error: entErr } = await appA
       .from('event_entries')
       .select('*, team:teams(*)')
-      .eq('event_id', app_a_event_id)
-      .eq('entry_status', '신청')
-      .is('cancelled_at', null);
+      .eq('event_id', app_a_event_id);
     if (entErr) {
       return NextResponse.json({ success: false, error: 'appA entries 조회 실패: ' + entErr.message }, { status: 500 });
     }
-    if (!allEntries || allEntries.length === 0) {
+    const allEntries = (allEntriesRaw || []).filter((e: any) => e.entry_status === '신청' && !e.cancelled_at);
+    const cancelledEntries = (allEntriesRaw || []).filter((e: any) => e.entry_status !== '신청' || e.cancelled_at);
+
+    if (allEntries.length === 0 && cancelledEntries.length === 0) {
       return NextResponse.json({ success: true, message: '동기화할 데이터 없음', synced: 0, total: 0 });
     }
 
@@ -100,13 +100,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 6. 앱B 기존 sync_log 한 번에 로드 → Set으로 빠른 중복 체크
+    // 6. 앱B 기존 sync_log 한 번에 로드 → record_id → app_b_record_id 매핑
     const { data: existingLogs } = await appB
       .from('sync_log')
-      .select('app_a_record_id')
+      .select('app_a_record_id, app_b_record_id, status')
       .eq('event_id', event_id)
       .eq('sync_type', 'individual');
-    const syncedIds = new Set((existingLogs || []).map((l: any) => l.app_a_record_id));
+    const logMap = new Map<string, { app_b_record_id: string | null; status: string | null }>();
+    for (const l of (existingLogs || []) as any[]) {
+      logMap.set(l.app_a_record_id, { app_b_record_id: l.app_b_record_id, status: l.status });
+    }
 
     // 7. 앱B 기존 teams 한 번에 로드 → player1+player2+division 기준 중복 체크
     const { data: existingTeams } = await appB
@@ -118,18 +121,16 @@ export async function POST(request: NextRequest) {
     );
 
     let syncedCount = 0;
+    let updatedCount = 0;
     let skippedCount = 0;
     let duplicateCount = 0;
+    let cancelledCount = 0;
     const errors: string[] = [];
     const unmatched: string[] = [];
 
     for (const entry of allEntries) {
       try {
         const recordId = entry.entry_id || entry.id || entry.team?.team_id;
-
-        // sync_log 기반 중복 체크
-        if (syncedIds.has(recordId)) { skippedCount++; continue; }
-
         const team = entry.team;
         if (!team) { skippedCount++; continue; }
 
@@ -156,7 +157,44 @@ export async function POST(request: NextRequest) {
         const p1Grade = member1?.grade || null;
         const p2Grade = member2?.grade || null;
 
-        // teams 테이블 기반 중복 체크
+        // ✅ 기존 sync_log 있으면 → 변경 감지 후 UPDATE (파트너 변경 등 자동 반영)
+        const existing = logMap.get(recordId);
+        if (existing?.app_b_record_id && existing.status === 'synced') {
+          const { data: currentTeam } = await appB
+            .from('teams').select('player1_name,player2_name,p1_club,p2_club,p1_grade,p2_grade,team_name')
+            .eq('id', existing.app_b_record_id).maybeSingle();
+
+          const changed = currentTeam && (
+            currentTeam.player1_name !== p1Name ||
+            currentTeam.player2_name !== p2Name ||
+            currentTeam.p1_club !== p1Club ||
+            currentTeam.p2_club !== p2Club ||
+            currentTeam.p1_grade !== p1Grade ||
+            currentTeam.p2_grade !== p2Grade ||
+            currentTeam.team_name !== teamName
+          );
+
+          if (changed) {
+            await appB.from('teams').update({
+              player1_name: p1Name, player2_name: p2Name,
+              p1_club: p1Club, p2_club: p2Club,
+              p1_grade: p1Grade, p2_grade: p2Grade,
+              team_name: teamName,
+              // ✅ PIN, division_id, group_id는 의도적으로 유지 (조편성/배정 깨지 않음)
+            }).eq('id', existing.app_b_record_id);
+            await appB.from('sync_log').insert({
+              event_id, sync_type: 'individual',
+              app_a_record_id: recordId, app_b_record_id: existing.app_b_record_id,
+              app_b_table: 'teams', status: 'updated',
+            });
+            updatedCount++;
+          } else {
+            skippedCount++;
+          }
+          continue;
+        }
+
+        // teams 테이블 기반 중복 체크 (sync_log에 없는 신규)
         const teamKey = `${appBDivisionId}|${p1Name}|${p2Name}`;
         if (existingTeamKeys.has(teamKey)) {
           duplicateCount++;
@@ -196,11 +234,30 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // ✅ 취소된 entry 처리: sync_log에 'cancelled' 마킹만 (teams는 보존 — 조편성 cascade 위험)
+    for (const entry of cancelledEntries) {
+      const recordId = entry.entry_id || entry.id || entry.team?.team_id;
+      if (!recordId) continue;
+      const existing = logMap.get(recordId);
+      // 이미 cancelled 로그 있으면 skip
+      if (existing?.status === 'cancelled') continue;
+      // synced 였던 것만 cancelled 마킹 (한 번도 동기화 안 된 entry는 무시)
+      if (!existing?.app_b_record_id) continue;
+      await appB.from('sync_log').insert({
+        event_id, sync_type: 'individual',
+        app_a_record_id: recordId, app_b_record_id: existing.app_b_record_id,
+        app_b_table: 'teams', status: 'cancelled',
+      });
+      cancelledCount++;
+    }
+
     return NextResponse.json({
       success:   true,
       synced:    syncedCount,
+      updated:   updatedCount,
       skipped:   skippedCount,
       duplicate: duplicateCount,
+      cancelled: cancelledCount,
       total:     allEntries.length,
       unmatched: unmatched.length > 0 ? unmatched : undefined,
       errors:    errors.length > 0 ? errors : undefined,

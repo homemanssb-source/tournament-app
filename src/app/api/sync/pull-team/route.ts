@@ -104,24 +104,22 @@ export async function POST(request: NextRequest) {
     );
 
     let syncedCount = 0;
+    let updatedCount = 0;
     let skippedCount = 0;
     const errors: string[] = [];
 
+    // 기존 sync_log 한 번에 로드 — 신규/업데이트 구분용
+    const { data: existingLogs } = await appB
+      .from('sync_log').select('app_a_record_id, app_b_record_id, status')
+      .eq('event_id', event_id).eq('sync_type', 'team');
+    const logMap = new Map<string, { app_b_record_id: string | null }>();
+    for (const l of (existingLogs || []) as any[]) {
+      logMap.set(l.app_a_record_id, { app_b_record_id: l.app_b_record_id });
+    }
+
     for (const entry of entries) {
       try {
-        // 이미 동기화 확인
-        const { data: existingLog } = await appB
-          .from('sync_log')
-          .select('id')
-          .eq('event_id', event_id)
-          .eq('app_a_record_id', entry.id)
-          .eq('sync_type', 'team')
-          .limit(1);
-
-        if (existingLog && existingLog.length > 0) {
-          skippedCount++;
-          continue;
-        }
+        const wasSynced = logMap.has(entry.id);
 
         // 부서 정보 결정
         const appADivName = entry.division_name || (entry.division_id ? divMap.get(entry.division_id) : null) || null;
@@ -210,17 +208,18 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // 동기화 로그
+        // 동기화 로그 (신규 = synced, 재처리 = updated)
         await appB.from('sync_log').insert({
           event_id,
           sync_type: 'team',
           app_a_record_id: entry.id,
           app_b_record_id: clubId,
           app_b_table: 'clubs',
-          status: 'synced',
+          status: wasSynced ? 'updated' : 'synced',
         });
 
-        syncedCount++;
+        if (wasSynced) updatedCount++;
+        else syncedCount++;
       } catch (err: any) {
         errors.push(`${entry.club_name}: ${err.message}`);
       }
@@ -229,10 +228,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       synced: syncedCount,
+      updated: updatedCount,
       skipped: skippedCount,
       total: entries.length,
-      team_match_type: teamMatchType,   // ★ 응답에 경기방식 포함
-      rubber_count: rubberCount,        // ★ 응답에 rubber_count 포함
+      team_match_type: teamMatchType,
+      rubber_count: rubberCount,
       errors: errors.length > 0 ? errors : undefined,
     }, { headers: corsHeaders });
 
