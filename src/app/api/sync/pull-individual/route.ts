@@ -34,7 +34,7 @@ function buildTeamName(p1Name: string, p1Club: string | null, p2Name: string, p2
 
 export async function POST(request: NextRequest) {
   try {
-    const { event_id, app_a_event_id } = await request.json();
+    const { event_id, app_a_event_id, auto_create_divisions = true } = await request.json();
     if (!event_id || !app_a_event_id) {
       return NextResponse.json({ success: false, error: 'event_id와 app_a_event_id 필요' }, { status: 400 });
     }
@@ -60,11 +60,34 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'appA divisions 조회 실패: ' + aDivErr?.message }, { status: 500 });
     }
 
+    const norm = (s: string | null | undefined) => (s || '').trim().replace(/\s+/g, ' ');
+
+    // 2-1. 앱B에 없는 앱A 부서 → 자동 생성 (auto_create_divisions=true일 때)
+    const bDivByName = new Map(appBDivisions.map(b => [norm(b.name), b]));
+    const createdDivisions: string[] = [];
+    if (auto_create_divisions) {
+      const missing = appADivisions.filter(a => !bDivByName.has(norm(a.division_name)));
+      for (const [idx, aDiv] of missing.entries()) {
+        const baseSortOrder = appBDivisions.length + idx + 1;
+        const { data: newDiv, error: insErr } = await appB
+          .from('divisions')
+          .insert({ event_id, name: aDiv.division_name, sort_order: baseSortOrder })
+          .select('id, name')
+          .single();
+        if (insErr) {
+          console.warn('[pull-individual] 부서 자동 생성 실패:', aDiv.division_name, insErr.message);
+          continue;
+        }
+        appBDivisions.push(newDiv);
+        bDivByName.set(norm(newDiv.name), newDiv);
+        createdDivisions.push(newDiv.name);
+      }
+    }
+
     // 3. 앱A division_id -> 앱B division_id 매핑 (이름 기준)
     const divisionMap: Record<string, string> = {};
     for (const aDiv of appADivisions) {
-      const aName = (aDiv.division_name || '').trim().replace(/\s+/g, ' ');
-      const matched = appBDivisions.find(b => (b.name || '').trim().replace(/\s+/g, ' ') === aName);
+      const matched = bDivByName.get(norm(aDiv.division_name));
       if (matched) divisionMap[aDiv.division_id] = matched.id;
     }
 
@@ -252,15 +275,16 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({
-      success:   true,
-      synced:    syncedCount,
-      updated:   updatedCount,
-      skipped:   skippedCount,
-      duplicate: duplicateCount,
-      cancelled: cancelledCount,
-      total:     allEntries.length,
-      unmatched: unmatched.length > 0 ? unmatched : undefined,
-      errors:    errors.length > 0 ? errors : undefined,
+      success:           true,
+      synced:            syncedCount,
+      updated:           updatedCount,
+      skipped:           skippedCount,
+      duplicate:         duplicateCount,
+      cancelled:         cancelledCount,
+      total:             allEntries.length,
+      created_divisions: createdDivisions.length > 0 ? createdDivisions : undefined,
+      unmatched:         unmatched.length > 0 ? unmatched : undefined,
+      errors:            errors.length > 0 ? errors : undefined,
     });
 
   } catch (err: any) {

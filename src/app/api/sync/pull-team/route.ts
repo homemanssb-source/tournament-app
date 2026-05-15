@@ -37,7 +37,7 @@ function getAppBServiceClient() {
 
 export async function POST(request: NextRequest) {
   try {
-    const { event_id, app_a_event_id } = await request.json();
+    const { event_id, app_a_event_id, auto_create_divisions = true } = await request.json();
     if (!event_id || !app_a_event_id) {
       return NextResponse.json({ success: false, error: 'event_id와 app_a_event_id가 필요합니다.' }, { status: 400, headers: corsHeaders });
     }
@@ -93,15 +93,35 @@ export async function POST(request: NextRequest) {
     );
 
     // 앱B 부서 조회 (매칭용)
-    const { data: appBDivisions } = await appB
+    const { data: appBDivisionsRaw } = await appB
       .from('divisions')
       .select('id, name')
       .eq('event_id', event_id);
+    const appBDivisions = appBDivisionsRaw || [];
 
     // 앱A division_name → 앱B division_id 매핑
-    const appBDivByName = new Map(
-      (appBDivisions || []).map(d => [d.name, d.id])
-    );
+    const appBDivByName = new Map(appBDivisions.map(d => [d.name, d.id] as [string, string]));
+
+    // 앱B에 없는 앱A 부서 → 자동 생성
+    const createdDivisions: string[] = [];
+    if (auto_create_divisions) {
+      const appAUniqueDivs = [...new Set((appADivisions || []).map(d => d.division_name))];
+      let nextOrder = appBDivisions.length + 1;
+      for (const divName of appAUniqueDivs) {
+        if (!divName || appBDivByName.has(divName)) continue;
+        const { data: newDiv, error: insErr } = await appB
+          .from('divisions')
+          .insert({ event_id, name: divName, sort_order: nextOrder++ })
+          .select('id, name')
+          .single();
+        if (insErr) {
+          console.warn('[pull-team] 부서 자동 생성 실패:', divName, insErr.message);
+          continue;
+        }
+        appBDivByName.set(newDiv.name, newDiv.id);
+        createdDivisions.push(newDiv.name);
+      }
+    }
 
     let syncedCount = 0;
     let updatedCount = 0;
@@ -233,6 +253,7 @@ export async function POST(request: NextRequest) {
       total: entries.length,
       team_match_type: teamMatchType,
       rubber_count: rubberCount,
+      created_divisions: createdDivisions.length > 0 ? createdDivisions : undefined,
       errors: errors.length > 0 ? errors : undefined,
     }, { headers: corsHeaders });
 
