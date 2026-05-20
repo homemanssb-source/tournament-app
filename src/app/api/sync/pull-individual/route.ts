@@ -181,8 +181,10 @@ export async function POST(request: NextRequest) {
         const p2Grade = member2?.grade || null;
 
         // ✅ 기존 sync_log 있으면 → 변경 감지 후 UPDATE (파트너 변경 등 자동 반영)
+        //    status는 무관 ('synced'/'updated'/'cancelled' 모두 — app_b_record_id 있으면 row 존재)
+        //    cancelled → 다시 '신청' 복귀 케이스도 자동 처리됨
         const existing = logMap.get(recordId);
-        if (existing?.app_b_record_id && existing.status === 'synced') {
+        if (existing?.app_b_record_id) {
           const { data: currentTeam } = await appB
             .from('teams').select('player1_name,player2_name,p1_club,p2_club,p1_grade,p2_grade,team_name')
             .eq('id', existing.app_b_record_id).maybeSingle();
