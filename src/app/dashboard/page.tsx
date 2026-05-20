@@ -350,6 +350,19 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* ── 진단: 통계 모두 0인데 참가팀이 있으면 데이터 fetch 의심 ── */}
+      {totalAll === 0 && (stats.totalTeams > 0 || stats.totalClubs > 0) && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 text-sm">
+          <div className="font-bold text-amber-900 mb-1">⚠️ 경기 데이터가 0건으로 표시됩니다</div>
+          <div className="text-amber-800 text-xs space-y-1">
+            <p>· 조회된 이벤트: <code className="bg-amber-100 px-1.5 py-0.5 rounded">{eventId}</code></p>
+            <p>· 가능 원인: (1) 매치 미생성, (2) Vercel 배포 진행중, (3) 브라우저 캐시(Ctrl+Shift+R 권장)</p>
+            <p>· 조편성은 완료됐는지 확인 후 <Link href="/dashboard/groups" className="underline font-semibold">조편성</Link> →
+              <Link href="/dashboard/matches" className="underline font-semibold ml-1">경기 생성</Link> 진행</p>
+          </div>
+        </div>
+      )}
+
       {/* ── 통계 카드 ── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
