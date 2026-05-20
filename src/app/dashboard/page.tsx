@@ -18,6 +18,63 @@ interface EventStats {
   totalClubs: number
   completedGroups: number
   totalGroups: number
+  expectedMatches: ExpectedMatches | null
+}
+
+interface ExpectedMatches {
+  prelim: number             // 예선(조별 round-robin) 매치 수
+  finals: number             // 본선(토너먼트) 매치 수 — BYE 제외 실 경기
+  total: number              // 합계
+  byes: number               // 본선 BYE 수 (시각화용)
+  byDivision: {              // 부서별 상세
+    division_id: string | null
+    name: string
+    teamsInDiv: number
+    groupCount: number
+    prelim: number
+    advance: number
+    bracket: number
+    finals: number
+    byes: number
+  }[]
+}
+
+function nextPow2(n: number): number { let p = 1; while (p < n) p *= 2; return p }
+
+// 조편성 + 부서 + teams 데이터로 예상 경기 수 자동 계산 (시뮬레이터 동일 로직)
+function calcExpectedMatches(
+  divisions: { id: string; name: string }[],
+  groups: { id: string; division_id: string | null }[],
+  teams: { id: string; group_id: string | null; division_id: string | null }[],
+): ExpectedMatches {
+  let prelim = 0, finals = 0, byes = 0
+  const byDivision: ExpectedMatches['byDivision'] = []
+
+  for (const div of divisions) {
+    const divGroups = groups.filter(g => g.division_id === div.id)
+    const teamsInDiv = teams.filter(t => t.division_id === div.id).length
+    let divPrelim = 0
+    for (const g of divGroups) {
+      const n = teams.filter(t => t.group_id === g.id).length
+      if (n >= 2) divPrelim += n * (n - 1) / 2   // round-robin
+    }
+    // 본선: 각 조 1·2위 진출 → 2^n 브래킷
+    const advance = divGroups.length * 2
+    const bracket = advance >= 2 ? nextPow2(advance) : 0
+    const divByes = bracket > 0 ? bracket - advance : 0
+    const divFinals = bracket > 0 ? bracket - 1 : 0   // 단판 토너먼트 매치 수
+
+    prelim += divPrelim
+    finals += divFinals
+    byes += divByes
+    byDivision.push({
+      division_id: div.id, name: div.name,
+      teamsInDiv, groupCount: divGroups.length,
+      prelim: divPrelim, advance, bracket,
+      finals: divFinals, byes: divByes,
+    })
+  }
+  return { prelim, finals, total: prelim + finals, byes, byDivision }
 }
 
 interface MatchRow {
@@ -92,8 +149,8 @@ export default function DashboardPage() {
           .select('team_a_id,team_b_id,team_a_name,team_b_name,winner_team_id,score,group_id')
           .eq('event_id', eventId).eq('status', 'FINISHED').neq('score', 'BYE')
           .not('group_id', 'is', null),
-        // ✅ detectTied용: teams 전체를 한 번에
-        supabase.from('teams').select('id,team_name,manual_rank').eq('event_id', eventId),
+        // ✅ detectTied용 + 예상 매치 계산용: group_id, division_id 같이
+        supabase.from('teams').select('id,team_name,manual_rank,group_id,division_id').eq('event_id', eventId),
       ])
 
       // ✅ matches status 집계 — 클라이언트에서 처리
@@ -111,6 +168,16 @@ export default function DashboardPage() {
       const groups = groupRes.data || []
       const completedGroups = groups.filter((g: any) => g.is_finalized).length
 
+      // ✅ 예상 매치 자동 계산 (조편성 결과 기반, 매치 생성 안 됐어도 표시)
+      const teamsRaw = allTeamsRes.data || []
+      const expectedMatches = (divRes.data && divRes.data.length > 0)
+        ? calcExpectedMatches(
+            divRes.data,
+            groups as { id: string; division_id: string | null }[],
+            teamsRaw as { id: string; group_id: string | null; division_id: string | null }[]
+          )
+        : null
+
       setStats({
         event: evRes.data,
         divisions: divRes.data || [],
@@ -120,6 +187,7 @@ export default function DashboardPage() {
         totalClubs: clubCountRes.count || 0,
         completedGroups,
         totalGroups: groups.length,
+        expectedMatches,
       })
 
       const recentMatches = (recentMatchRes.data || []).map((m: any) => ({
@@ -299,6 +367,70 @@ export default function DashboardPage() {
           </div>
         ))}
       </div>
+
+      {/* ── 예상 경기 수 자동 계산 (조편성 기반, 시뮬레이터 통합) ── */}
+      {stats.expectedMatches && stats.expectedMatches.total > 0 && (
+        <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 rounded-xl p-5">
+          <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-indigo-900">📊 예상 총 경기 수 (조편성 기반 자동 계산)</h3>
+              <p className="text-[11px] text-indigo-600 mt-0.5">실제 매치 생성 여부와 무관하게 계산. 시뮬레이터와 동일 로직.</p>
+            </div>
+            <div className="text-3xl font-black text-indigo-700 tabular-nums">
+              {stats.expectedMatches.total}<span className="text-base text-indigo-400 ml-1">경기</span>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-4 text-xs mb-3">
+            <span className="text-stone-600">
+              · 예선(조별): <b className="text-stone-900 tabular-nums">{stats.expectedMatches.prelim}경기</b>
+            </span>
+            <span className="text-stone-600">
+              · 본선(토너먼트): <b className="text-stone-900 tabular-nums">{stats.expectedMatches.finals}경기</b>
+              {stats.expectedMatches.byes > 0 && (
+                <span className="text-amber-600 ml-1">(BYE {stats.expectedMatches.byes}개)</span>
+              )}
+            </span>
+            <span className="text-stone-600">
+              · 실제 진행: <b className="text-stone-900 tabular-nums">{finishedAll}/{stats.expectedMatches.total}</b>
+              <span className="text-stone-400 ml-1">({Math.round(finishedAll / stats.expectedMatches.total * 100)}%)</span>
+            </span>
+          </div>
+          {/* 부서별 상세 */}
+          <details className="text-xs">
+            <summary className="cursor-pointer text-indigo-600 hover:text-indigo-800 font-semibold">부서별 상세 보기</summary>
+            <div className="mt-2 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="text-stone-500 border-b border-indigo-100">
+                  <tr>
+                    <th className="text-left py-1.5">부서</th>
+                    <th className="text-right py-1.5">참가팀</th>
+                    <th className="text-right py-1.5">조</th>
+                    <th className="text-right py-1.5">예선</th>
+                    <th className="text-right py-1.5">진출</th>
+                    <th className="text-right py-1.5">본선</th>
+                    <th className="text-right py-1.5">BYE</th>
+                    <th className="text-right py-1.5 text-indigo-700">합계</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {stats.expectedMatches.byDivision.map(d => (
+                    <tr key={d.division_id || 'none'} className="border-b border-indigo-50">
+                      <td className="py-1.5 font-medium">{d.name}</td>
+                      <td className="text-right tabular-nums">{d.teamsInDiv}</td>
+                      <td className="text-right tabular-nums">{d.groupCount}</td>
+                      <td className="text-right tabular-nums">{d.prelim}</td>
+                      <td className="text-right tabular-nums">{d.advance}</td>
+                      <td className="text-right tabular-nums">{d.finals}</td>
+                      <td className="text-right tabular-nums text-amber-600">{d.byes || '-'}</td>
+                      <td className="text-right tabular-nums font-bold text-indigo-700">{d.prelim + d.finals}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </div>
+      )}
 
       {/* ── 개인전 / 단체전 진행률 ── */}
       {(stats.totalMatches > 0 || stats.totalTies > 0) && (
