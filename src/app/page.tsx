@@ -52,6 +52,7 @@ interface EventInfo {
 interface Stats {
   inProgress: number
   activeCourts: number
+  totalCourts: number
   totalTeams: number
 }
 
@@ -63,7 +64,7 @@ type PageState =
 // ── 페이지 ──────────────────────────────────────────────────
 export default function HomePage() {
   const [state, setState] = useState<PageState>({ kind: 'standby' })
-  const [stats, setStats] = useState<Stats>({ inProgress: 0, activeCourts: 0, totalTeams: 0 })
+  const [stats, setStats] = useState<Stats>({ inProgress: 0, activeCourts: 0, totalCourts: 0, totalTeams: 0 })
   const [statsLoading, setStatsLoading] = useState(true)
   const [todayLabel, setTodayLabel] = useState('')
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -108,8 +109,9 @@ export default function HomePage() {
         if (cancelled) return
 
         if (nextEvents && nextEvents.length > 0) {
-          setState({ kind: 'upcoming', event: nextEvents[0] as EventInfo })
-          setStatsLoading(false)
+          const ev = nextEvents[0] as EventInfo
+          setState({ kind: 'upcoming', event: ev })
+          await loadStats([ev.id])   // ✅ 다가오는 대회도 참가팀/코트 통계 표시
           return
         }
 
@@ -129,6 +131,7 @@ export default function HomePage() {
           { count: tieInProgress },
           { data: courtMatches },
           { count: totalTeams },
+          { data: venues },
         ] = await Promise.all([
           supabase.from('matches').select('*', { count: 'exact', head: true })
             .in('event_id', eventIds).eq('status', 'IN_PROGRESS'),
@@ -138,14 +141,17 @@ export default function HomePage() {
             .in('event_id', eventIds).eq('status', 'IN_PROGRESS').not('court', 'is', null),
           supabase.from('teams').select('*', { count: 'exact', head: true })
             .in('event_id', eventIds),
+          supabase.from('venues').select('court_count').in('event_id', eventIds),
         ])
 
         if (cancelled) return
 
         const activeCourts = new Set((courtMatches ?? []).map((m: any) => m.court)).size
+        const totalCourts = (venues ?? []).reduce((s: number, v: any) => s + (v.court_count || 0), 0)
         setStats({
           inProgress: (matchInProgress ?? 0) + (tieInProgress ?? 0),
           activeCourts,
+          totalCourts,
           totalTeams: totalTeams ?? 0,
         })
       } catch (e) {
@@ -312,13 +318,18 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* 3) 통계 그리드 (Live 상태에만) */}
-        {state.kind === 'live' && (
+        {/* 3) 통계 그리드 (Live + Upcoming 상태에 표시) */}
+        {(state.kind === 'live' || state.kind === 'upcoming') && (
           <div className="grid grid-cols-3 gap-2.5 mb-4">
             {[
-              { label: '진행경기', value: stats.inProgress },
-              { label: '사용코트', value: stats.activeCourts },
-              { label: '참가팀', value: stats.totalTeams },
+              { label: '진행경기', value: String(stats.inProgress) },
+              {
+                label: '코트',
+                value: stats.totalCourts > 0
+                  ? `${stats.activeCourts}/${stats.totalCourts}`
+                  : String(stats.activeCourts),
+              },
+              { label: '참가팀', value: String(stats.totalTeams) },
             ].map(s => (
               <div
                 key={s.label}
