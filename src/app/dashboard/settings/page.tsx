@@ -150,15 +150,20 @@ export default function SettingsPage() {
     setStartTimeMsg('✅ 시작시간이 저장되었습니다.')
   }
 
-  // ✅ 경기장별 시작시간 저장
+  // ✅ 경기장별 시작시간 저장 (venues RLS 우회 → /api/admin/venues 사용)
   async function saveVenueStartTime(venueId: string, time: string) {
     setVenueStartTimeSaving(venueId); setVenueTimeMsg('')
-    const { error } = await supabase.from('venues').update({ start_time: time || null }).eq('id', venueId)
+    const res = await fetch('/api/admin/venues', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: venueId, start_time: time || null }),
+    })
     setVenueStartTimeSaving(null)
-    if (error) {
-      setVenueTimeMsg(error.message.includes('column')
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}))
+      const msg = j.error || res.statusText
+      setVenueTimeMsg(msg.includes('column')
         ? '⚠️ SQL 필요: ALTER TABLE venues ADD COLUMN IF NOT EXISTS start_time time;'
-        : '❌ ' + error.message)
+        : '❌ ' + msg)
       return
     }
     setVenueStartTimes(prev => ({ ...prev, [venueId]: time }))
@@ -206,19 +211,27 @@ export default function SettingsPage() {
     setHasMasterPin(true); setNewPin(''); setConfirmPin('')
   }
 
+  // ─ venues RLS 우회를 위해 /api/admin/venues 라우트로 service_role 사용 ─
+
   async function addVenue() {
     if (!newVenueName.trim()) { setVenueMsg('! 경기장 이름을 입력하세요.'); return }
     if (!newVenueShortName.trim()) { setVenueMsg('! 약칭을 입력하세요. (예: 제주)'); return }
     if (!newVenuePin.trim() || newVenuePin.length < 4) { setVenueMsg('! PIN 4자리 이상 입력하세요.'); return }
     if (newCourtCount < 1) { setVenueMsg('! 코트 수는 1개 이상이어야 합니다.'); return }
     const courts = makeCourtNames(newVenueShortName, newCourtCount)
-    const { error } = await supabase.from('venues').insert({
-      event_id: eventId, name: newVenueName.trim(), short_name: newVenueShortName.trim(),
-      courts, court_count: newCourtCount, pin_plain: newVenuePin.trim(),
-      manager_name: newVenueManager.trim() || newVenueName.trim() + ' 관리자',
-      division_ids: newDivisionIds.length > 0 ? newDivisionIds : null,
+    const res = await fetch('/api/admin/venues', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        event_id: eventId, name: newVenueName.trim(), short_name: newVenueShortName.trim(),
+        courts, court_count: newCourtCount, pin_plain: newVenuePin.trim(),
+        manager_name: newVenueManager.trim() || newVenueName.trim() + ' 관리자',
+        division_ids: newDivisionIds.length > 0 ? newDivisionIds : null,
+      }),
     })
-    if (error) { setVenueMsg('! ' + error.message); return }
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}))
+      setVenueMsg('! ' + (j.error || res.statusText)); return
+    }
     setVenueMsg(`OK 경기장 추가됨 (${newVenueShortName}-1 ~ ${newVenueShortName}-${newCourtCount})`)
     setNewVenueName(''); setNewVenueShortName(''); setNewVenuePin(''); setNewVenueManager(''); setNewCourtCount(8); setNewDivisionIds([])
     loadVenues(eventId)
@@ -228,18 +241,28 @@ export default function SettingsPage() {
     if (!editShortName.trim()) { setVenueMsg('! 약칭을 입력하세요.'); return }
     if (editCourtCount < 1) { setVenueMsg('! 코트 수는 1개 이상이어야 합니다.'); return }
     const courts = makeCourtNames(editShortName, editCourtCount)
-    const { error } = await supabase.from('venues').update({
-      short_name: editShortName.trim(), courts, court_count: editCourtCount,
-      division_ids: editDivisionIds.length > 0 ? editDivisionIds : null,
-    }).eq('id', venueId)
-    if (error) { setVenueMsg('! ' + error.message); return }
+    const res = await fetch('/api/admin/venues', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: venueId,
+        short_name: editShortName.trim(), courts, court_count: editCourtCount,
+        division_ids: editDivisionIds.length > 0 ? editDivisionIds : null,
+      }),
+    })
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}))
+      setVenueMsg('! ' + (j.error || res.statusText)); return
+    }
     setVenueMsg('OK 변경됨'); setEditVenueId(null); loadVenues(eventId)
   }
 
   async function deleteVenue(v: Venue) {
     if (!confirm(v.name + ' 삭제하시겠습니까?')) return
-    const { error } = await supabase.from('venues').delete().eq('id', v.id)
-    if (error) { setVenueMsg('! ' + error.message); return }
+    const res = await fetch('/api/admin/venues?id=' + encodeURIComponent(v.id), { method: 'DELETE' })
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}))
+      setVenueMsg('! ' + (j.error || res.statusText)); return
+    }
     setVenueMsg('OK 삭제됨'); loadVenues(eventId)
   }
 
