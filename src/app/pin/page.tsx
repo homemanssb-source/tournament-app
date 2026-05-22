@@ -112,6 +112,14 @@ export default function PinPage() {
     // ✅ localStorage에도 저장 → 다른 페이지 갔다 와도 튕기지 않음 (12시간 유효)
     localStorage.setItem('pin_session', JSON.stringify(sessionData))
 
+    // ✅ PIN 로그인 성공 = 출전 신고 (즉시 check-in)
+    //    알림 옵션(허용/건너뛰기/이미한 PIN)과 무관하게 운영자 대시보드에 즉시 반영
+    //    fire-and-forget: UX 막지 않음
+    supabase.from('teams').update({
+      checked_in: true,
+      checked_in_at: new Date().toISOString(),
+    }).eq('pin_plain', pin).eq('event_id', selectedEvent).then(() => {})
+
     try {
       const donePins = JSON.parse(localStorage.getItem(NOTIF_DONE_KEY) || '[]') as string[]
       if (donePins.includes(pin)) {
