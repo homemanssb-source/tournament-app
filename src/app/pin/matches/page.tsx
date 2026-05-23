@@ -151,7 +151,39 @@ export default function PinMatchesPage() {
 
       errorCountRef.current = 0
 
-      const myMatches: PinMatch[] = data.matches || []
+      let myMatches: PinMatch[] = data.matches || []
+
+      // ✅ [FIX] RPC가 16강/8강/4강/결승 등 본선 라운드를 누락하는 버그 우회
+      //    → v_matches_with_teams에서 본선(stage=FINALS) 매치 직접 보완 조회
+      //    내 team_id가 a/b 어느 쪽인지에 따라 my_side 계산
+      const myTeamId = s.team_id
+      if (myTeamId && s.event_id) {
+        try {
+          const { data: finalsExtra } = await supabase
+            .from('v_matches_with_teams')
+            .select('id,match_num,stage,round,court,court_order,status,score,locked_by_participant,team_a_name,team_b_name,team_a_id,team_b_id,division_name,division_id,group_label,match_date,slot')
+            .eq('event_id', s.event_id)
+            .eq('stage', 'FINALS')
+            .or(`team_a_id.eq.${myTeamId},team_b_id.eq.${myTeamId}`)
+            .neq('score', 'BYE')
+            .not('team_a_id', 'is', null)
+            .not('team_b_id', 'is', null)
+
+          if (Array.isArray(finalsExtra) && finalsExtra.length > 0) {
+            const existingIds = new Set(myMatches.map((m: any) => m.id))
+            const supplement = (finalsExtra as any[])
+              .filter(m => !existingIds.has(m.id))
+              .map(m => ({
+                ...m,
+                my_side: m.team_a_id === myTeamId ? 'A' : 'B',
+              }))
+            if (supplement.length > 0) myMatches = [...myMatches, ...supplement] as PinMatch[]
+          }
+        } catch (e) {
+          console.warn('[PIN] finals 보완 조회 실패:', e)
+        }
+      }
+
       setMatches(myMatches)
 
       const courts = [...new Set(myMatches.map(m => m.court).filter(Boolean))] as string[]
