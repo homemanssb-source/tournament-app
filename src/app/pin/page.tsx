@@ -111,6 +111,9 @@ export default function PinPage() {
     sessionStorage.setItem('pin_event_id', selectedEvent)
     // ✅ localStorage에도 저장 → 다른 페이지 갔다 와도 튕기지 않음 (12시간 유효)
     localStorage.setItem('pin_session', JSON.stringify(sessionData))
+    // ✅ DB 세션 만료 시 자동 재로그인용 — 탭을 닫았다 열어도 PIN 재입력 없이 복구
+    localStorage.setItem('venue_pin', pin)
+    localStorage.setItem('pin_event_id', selectedEvent)
 
     // ✅ PIN 로그인 성공 = 출전 신고 (즉시 check-in)
     //    알림 옵션(허용/건너뛰기/이미한 PIN)과 무관하게 운영자 대시보드에 즉시 반영
