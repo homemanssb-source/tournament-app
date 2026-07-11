@@ -368,11 +368,21 @@ export default function PinMatchesPage() {
 
   function sendBrowserNotif(court: string) {
     if (!('Notification' in window) || Notification.permission !== 'granted') return
-    new Notification('🎾 준비하세요!', {
+    // ✅ Android Chrome은 페이지 컨텍스트의 new Notification()을 지원하지 않아 throw됨
+    //    → Service Worker 경유(showNotification)로 표시, 실패 시 데스크톱용 폴백
+    const title = '🎾 준비하세요!'
+    const options = {
       body: `${court}에서 다음 경기로 이동해주세요.`,
       icon: '/icon-192x192.png',
       tag: `court-${court}`,
-    })
+    }
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready
+        .then(reg => reg.showNotification(title, options))
+        .catch(() => { try { new Notification(title, options) } catch {} })
+    } else {
+      try { new Notification(title, options) } catch {}
+    }
   }
 
   async function requestNotification() {
@@ -385,7 +395,9 @@ export default function PinMatchesPage() {
       notifAllowedRef.current = granted
       if (perm === 'granted') {
         showInAppNotif('🎾 알림 활성화', '경기 알림이 설정되었습니다.')
-        const pin = session?.pin || sessionStorage.getItem('venue_pin') || session?.token
+        // ✅ PIN만 사용 — session.token은 PIN이 아니므로 폴백에서 제거
+        //    (토큰을 PIN으로 보내면 서버 404 → 구독 등록 실패)
+        const pin = sessionStorage.getItem('venue_pin') || localStorage.getItem('venue_pin') || ''
         if (pin) await subscribeWithPin(pin, { mode: 'individual', eventId: session?.event_id })
         else autoResubscribe()
       } else if (perm === 'denied') {

@@ -145,7 +145,9 @@ export default function PinPage() {
         .update({ checked_in: true, checked_in_at: new Date().toISOString() })
         .eq('pin_plain', loginPin)
         .eq('event_id', selectedEvent)
-      markNotifDone(loginPin)
+      // ✅ 구독이 실제로 성공했을 때만 '완료' 마킹
+      //    (실패해도 마킹하면 다음 로그인부터 알림 프롬프트가 영영 안 떠서 재시도 기회가 사라짐)
+      if (subscribeOk) markNotifDone(loginPin)
     } finally {
       setCheckinLoading(false)
     }
@@ -228,8 +230,9 @@ export default function PinPage() {
   async function handleTeamAllowNotification() {
     setCheckinLoading(true)
     try {
-      await subscribeWithPin(loginPin, { mode: 'team', eventId: selectedEvent })
-      markNotifDone(loginPin)
+      const ok = await subscribeWithPin(loginPin, { mode: 'team', eventId: selectedEvent })
+      // ✅ 구독 성공 시에만 마킹 — 실패 시 다음 로그인에서 다시 프롬프트
+      if (ok) markNotifDone(loginPin)
     } finally {
       setCheckinLoading(false)
     }

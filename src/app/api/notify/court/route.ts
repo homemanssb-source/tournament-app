@@ -174,29 +174,34 @@ export async function POST(req: NextRequest) {
           teamAName = clubA?.name || ''; teamBName = clubB?.name || ''
         }
       }
-      if (!teamAId && !teamBId) {
-        const { data: allCourtMatches } = await supabaseAdmin
-          .from('v_matches_with_teams')
-          .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status, score, match_date')
-          .eq('event_id', event_id).eq('court', court).order('court_order')
+    }
 
-        const allFiltered = (allCourtMatches || []).filter((m: any) => m.score !== 'BYE')
-        const liveMatch = allFiltered.find((m: any) => m.status === 'IN_PROGRESS')
-        const todayDate = liveMatch?.match_date || match_date || null
-        const courtMatches = todayDate
-          ? allFiltered.filter((m: any) => m.match_date === todayDate)
-          : allFiltered
+    // ✅ 공통 폴백: 위 브랜치에서 대상을 못 찾았으면 코트 큐에서 직접 탐색
+    //    (기존에는 ties 브랜치 전용이라 finished_match_id 조회가 꼬이면
+    //     대기팀이 있어도 알림이 조용히 누락됐음)
+    //    단, match_id를 명시한 운영자 수동 발송은 폴백하지 않음 — 다른 경기에 오발송 방지
+    if (!teamAId && !teamBId && !match_id) {
+      const { data: allCourtMatches } = await supabaseAdmin
+        .from('v_matches_with_teams')
+        .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status, score, match_date')
+        .eq('event_id', event_id).eq('court', court).order('court_order')
 
-        if (courtMatches.length > 0) {
-          const activeIdx = courtMatches.findIndex((m: any) => m.status === 'IN_PROGRESS')
-          const searchFrom = activeIdx >= 0 ? activeIdx + 1 : 0
-          const target = courtMatches.slice(searchFrom).find((m: any) => m.status === 'PENDING')
-            ?? courtMatches.find((m: any) => m.status === 'PENDING')
-          if (target) {
-            teamAId = target.team_a_id; teamBId = target.team_b_id
-            teamAName = target.team_a_name; teamBName = target.team_b_name
-            divisionName = target.division_name; targetId = target.id
-          }
+      const allFiltered = (allCourtMatches || []).filter((m: any) => m.score !== 'BYE')
+      const liveMatch = allFiltered.find((m: any) => m.status === 'IN_PROGRESS')
+      const todayDate = liveMatch?.match_date || match_date || null
+      const courtMatches = todayDate
+        ? allFiltered.filter((m: any) => m.match_date === todayDate)
+        : allFiltered
+
+      if (courtMatches.length > 0) {
+        const activeIdx = courtMatches.findIndex((m: any) => m.status === 'IN_PROGRESS')
+        const searchFrom = activeIdx >= 0 ? activeIdx + 1 : 0
+        const target = courtMatches.slice(searchFrom).find((m: any) => m.status === 'PENDING')
+          ?? courtMatches.find((m: any) => m.status === 'PENDING')
+        if (target) {
+          teamAId = target.team_a_id; teamBId = target.team_b_id
+          teamAName = target.team_a_name; teamBName = target.team_b_name
+          divisionName = target.division_name; targetId = target.id
         }
       }
     }
@@ -234,7 +239,9 @@ export async function POST(req: NextRequest) {
       data: { court, match_id: targetId },
     })
 
-    const pushOptions = { urgency: 'high' as const, TTL: 60 }
+    // ✅ TTL 60 → 300초: 잠깐 전파가 끊긴 기기(코트 주변 수신 불량 등)도
+    //    5분 안에 복구되면 알림을 받을 수 있게. '코트 이동' 알림은 5분간 유효함
+    const pushOptions = { urgency: 'high' as const, TTL: 300 }
 
     let sent = 0
     let failed = 0
