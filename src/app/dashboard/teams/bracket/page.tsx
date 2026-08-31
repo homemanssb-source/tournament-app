@@ -6,7 +6,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEventIdWithParam } from '@/components/useDashboard';
 import { supabase } from '@/lib/supabase';
 import { getRoundLabel, getTieStatusColor, getTieStatusLabel } from '@/lib/team-utils';
 import type { TieWithClubs } from '@/types/team';
@@ -19,8 +19,7 @@ interface GroupProgress {
 const ROUND_ORDER = ['round_of_32', 'round_of_16', 'quarter', 'semi', 'final'];
 
 export default function BracketPage() {
-  const searchParams = useSearchParams();
-  const eventId = searchParams.get('event_id') || '';
+  const eventId = useEventIdWithParam();
 
   const [divisions, setDivisions]       = useState<Division[]>([]);
   const [selectedDiv, setSelectedDiv]   = useState<string>('');

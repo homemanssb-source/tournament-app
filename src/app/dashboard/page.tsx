@@ -624,7 +624,7 @@ export default function DashboardPage() {
           { href: '/dashboard/courts',          emoji: '🎾', label: '코트 배정',   desc: '코트 현황 관리' },
           { href: '/dashboard/teams/ties',      emoji: '🏆', label: '단체전 관리', desc: '타이 점수 입력' },
           { href: '/dashboard/teams/standings', emoji: '📊', label: '순위표',      desc: '실시간 순위 확인' },
-          { href: '/dashboard/bracket',         emoji: '🗂️', label: '토너먼트표', desc: '대진 관리' },
+          { href: stats.totalClubs > 0 ? '/dashboard/teams/bracket' : '/dashboard/tournament', emoji: '🗂️', label: '토너먼트표', desc: '대진 관리' },
           { href: '/dashboard/report',          emoji: '📄', label: '리포트',      desc: 'PDF·CSV 내보내기' },
           { href: '/dashboard/logs',            emoji: '👥', label: '접속 로그',   desc: '공개 페이지 접속 통계' },
         ].map(item => (

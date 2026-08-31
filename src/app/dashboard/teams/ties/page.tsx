@@ -7,7 +7,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEventIdWithParam } from '@/components/useDashboard';
 import {
   fetchTies, fetchRubbers, fetchEventTeamConfig,
   fetchClubMembers, recordRubberScore, calculateStandings,
@@ -20,8 +20,7 @@ import {
 import type { TieWithClubs, TieRubber, EventTeamConfig, TeamLineup, ClubMember } from '@/types/team';
 
 export default function TiesPage() {
-  const searchParams = useSearchParams();
-  const eventId = searchParams.get('event_id') || '';
+  const eventId = useEventIdWithParam();
 
   const [config, setConfig]     = useState<EventTeamConfig | null>(null);
   const [ties, setTies]         = useState<TieWithClubs[]>([]);

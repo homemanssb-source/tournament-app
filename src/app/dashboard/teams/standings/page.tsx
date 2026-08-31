@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEventIdWithParam } from '@/components/useDashboard';
 import { supabase } from '@/lib/supabase';
 import { fetchStandings, fetchEventTeamConfig, calculateStandings, setManualRank } from '@/lib/team-api';
 import type { StandingWithClub, EventTeamConfig } from '@/types/team';
@@ -16,8 +16,7 @@ function getRankStyle(rank: number | null) {
 }
 
 export default function StandingsPage() {
-  const searchParams = useSearchParams();
-  const eventId = searchParams.get('event_id') || '';
+  const eventId = useEventIdWithParam();
   const [config, setConfig] = useState<EventTeamConfig | null>(null);
   const [groups, setGroups] = useState<any[]>([]);
   const [standingsMap, setStandingsMap] = useState<Record<string, StandingWithClub[]>>({});

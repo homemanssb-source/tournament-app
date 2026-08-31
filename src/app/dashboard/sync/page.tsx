@@ -1,14 +1,13 @@
 'use client';
 
 import { useState, useEffect, useCallback, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEventIdWithParam } from '@/components/useDashboard';
 import { supabase } from '@/lib/supabase';
 import { fetchClubs } from '@/lib/team-api';
 import type { Club, SyncLog } from '@/types/team';
 
 function SyncDashboardInner() {
-  const searchParams = useSearchParams();
-  const eventId = searchParams.get('event_id') || '';
+  const eventId = useEventIdWithParam();
 
   const [events, setEvents] = useState<any[]>([]);
   const [selectedEventId, setSelectedEventId] = useState(eventId);
