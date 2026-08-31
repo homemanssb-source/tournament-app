@@ -93,6 +93,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return () => unsubFn()
   }, [router, isLoginPage])
 
+  // ✅ 동기화 등으로 대회 목록이 바뀌면 드롭다운 자동 갱신
+  //    (기존엔 마운트 시 1회만 로드 → 새 대회 연동 후 새로고침해야 보였음)
+  useEffect(() => {
+    if (isLoginPage) return
+    async function refreshEvents() {
+      const { data } = await supabase
+        .from('events').select('id, name, date')
+        .order('date', { ascending: true })
+      if (data) setEvents(data)
+    }
+    window.addEventListener('dashboard_events_changed', refreshEvents)
+    window.addEventListener('focus', refreshEvents)
+    return () => {
+      window.removeEventListener('dashboard_events_changed', refreshEvents)
+      window.removeEventListener('focus', refreshEvents)
+    }
+  }, [isLoginPage])
+
   async function handleLogout() { await supabase.auth.signOut(); router.push('/') }
 
   function handleEventChange(id: string) {
