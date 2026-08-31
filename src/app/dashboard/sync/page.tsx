@@ -106,6 +106,8 @@ function SyncDashboardInner() {
         .select('id, name, event_type, app_a_event_id, app_a_connected')
         .order('created_at', { ascending: false });
       setEvents(data || []);
+      // ✅ 상단 대회선택 드롭다운(레이아웃)도 갱신되도록 알림
+      window.dispatchEvent(new Event('dashboard_events_changed'));
     } catch (err: any) { setSyncResult({ type: 'pull-events', success: false, error: err.message }); }
     finally { setSyncing(false); }
   }
