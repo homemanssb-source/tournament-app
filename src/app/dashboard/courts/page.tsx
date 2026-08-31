@@ -12,6 +12,17 @@ interface MatchSlim {
   status: string; score: string | null; winner_team_id: string | null
   division_name: string; division_id: string; locked_by_participant: boolean
   group_label: string | null; is_team_tie?: boolean; slot?: number | null
+  ended_at?: string | null   // 경기 종료 시각 (KST로 표시)
+}
+
+// 종료 시각을 KST HH:mm 으로 (기기 시간대와 무관)
+function fmtEndTime(iso?: string | null): string {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleTimeString('ko-KR', {
+      timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+  } catch { return '' }
 }
 interface Venue {
   id: string; name: string; short_name: string
@@ -1139,6 +1150,7 @@ function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }:
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
                   {m.score && <span className="text-xs font-bold text-stone-500">{m.score}</span>}
+                  {m.ended_at && <span className="text-[10px] text-stone-400">🕒{fmtEndTime(m.ended_at)}</span>}
                   <button onClick={() => onClickScore(m)} className="text-[10px] text-stone-300 hover:text-blue-500">✏</button>
                   <button onClick={() => onClickUnassign(m.id)} className="text-[10px] text-stone-300 hover:text-red-500">✕</button>
                 </div>

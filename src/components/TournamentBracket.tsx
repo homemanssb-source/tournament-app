@@ -12,8 +12,19 @@ interface BracketMatch {
   team_a_id?: string; team_b_id?: string; team_a_name?: string; team_b_name?: string
   winner_team_id?: string; winner_name?: string; score?: string; status?: string
   next_match_id?: string; next_slot?: string
+  ended_at?: string | null   // 경기 종료 시각 (KST로 표시)
   // TBD 미리 생성 지원 필드
   qualifier_label_a?: string; qualifier_label_b?: string
+}
+
+// 종료 시각을 KST HH:mm 으로 (기기 시간대와 무관)
+function fmtEndTime(iso?: string | null): string {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleTimeString('ko-KR', {
+      timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+  } catch { return '' }
 }
 
 const ROUND_ORDER = ['128강', '64강', '32강', '16강', '8강', '4강', '결승', 'R128', 'R64', 'R32', 'R16', 'QF', 'SF', 'F']
@@ -301,13 +312,18 @@ function MatchCard({ m, byRound, roundIdx, rounds }: {
         {bWon && <span className="text-green-600 flex-shrink-0 ml-1 text-xs pt-0.5">✓</span>}
       </div>
 
-      {/* 점수 바 */}
+      {/* 점수 바 (+ 종료 시각) */}
       {done && !isBye && m.score && (
         <div
-          className="flex items-center justify-center bg-green-50 border-t border-green-100 text-green-700 font-bold"
+          className="flex items-center justify-center gap-1 bg-green-50 border-t border-green-100 text-green-700 font-bold"
           style={{ height: 13, flexShrink: 0, fontSize: 10 }}
         >
-          {m.score}
+          <span>{m.score}</span>
+          {m.ended_at && (
+            <span className="text-green-500 font-normal" style={{ fontSize: 8 }}>
+              {fmtEndTime(m.ended_at)}
+            </span>
+          )}
         </div>
       )}
       {isBye && (
