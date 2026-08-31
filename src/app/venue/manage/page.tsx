@@ -113,7 +113,7 @@ export default function VenueManagePage() {
     if (values.length === 0) return
     const dates = [...new Set(values)].sort()
     if (dateFilter === 'ALL') {
-      const today = new Date().toISOString().split('T')[0]
+      const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().split('T')[0]
       const picked = dates.includes(today)
         ? today
         : dates.reduce((best, cur) => {

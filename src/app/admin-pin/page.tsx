@@ -22,7 +22,7 @@ export default function AdminPinPage() {
       .order('date', { ascending: true })
       .then(({ data }) => {
         if (!data || data.length === 0) return
-        const today = new Date().toISOString().split('T')[0]
+        const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().split('T')[0]
         // 오늘 날짜와 절댓값 기준 가장 가까운 대회 선택 (과거 포함)
         const best = data.reduce((prev, curr) => {
           const prevDiff = Math.abs(new Date(prev.date).getTime() - new Date(today).getTime())

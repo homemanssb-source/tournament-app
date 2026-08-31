@@ -66,7 +66,7 @@ export default function PinPage() {
       .order('date', { ascending: true })
       .then(({ data }) => {
         if (!data || data.length === 0) return
-        const today = new Date().toISOString().split('T')[0]
+        const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().split('T')[0]
         // 오늘 날짜와 절댓값 기준 가장 가까운 대회 선택 (과거 포함)
         const best = data.reduce((prev, curr) => {
           const prevDiff = Math.abs(new Date(prev.date).getTime() - new Date(today).getTime())
@@ -117,11 +117,13 @@ export default function PinPage() {
 
     // ✅ PIN 로그인 성공 = 출전 신고 (즉시 check-in)
     //    알림 옵션(허용/건너뛰기/이미한 PIN)과 무관하게 운영자 대시보드에 즉시 반영
-    //    fire-and-forget: UX 막지 않음
+    //    fire-and-forget: UX 막지 않음. 단, 실패는 조용히 넘기지 말고 로그로 남긴다.
     supabase.from('teams').update({
       checked_in: true,
       checked_in_at: new Date().toISOString(),
-    }).eq('pin_plain', pin).eq('event_id', selectedEvent).then(() => {})
+    }).eq('pin_plain', pin).eq('event_id', selectedEvent).then(({ error }) => {
+      if (error) console.warn('[체크인] 실패:', error.message)
+    })
 
     try {
       const donePins = JSON.parse(localStorage.getItem(NOTIF_DONE_KEY) || '[]') as string[]
@@ -140,14 +142,18 @@ export default function PinPage() {
     let subscribeOk = false
     try {
       subscribeOk = await subscribeWithPin(loginPin, { mode: 'individual', eventId: selectedEvent })
-      await supabase
+      const { error: checkinErr } = await supabase
         .from('teams')
         .update({ checked_in: true, checked_in_at: new Date().toISOString() })
         .eq('pin_plain', loginPin)
         .eq('event_id', selectedEvent)
+      if (checkinErr) console.warn('[체크인] 실패:', checkinErr.message)
       // ✅ 구독이 실제로 성공했을 때만 '완료' 마킹
       //    (실패해도 마킹하면 다음 로그인부터 알림 프롬프트가 영영 안 떠서 재시도 기회가 사라짐)
       if (subscribeOk) markNotifDone(loginPin)
+    } catch (e) {
+      // 네트워크 오류 등으로 중간에 throw돼도 체크인 화면에 갇히지 않도록
+      console.warn('[체크인] 예외:', e)
     } finally {
       setCheckinLoading(false)
     }

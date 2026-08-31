@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useEventId, useDivisions } from '@/components/useDashboard'
+import { fillSlotsIfGroupComplete } from '@/lib/tournament'
 import type { TieWithClubs } from '@/types/team'
 
 interface MatchSlim {
@@ -177,7 +178,7 @@ export default function CourtsPage() {
     const dates = [...new Set(Object.values(divMatchDates))].sort()
     if (dates.length > 0 && dateFilter === 'ALL') {
       // ✅ 오늘 날짜가 있으면 오늘, 없으면 가장 가까운 날짜(과거 포함)
-      const today = new Date().toISOString().split('T')[0]
+      const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().split('T')[0]
       const picked = dates.includes(today)
         ? today
         : dates.reduce((best, cur) => {
@@ -627,12 +628,18 @@ export default function CourtsPage() {
         if (editMatch.status === 'FINISHED') {
           const { error: ue } = await supabase.from('matches').update({ score:editScore, winner_team_id:winnerId, status:'FINISHED', ended_at:new Date().toISOString() }).eq('id', editMatch.id)
           if (ue) { setMsg('❌ ' + ue.message); return }
+          // ✅ [2-2] 강제 수정 시에도 본선 승자 진출 처리 (raw update가 대진표 갱신을 건너뛰던 버그)
+          //    advance_winner는 FINALS가 아니면 내부에서 즉시 return → 안전. 빈 슬롯만 채움(재실행 안전).
+          //    주의: 이미 다음 라운드가 채워진 상태에서 '승자 자체'를 바꾸려면 admin-pin 강제수정 도구 사용.
+          await supabase.rpc('advance_winner', { p_match_id: editMatch.id })
           setMsg('✅ 결과 강제 수정됨 (운영자 모드)')
         } else { setMsg('❌ ' + rpcError.message); return }
       } else {
         setMsg('✅ 결과 저장됨')
         if (editMatch.court) sendCourtNotify(editMatch.court, 'finished')
       }
+      // ✅ [2-3] 조별 경기였다면 본선 슬롯 자동 채우기 (선수 브라우저가 못 채운 경우 대비 안전망)
+      await fillSlotsIfGroupComplete(eventId, editMatch)
       setEditMatch(null)
       await loadMatches()
     } finally { setSubmitting(false) }
