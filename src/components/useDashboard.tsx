@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { supabase, Division } from '@/lib/supabase'
 
 export function useEventId(): string {
@@ -8,6 +9,19 @@ export function useEventId(): string {
     const stored = localStorage.getItem('dashboard_event_id') || ''
     setId(stored)
   }, [])
+  return id
+}
+
+// URL 쿼리(?event_id=) 우선, 없으면 localStorage 폴백.
+// teams/* · sync 페이지가 쿼리만 읽어 직접 진입 시 무한 로딩되던 버그(B6) 방지.
+export function useEventIdWithParam(): string {
+  const searchParams = useSearchParams()
+  const [id, setId] = useState('')
+  useEffect(() => {
+    const fromParam = searchParams.get('event_id') || ''
+    const fromStore = typeof window !== 'undefined' ? localStorage.getItem('dashboard_event_id') || '' : ''
+    setId(fromParam || fromStore)
+  }, [searchParams])
   return id
 }
 

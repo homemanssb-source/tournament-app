@@ -6,7 +6,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useEventIdWithParam } from '@/components/useDashboard';
 import {
   fetchClubs, fetchEventTeamConfig, fetchStandings, fetchTies,
   generateFullLeague, createTeamGroups,
@@ -45,8 +45,7 @@ function calcGroupDistribution(totalTeams: number, groupSize: number): number[] 
 }
 
 export default function GroupsPage() {
-  const searchParams = useSearchParams();
-  const eventId = searchParams.get('event_id') || '';
+  const eventId = useEventIdWithParam();
 
   const [config, setConfig] = useState<EventTeamConfig | null>(null);
   const [clubs, setClubs] = useState<Club[]>([]);
