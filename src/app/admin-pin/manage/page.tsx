@@ -372,7 +372,30 @@ export default function AdminPinManagePage() {
     const { error } = await supabase.rpc('rpc_admin_pin_update_score', {
       p_token: session.token, p_match_id: selectedMatch.id, p_score: newScore, p_winner_team_id: winnerId
     })
-    if (error) { setLoading(false); setMsg('❌ '+error.message); return }
+    if (error) {
+      // ✅ 다음 라운드가 이미 완료돼 정상 수정이 막힌 경우 → 강제 수정 옵션 제공
+      //    (대시보드 코트배정 강제수정과 동일 동작)
+      const blocked = /다음 라운드|완료되어/.test(error.message || '')
+      if (blocked && confirm(
+        '⚠️ 다음 라운드 경기가 이미 완료되어 정상 수정이 막혔습니다.\n\n' +
+        '강제로 수정하시겠습니까?\n' +
+        '· 이 경기 결과가 덮어써지고 승자가 다음 라운드로 다시 진출합니다.\n' +
+        '· 이미 진행된 다음 라운드 결과는 그대로 남으니, 필요하면 뒤 라운드부터 직접 확인·수정하세요.'
+      )) {
+        const { error: ue } = await supabase.from('matches').update({
+          score: newScore, winner_team_id: winnerId, status: 'FINISHED', ended_at: new Date().toISOString(),
+        }).eq('id', selectedMatch.id)
+        if (ue) { setLoading(false); setMsg('❌ ' + ue.message); return }
+        // 본선 승자 진출 재처리 (다음 라운드 슬롯 교체)
+        await supabase.rpc('advance_winner', { p_match_id: selectedMatch.id })
+        await tryFillTournamentSlotsAdmin(selectedMatch.id, session.event_id)
+        setLoading(false)
+        setMsg('✅ 강제 수정됨 (운영자 모드)')
+        loadAllMatches(session.event_id); setSelectedMatch(null)
+        return
+      }
+      setLoading(false); setMsg('❌ '+error.message); return
+    }
 
     // ✅ 조별 경기인 경우 본선 TBD 슬롯 자동 채우기
     await tryFillTournamentSlotsAdmin(selectedMatch.id, session.event_id)

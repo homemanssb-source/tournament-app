@@ -416,13 +416,17 @@ export default function PinMatchesPage() {
   }
 
   async function submitScore(matchId: string, match: PinMatch) {
+    if (submitting) return  // ✅ 연타/Enter 중복 제출 방지
     // ✅ 본인 팀이 항상 승자 — my_side 직접 사용
     const winner = match.my_side
     const loser  = loserScores[matchId]?.trim()
     if (!loser)  { setMsg('상대팀 점수를 입력해주세요. (예: 4)'); return }
     if (!/^\d+$/.test(loser)) { setMsg('숫자만 입력해주세요.'); return }
-    if (parseInt(loser) > 5) { setMsg('패자 점수는 5점 이하여야 합니다.'); return }
-    const score = winner === 'A' ? `6:${loser}` : `${loser}:6`
+    const loserN = parseInt(loser)
+    if (loserN > 6) { setMsg('패자 점수는 6점 이하여야 합니다. (7:6은 6 입력)'); return }
+    // ✅ 패자가 6점이면 타이브레이크 세트 → 승자 7 (7:6), 그 외 승자 6
+    const winScore = loserN === 6 ? 7 : 6
+    const score = winner === 'A' ? `${winScore}:${loser}` : `${loser}:${winScore}`
     setSubmitting(matchId); setMsg('')
 
     const { error } = await supabase.rpc('rpc_pin_submit_score', {
@@ -654,6 +658,8 @@ export default function PinMatchesPage() {
                             // ✅ 본인 팀이 항상 승자 — 승자 선택 버튼 없음
                             const myTeamName = m.my_side === 'A' ? m.team_a_name : m.team_b_name
                             const oppTeamName = m.my_side === 'A' ? m.team_b_name : m.team_a_name
+                            // ✅ 패자 6점이면 타이브레이크 → 내 점수 7 (7:6)
+                            const myScore = parseInt(loser || '0') === 6 ? 7 : 6
                             return (
                               <div className="space-y-3 pt-1">
                                 {/* 승자 고정 표시 */}
@@ -666,18 +672,18 @@ export default function PinMatchesPage() {
                                 <div className="bg-stone-50 rounded-xl p-3">
                                   <div className="flex items-center justify-center gap-3 mb-3">
                                     <span className="text-sm font-bold text-[#2d5016]">{myTeamName}</span>
-                                    <span className="text-xl font-black text-stone-700">6 : {loser || '?'}</span>
+                                    <span className="text-xl font-black text-stone-700">{myScore} : {loser || '?'}</span>
                                     <span className="text-sm font-bold text-stone-400">{oppTeamName}</span>
                                   </div>
-                                  <p className="text-xs text-stone-400 text-center mb-2">상대팀 점수 입력 (내 팀은 항상 6)</p>
+                                  <p className="text-xs text-stone-400 text-center mb-2">상대팀 점수 입력 (0~6 · 타이브레이크 7:6은 6 입력)</p>
                                   <div className="flex gap-2">
                                     <input
-                                      type="number" inputMode="numeric" min="0" max="5" placeholder="0~5"
+                                      type="number" inputMode="numeric" min="0" max="6" placeholder="0~6"
                                       value={loser}
                                       onChange={e => {
                                         const v = e.target.value
-                                        // 6점 이상 입력 차단
-                                        if (v !== '' && parseInt(v) > 5) return
+                                        // 7점 이상 입력 차단 (패자 최대 6 → 7:6)
+                                        if (v !== '' && parseInt(v) > 6) return
                                         setLoserScores(prev => ({ ...prev, [m.id]: v }))
                                       }}
                                       onKeyDown={e => e.key === 'Enter' && submitScore(m.id, m)}
@@ -697,7 +703,7 @@ export default function PinMatchesPage() {
                                   </div>
                                   {loser && (
                                     <div className="mt-2 text-center text-xs text-stone-500">
-                                      최종 점수: <span className="font-bold text-stone-700">6:{loser}</span>
+                                      최종 점수: <span className="font-bold text-stone-700">{myScore}:{loser}</span>
                                       &nbsp;· <span className="text-[#2d5016] font-medium">{myTeamName}</span> 승리
                                     </div>
                                   )}
