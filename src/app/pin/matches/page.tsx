@@ -64,6 +64,7 @@ export default function PinMatchesPage() {
   const loadDataRef = useRef<((s: any) => Promise<void>) | null>(null)  // ✅ 인터벌에서 최신 loadData 참조
   const prevWaitRef = useRef<Map<string, number>>(new Map())
   const errorCountRef = useRef(0)
+  const reloginInFlightRef = useRef(false)  // ✅ 자동 재로그인 중복 방지
 
   const [inAppNotifs, setInAppNotifs] = useState<InAppNotif[]>([])
   const notifIdRef = useRef(0)
@@ -122,28 +123,81 @@ export default function PinMatchesPage() {
     return () => navigator.serviceWorker.removeEventListener('message', handler)
   }, [showInAppNotif])
 
+  // ✅ 세션 관련 저장소 완전 삭제 — localStorage까지 지워야 /pin ↔ /pin/matches 무한 복원 루프가 안 생김
+  function clearPinSession() {
+    sessionStorage.removeItem('pin_session')
+    sessionStorage.removeItem('venue_pin')
+    sessionStorage.removeItem('pin_event_id')
+    localStorage.removeItem('pin_session')
+    localStorage.removeItem('venue_pin')
+    localStorage.removeItem('pin_event_id')
+  }
+
+  // ✅ [FIX] DB의 pin_sessions는 일정 시간 후 만료되는데 클라이언트 캐시는 12시간 유지되어
+  //    대회 중반에 "내 경기 없음"이 되는 버그 → 보관해둔 PIN으로 조용히 재로그인 시도
+  const trySilentRelogin = useCallback(async (s: any): Promise<boolean> => {
+    if (reloginInFlightRef.current) return false
+    reloginInFlightRef.current = true
+    try {
+      const pin = sessionStorage.getItem('venue_pin') || localStorage.getItem('venue_pin') || ''
+      const eventId = s?.event_id || sessionStorage.getItem('pin_event_id') || localStorage.getItem('pin_event_id') || ''
+      if (!pin || !eventId) return false
+
+      const { data, error } = await supabase.rpc('rpc_pin_login', {
+        p_pin_code: pin, p_event_id: eventId,
+      })
+      if (error || !data?.token) return false
+
+      const sessionData = { ...data, _savedAt: Date.now() }
+      sessionStorage.setItem('pin_session', JSON.stringify(sessionData))
+      localStorage.setItem('pin_session', JSON.stringify(sessionData))
+      errorCountRef.current = 0
+      setSession(sessionData)              // 인터벌도 새 세션으로 재설정됨
+      loadDataRef.current?.(sessionData)   // 즉시 목록 다시 로드
+      console.info('[PIN] 세션 만료 → 자동 재로그인 성공')
+      return true
+    } catch {
+      return false
+    } finally {
+      reloginInFlightRef.current = false
+    }
+  }, [])
+
   const loadData = useCallback(async (s: any) => {
     try {
       const { data, error } = await supabase.rpc('rpc_pin_list_matches', { p_token: s.token })
 
       if (error) {
+        const msg = error.message || ''
+        // ✅ RPC가 던지는 한글 세션만료 메시지도 인증 에러로 처리 (기존엔 영문 JWT 에러만 잡아서 누락됨)
+        const isSessionExpired =
+          msg.includes('세션이 만료') || msg.includes('유효하지 않')
         const isAuthError =
           error.code === 'PGRST301' ||
           error.code === '42501' ||
-          error.message?.includes('JWT') ||
-          error.message?.includes('invalid token')
+          msg.includes('JWT') ||
+          msg.includes('invalid token')
+
+        if (isSessionExpired) {
+          const ok = await trySilentRelogin(s)
+          if (!ok) {
+            clearPinSession()
+            router.replace('/pin')
+          }
+          return
+        }
 
         if (isAuthError) {
-          sessionStorage.removeItem('pin_session')
+          clearPinSession()
           router.replace('/pin')
           return
         }
 
         errorCountRef.current += 1
-        console.warn(`[PIN] loadData error (${errorCountRef.current}/${MAX_ERRORS}):`, error.message)
+        console.warn(`[PIN] loadData error (${errorCountRef.current}/${MAX_ERRORS}):`, msg)
 
         if (errorCountRef.current >= MAX_ERRORS) {
-          sessionStorage.removeItem('pin_session')
+          clearPinSession()
           router.replace('/pin')
         }
         return
@@ -154,30 +208,48 @@ export default function PinMatchesPage() {
       let myMatches: PinMatch[] = data.matches || []
 
       // ✅ [FIX] RPC가 16강/8강/4강/결승 등 본선 라운드를 누락하는 버그 우회
+      //    → 같은 PIN을 공유하는 모든 팀(부서별 중복 등록 케이스) 수집
       //    → v_matches_with_teams에서 본선(stage=FINALS) 매치 직접 보완 조회
       //    내 team_id가 a/b 어느 쪽인지에 따라 my_side 계산
-      const myTeamId = s.team_id
-      if (myTeamId && s.event_id) {
+      if (s.event_id) {
         try {
-          const { data: finalsExtra } = await supabase
-            .from('v_matches_with_teams')
-            .select('id,match_num,stage,round,court,court_order,status,score,locked_by_participant,team_a_name,team_b_name,team_a_id,team_b_id,division_name,division_id,group_label,match_date,slot')
-            .eq('event_id', s.event_id)
-            .eq('stage', 'FINALS')
-            .or(`team_a_id.eq.${myTeamId},team_b_id.eq.${myTeamId}`)
-            .neq('score', 'BYE')
-            .not('team_a_id', 'is', null)
-            .not('team_b_id', 'is', null)
+          // 1) 같은 PIN을 공유하는 모든 팀 id 수집
+          //    sessionStorage의 venue_pin이 있으면 그것 기준, 없으면 session.team_id로 폴백
+          const pin = (typeof window !== 'undefined' ? sessionStorage.getItem('venue_pin') : '') || ''
+          let myTeamIds: string[] = []
+          if (pin) {
+            const { data: sameTeams } = await supabase
+              .from('teams')
+              .select('id')
+              .eq('event_id', s.event_id)
+              .eq('pin_plain', pin)
+            myTeamIds = (sameTeams || []).map((t: any) => t.id)
+          }
+          if (myTeamIds.length === 0 && s.team_id) myTeamIds = [s.team_id]
 
-          if (Array.isArray(finalsExtra) && finalsExtra.length > 0) {
-            const existingIds = new Set(myMatches.map((m: any) => m.id))
-            const supplement = (finalsExtra as any[])
-              .filter(m => !existingIds.has(m.id))
-              .map(m => ({
-                ...m,
-                my_side: m.team_a_id === myTeamId ? 'A' : 'B',
-              }))
-            if (supplement.length > 0) myMatches = [...myMatches, ...supplement] as PinMatch[]
+          if (myTeamIds.length > 0) {
+            const idList = myTeamIds.join(',')
+            const { data: finalsExtra } = await supabase
+              .from('v_matches_with_teams')
+              .select('id,match_num,stage,round,court,court_order,status,score,locked_by_participant,team_a_name,team_b_name,team_a_id,team_b_id,division_name,division_id,group_label,match_date,slot')
+              .eq('event_id', s.event_id)
+              .eq('stage', 'FINALS')
+              .or(`team_a_id.in.(${idList}),team_b_id.in.(${idList})`)
+              .neq('score', 'BYE')
+              .not('team_a_id', 'is', null)
+              .not('team_b_id', 'is', null)
+
+            if (Array.isArray(finalsExtra) && finalsExtra.length > 0) {
+              const idSet = new Set(myTeamIds)
+              const existingIds = new Set(myMatches.map((m: any) => m.id))
+              const supplement = (finalsExtra as any[])
+                .filter(m => !existingIds.has(m.id))
+                .map(m => ({
+                  ...m,
+                  my_side: idSet.has(m.team_a_id) ? 'A' : 'B',
+                }))
+              if (supplement.length > 0) myMatches = [...myMatches, ...supplement] as PinMatch[]
+            }
           }
         } catch (e) {
           console.warn('[PIN] finals 보완 조회 실패:', e)
@@ -280,7 +352,7 @@ export default function PinMatchesPage() {
       // ✅ 에러/예외/정상 모든 경우에 반드시 로딩 해제
       setLoading(false)
     }
-  }, [showInAppNotif])  // ✅ notifAllowed는 ref로 관리하므로 의존성 제거
+  }, [showInAppNotif, trySilentRelogin])  // ✅ notifAllowed는 ref로 관리하므로 의존성 제거
 
   // ✅ loadData가 재생성될 때마다 ref 업데이트 (loadData 선언 이후에 위치해야 함)
   useEffect(() => {
@@ -296,11 +368,21 @@ export default function PinMatchesPage() {
 
   function sendBrowserNotif(court: string) {
     if (!('Notification' in window) || Notification.permission !== 'granted') return
-    new Notification('🎾 준비하세요!', {
+    // ✅ Android Chrome은 페이지 컨텍스트의 new Notification()을 지원하지 않아 throw됨
+    //    → Service Worker 경유(showNotification)로 표시, 실패 시 데스크톱용 폴백
+    const title = '🎾 준비하세요!'
+    const options = {
       body: `${court}에서 다음 경기로 이동해주세요.`,
       icon: '/icon-192x192.png',
       tag: `court-${court}`,
-    })
+    }
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready
+        .then(reg => reg.showNotification(title, options))
+        .catch(() => { try { new Notification(title, options) } catch {} })
+    } else {
+      try { new Notification(title, options) } catch {}
+    }
   }
 
   async function requestNotification() {
@@ -313,7 +395,9 @@ export default function PinMatchesPage() {
       notifAllowedRef.current = granted
       if (perm === 'granted') {
         showInAppNotif('🎾 알림 활성화', '경기 알림이 설정되었습니다.')
-        const pin = session?.pin || sessionStorage.getItem('venue_pin') || session?.token
+        // ✅ PIN만 사용 — session.token은 PIN이 아니므로 폴백에서 제거
+        //    (토큰을 PIN으로 보내면 서버 404 → 구독 등록 실패)
+        const pin = sessionStorage.getItem('venue_pin') || localStorage.getItem('venue_pin') || ''
         if (pin) await subscribeWithPin(pin, { mode: 'individual', eventId: session?.event_id })
         else autoResubscribe()
       } else if (perm === 'denied') {
@@ -428,10 +512,7 @@ export default function PinMatchesPage() {
   }
 
   function handleLogout() {
-    sessionStorage.removeItem('pin_session')
-    sessionStorage.removeItem('venue_pin')
-    sessionStorage.removeItem('pin_event_id')
-    localStorage.removeItem('pin_session')
+    clearPinSession()
     router.replace('/pin')
   }
 

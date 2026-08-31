@@ -111,6 +111,9 @@ export default function PinPage() {
     sessionStorage.setItem('pin_event_id', selectedEvent)
     // ✅ localStorage에도 저장 → 다른 페이지 갔다 와도 튕기지 않음 (12시간 유효)
     localStorage.setItem('pin_session', JSON.stringify(sessionData))
+    // ✅ DB 세션 만료 시 자동 재로그인용 — 탭을 닫았다 열어도 PIN 재입력 없이 복구
+    localStorage.setItem('venue_pin', pin)
+    localStorage.setItem('pin_event_id', selectedEvent)
 
     // ✅ PIN 로그인 성공 = 출전 신고 (즉시 check-in)
     //    알림 옵션(허용/건너뛰기/이미한 PIN)과 무관하게 운영자 대시보드에 즉시 반영
@@ -142,7 +145,9 @@ export default function PinPage() {
         .update({ checked_in: true, checked_in_at: new Date().toISOString() })
         .eq('pin_plain', loginPin)
         .eq('event_id', selectedEvent)
-      markNotifDone(loginPin)
+      // ✅ 구독이 실제로 성공했을 때만 '완료' 마킹
+      //    (실패해도 마킹하면 다음 로그인부터 알림 프롬프트가 영영 안 떠서 재시도 기회가 사라짐)
+      if (subscribeOk) markNotifDone(loginPin)
     } finally {
       setCheckinLoading(false)
     }
@@ -225,8 +230,9 @@ export default function PinPage() {
   async function handleTeamAllowNotification() {
     setCheckinLoading(true)
     try {
-      await subscribeWithPin(loginPin, { mode: 'team', eventId: selectedEvent })
-      markNotifDone(loginPin)
+      const ok = await subscribeWithPin(loginPin, { mode: 'team', eventId: selectedEvent })
+      // ✅ 구독 성공 시에만 마킹 — 실패 시 다음 로그인에서 다시 프롬프트
+      if (ok) markNotifDone(loginPin)
     } finally {
       setCheckinLoading(false)
     }

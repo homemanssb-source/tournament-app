@@ -1,5 +1,5 @@
 // JTA 제주테니스 Service Worker
-const CACHE_NAME = 'jta-ranking-v10';
+const CACHE_NAME = 'jta-ranking-v11';
 const STATIC_ASSETS = ['/icon-192x192.png', '/icon-512x512.png', '/manifest.json'];
 
 self.addEventListener('install', e => {
@@ -106,9 +106,17 @@ self.addEventListener('notificationclick', e => {
   if (e.action === 'close') return;
   const url = e.notification.data?.url || '/';
   e.waitUntil(
-    clients.matchAll({ type: 'window' }).then(list => {
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
       for (const c of list) {
-        if (c.url.includes(self.location.origin) && 'focus' in c) return c.focus();
+        if (c.url.includes(self.location.origin) && 'focus' in c) {
+          // ✅ 창 focus만 하고 끝나던 버그 수정 — 알림이 가리키는 페이지로 실제 이동
+          //    이미 해당 페이지면 focus만 (새로고침으로 입력 중 점수 날리지 않게)
+          const focused = c.focus();
+          if ('navigate' in c && !c.url.includes(url)) {
+            return focused.then(fc => fc.navigate(url)).catch(() => focused);
+          }
+          return focused;
+        }
       }
       return clients.openWindow(url);
     })

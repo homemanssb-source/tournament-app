@@ -95,15 +95,16 @@ export function usePushSubscription() {
 
       const reg = await navigator.serviceWorker.ready
 
-      // 2. ✅ 기존 구독 무조건 해제 후 새로 발급
-      //    (endpoint 만료 방지 — 항상 최신 endpoint 사용)
-      const existing = await reg.pushManager.getSubscription()
-      if (existing) await existing.unsubscribe()
-
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
-      })
+      // 2. ✅ 기존 구독이 있으면 재사용, 없으면 새로 발급
+      //    (기존에는 무조건 해제 후 재발급했는데, 서버 저장이 실패하면
+      //     멀쩡하던 구독까지 사라져 알림이 끊기는 사고가 남)
+      let sub = await reg.pushManager.getSubscription()
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        })
+      }
 
       // 3. 서버에 저장 (mode + event_id로 스코프)
       const res = await saveToServer(pin, sub, opts)
@@ -163,16 +164,17 @@ export function usePushSubscription() {
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
         })
-        await saveToServer(savedPin, newSub, opts)
-        localStorage.setItem('push_endpoint', newSub.endpoint)
+        // ✅ 서버 저장이 성공했을 때만 endpoint 기록 — 실패 시 다음 기회에 재시도
+        const res = await saveToServer(savedPin, newSub, opts)
+        if (res.ok) localStorage.setItem('push_endpoint', newSub.endpoint)
         return
       }
 
       // 케이스 2: endpoint가 변경된 경우
       if (currentSub.endpoint !== savedEndpoint) {
         console.log('[Push] endpoint 변경 → 재등록')
-        await saveToServer(savedPin, currentSub, opts)
-        localStorage.setItem('push_endpoint', currentSub.endpoint)
+        const res = await saveToServer(savedPin, currentSub, opts)
+        if (res.ok) localStorage.setItem('push_endpoint', currentSub.endpoint)
         return
       }
 
