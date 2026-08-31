@@ -61,7 +61,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         if (storedValid) {
           setEventId(stored!)
         } else {
-          const today = new Date().toISOString().split('T')[0]
+          const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().split('T')[0]
           const list = evList ?? []
           const upcoming = list.filter(e => e.date >= today)
           const fallback = [...list].reverse()

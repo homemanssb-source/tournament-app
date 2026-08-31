@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { usePushSubscription } from '@/hooks/usePushSubscription'
+import { fillSlotsIfGroupComplete } from '@/lib/tournament'
 
 interface PinMatch {
   id: string; match_num: string; stage: string; round: string
@@ -407,70 +408,11 @@ export default function PinMatchesPage() {
   }
 
   // ============================================================
-  // ✅ 점수 제출 후 조별 완료 체크 → rpc_fill_tournament_slots 호출
+  // ✅ 점수 제출 후 조별 완료 체크 → 본선 슬롯 자동 채우기
+  //    공용 헬퍼로 추출 (운영자 courts 화면과 동일 로직 공유)
   // ============================================================
   async function tryFillTournamentSlots(match: PinMatch) {
-    // GROUP 경기가 아니면 skip (대소문자 모두 대응)
-    const stageUp = (match.stage || '').toUpperCase()
-    const roundUp = (match.round || '').toUpperCase()
-    if (stageUp !== 'GROUP' && roundUp !== 'GROUP') return
-
-    const eventId = session?.event_id
-    if (!eventId) return
-
-    // 해당 경기의 group_id 조회
-    const { data: matchData } = await supabase
-      .from('matches')
-      .select('group_id, division_id')
-      .eq('id', match.id)
-      .single()
-
-    if (!matchData?.group_id) return
-
-    // 해당 그룹의 남은 경기 수 확인 (score 컬럼도 조회 → BYE 제외용)
-    const { data: groupMatches } = await supabase
-      .from('matches')
-      .select('id, status, score, stage')
-      .eq('event_id', eventId)
-      .eq('group_id', matchData.group_id)
-
-    // stage 대소문자 무관 필터 (DB에 'group'/'GROUP' 혼재 가능)
-    const groupOnly = (groupMatches || []).filter(m => (m.stage || '').toUpperCase() === 'GROUP')
-
-    // 방금 제출한 경기 포함해서 미완료 경기 수 계산
-    // BYE 경기는 status가 FINISHED가 아닐 수 있으므로 제외
-    const unfinished = groupOnly.filter(m => m.status !== 'FINISHED' && m.score !== 'BYE')
-    if (unfinished.length > 0) return // 아직 남은 경기 있음
-
-    // 본선 브래킷에 TBD 슬롯이 있는지 확인
-    // [4] .or() 문법 수정 → 전체 조회 후 클라이언트 필터
-    const { data: finalsMatches } = await supabase
-      .from('matches')
-      .select('id, qualifier_label_a, qualifier_label_b')
-      .eq('event_id', eventId)
-      .eq('division_id', matchData.division_id)
-      .eq('stage', 'FINALS')
-
-    const hasTbd = (finalsMatches || []).some(
-      m => m.qualifier_label_a != null || m.qualifier_label_b != null
-    )
-    if (!hasTbd) return // TBD 슬롯 없음 (브래킷 미생성 or 이미 완료)
-
-    // rpc_fill_tournament_slots 호출
-    console.log('[PIN] 조 완료 감지 → rpc_fill_tournament_slots 호출:', matchData.group_id)
-    const { data: fillResult, error: fillError } = await supabase.rpc('rpc_fill_tournament_slots', {
-      p_event_id: eventId,
-      p_group_id: matchData.group_id,
-    })
-
-    if (fillError) {
-      console.warn('[PIN] fill_tournament_slots 오류:', fillError.message)
-      return
-    }
-
-    if (fillResult?.success && fillResult.filled > 0) {
-      console.log('[PIN] 슬롯 채우기 완료:', fillResult)
-    }
+    await fillSlotsIfGroupComplete(session?.event_id, match)
   }
 
   async function submitScore(matchId: string, match: PinMatch) {

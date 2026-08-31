@@ -97,7 +97,7 @@ export default function HomePage() {
         }
 
         // 2) Upcoming
-        const today = new Date().toISOString().slice(0, 10)
+        const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
         const { data: nextEvents } = await supabase
           .from('events')
           .select('id, name, date, event_type')
