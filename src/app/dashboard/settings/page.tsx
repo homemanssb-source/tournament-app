@@ -30,6 +30,11 @@ export default function SettingsPage() {
   const [startTimeSaving, setStartTimeSaving] = useState(false)
   const [startTimeMsg, setStartTimeMsg] = useState('')
 
+  // ✅ 타이브레이크 기준 (5=동호인 5-5, 6=엘리트 6-6)
+  const [tiebreakAt, setTiebreakAt] = useState<number>(5)
+  const [tiebreakSaving, setTiebreakSaving] = useState(false)
+  const [tiebreakMsg, setTiebreakMsg] = useState('')
+
   const [newPin, setNewPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
   const [hasMasterPin, setHasMasterPin] = useState(false)
@@ -96,13 +101,29 @@ export default function SettingsPage() {
   }
 
   async function loadEvent(eid: string) {
-    const { data } = await supabase.from('events').select('name, master_pin_hash, status, start_time').eq('id', eid).single()
+    const { data } = await supabase.from('events').select('name, master_pin_hash, status, start_time, tiebreak_at').eq('id', eid).single()
     if (data) {
       setEventName(data.name)
       setHasMasterPin(!!data.master_pin_hash)
       setEventStatus(data.status || 'preparing')
       setStartTime(data.start_time || '')
+      if ((data as any).tiebreak_at) setTiebreakAt((data as any).tiebreak_at)
     }
+  }
+
+  // ✅ 타이브레이크 기준 저장
+  async function saveTiebreak(next: number) {
+    setTiebreakSaving(true); setTiebreakMsg('')
+    setTiebreakAt(next)
+    const { error } = await supabase.from('events').update({ tiebreak_at: next }).eq('id', eventId)
+    setTiebreakSaving(false)
+    if (error) {
+      if (error.message.includes('column')) {
+        setTiebreakMsg('⚠️ tiebreak_at 컬럼 없음. SQL 실행 필요:\nALTER TABLE events ADD COLUMN IF NOT EXISTS tiebreak_at smallint DEFAULT 5;')
+      } else { setTiebreakMsg('❌ ' + error.message) }
+      return
+    }
+    setTiebreakMsg(next === 6 ? '✅ 엘리트(6-6 타이브레이크)로 저장되었습니다.' : '✅ 동호인(5-5 타이브레이크)으로 저장되었습니다.')
   }
 
   async function toggleEventStatus() {
@@ -347,6 +368,29 @@ export default function SettingsPage() {
           </div>
           {startTimeMsg && (
             <p className={`text-xs whitespace-pre-wrap ${startTimeMsg.startsWith('✅') ? 'text-green-600' : 'text-amber-600'}`}>{startTimeMsg}</p>
+          )}
+        </div>
+
+        {/* 타이브레이크 기준 (개인전 점수 입력에 적용) */}
+        <div className="bg-stone-50 rounded-xl p-4 space-y-3">
+          <p className="text-sm font-medium text-stone-700">🎾 타이브레이크 기준 (개인전 점수 입력)</p>
+          <p className="text-xs text-stone-400">
+            선수 점수 입력 시 최종 점수 규칙이 달라집니다.<br />
+            · 동호인: 5-5에서 타이브레이크 → 최대 <b>6:5</b><br />
+            · 엘리트: 6-6에서 타이브레이크 → <b>7:5 · 7:6</b> 가능
+          </p>
+          <div className="flex items-center gap-2">
+            <button onClick={() => saveTiebreak(5)} disabled={tiebreakSaving}
+              className={`px-4 py-2 rounded-lg text-sm font-medium border disabled:opacity-50 ${tiebreakAt === 5 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-stone-600 border-stone-300 hover:border-blue-300'}`}>
+              동호인 (5-5)
+            </button>
+            <button onClick={() => saveTiebreak(6)} disabled={tiebreakSaving}
+              className={`px-4 py-2 rounded-lg text-sm font-medium border disabled:opacity-50 ${tiebreakAt === 6 ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-stone-600 border-stone-300 hover:border-blue-300'}`}>
+              엘리트 (6-6)
+            </button>
+          </div>
+          {tiebreakMsg && (
+            <p className={`text-xs whitespace-pre-wrap ${tiebreakMsg.startsWith('✅') ? 'text-green-600' : 'text-amber-600'}`}>{tiebreakMsg}</p>
           )}
         </div>
 

@@ -58,6 +58,8 @@ export default function PinMatchesPage() {
   const [finalsMatches, setFinalsMatches] = useState<FinalsMatch[]>([])
   const [loserScores, setLoserScores] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState<string | null>(null)
+  // 타이브레이크 기준: 5=동호인(5-5,최대 6:5) / 6=엘리트(6-6,7:5·7:6). 이벤트별 설정.
+  const [tiebreakAt, setTiebreakAt] = useState(5)
 
   const [notifAllowed, setNotifAllowed]     = useState(false)
   const [notifRequested, setNotifRequested] = useState(false)
@@ -103,6 +105,11 @@ export default function PinMatchesPage() {
     const s = JSON.parse(raw)
     setSession(s)
     loadData(s)
+    // 이벤트의 타이브레이크 기준 로드 (컬럼 없으면 기본 5 유지)
+    if (s.event_id) {
+      supabase.from('events').select('tiebreak_at').eq('id', s.event_id).single()
+        .then(({ data }) => { if (data?.tiebreak_at) setTiebreakAt(data.tiebreak_at) })
+    }
     if ('Notification' in window) {
       const perm = Notification.permission
       const allowed = perm === 'granted'
@@ -423,9 +430,12 @@ export default function PinMatchesPage() {
     if (!loser)  { setMsg('상대팀 점수를 입력해주세요. (예: 4)'); return }
     if (!/^\d+$/.test(loser)) { setMsg('숫자만 입력해주세요.'); return }
     const loserN = parseInt(loser)
-    if (loserN > 6) { setMsg('패자 점수는 6점 이하여야 합니다. (7:6은 6 입력)'); return }
-    // ✅ 패자가 6점이면 타이브레이크 세트 → 승자 7 (7:6), 그 외 승자 6
-    const winScore = loserN === 6 ? 7 : 6
+    // ✅ 이벤트 타이브레이크 기준별 승자 점수
+    //    엘리트(6-6): 패자 0~6 → 5·6이면 승자 7 (7:5·7:6), 그 외 6
+    //    동호인(5-5): 패자 0~5 → 승자 항상 6 (최대 6:5)
+    const maxLoser = tiebreakAt === 6 ? 6 : 5
+    if (loserN > maxLoser) { setMsg(`패자 점수는 ${maxLoser}점 이하여야 합니다.`); return }
+    const winScore = tiebreakAt === 6 ? (loserN >= 5 ? 7 : 6) : 6
     const score = winner === 'A' ? `${winScore}:${loser}` : `${loser}:${winScore}`
     setSubmitting(matchId); setMsg('')
 
@@ -658,8 +668,10 @@ export default function PinMatchesPage() {
                             // ✅ 본인 팀이 항상 승자 — 승자 선택 버튼 없음
                             const myTeamName = m.my_side === 'A' ? m.team_a_name : m.team_b_name
                             const oppTeamName = m.my_side === 'A' ? m.team_b_name : m.team_a_name
-                            // ✅ 패자 6점이면 타이브레이크 → 내 점수 7 (7:6)
-                            const myScore = parseInt(loser || '0') === 6 ? 7 : 6
+                            // ✅ 타이브레이크 기준별 내 점수 (엘리트 6-6: 5·6이면 7, 동호인 5-5: 항상 6)
+                            const oppN = parseInt(loser || '0')
+                            const maxOpp = tiebreakAt === 6 ? 6 : 5
+                            const myScore = tiebreakAt === 6 ? (oppN >= 5 ? 7 : 6) : 6
                             return (
                               <div className="space-y-3 pt-1">
                                 {/* 승자 고정 표시 */}
@@ -675,15 +687,18 @@ export default function PinMatchesPage() {
                                     <span className="text-xl font-black text-stone-700">{myScore} : {loser || '?'}</span>
                                     <span className="text-sm font-bold text-stone-400">{oppTeamName}</span>
                                   </div>
-                                  <p className="text-xs text-stone-400 text-center mb-2">상대팀 점수 입력 (0~6 · 타이브레이크 7:6은 6 입력)</p>
+                                  <p className="text-xs text-stone-400 text-center mb-2">
+                                    상대팀 점수 입력 (0~{maxOpp})
+                                    {tiebreakAt === 6 ? ' · 6-6 타이브레이크(7:6)' : ' · 5-5 타이브레이크(6:5)'}
+                                  </p>
                                   <div className="flex gap-2">
                                     <input
-                                      type="number" inputMode="numeric" min="0" max="6" placeholder="0~6"
+                                      type="number" inputMode="numeric" min="0" max={maxOpp} placeholder={`0~${maxOpp}`}
                                       value={loser}
                                       onChange={e => {
                                         const v = e.target.value
-                                        // 7점 이상 입력 차단 (패자 최대 6 → 7:6)
-                                        if (v !== '' && parseInt(v) > 6) return
+                                        // 최대 패자 점수 초과 입력 차단
+                                        if (v !== '' && parseInt(v) > maxOpp) return
                                         setLoserScores(prev => ({ ...prev, [m.id]: v }))
                                       }}
                                       onKeyDown={e => e.key === 'Enter' && submitScore(m.id, m)}
