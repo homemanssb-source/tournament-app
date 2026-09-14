@@ -17,6 +17,18 @@ function makeCourtNames(shortName: string, count: number): string[] {
   const prefix = shortName.trim() || '코트'
   return Array.from({ length: count }, (_, i) => `${prefix}-${i + 1}`)
 }
+// ✅ 시작 번호부터 코트 생성 — 같은 경기장을 대회별로 코트 범위를 나눠 쓸 때 사용
+//    (예: 대회A = 제주-1~4, 대회B = 제주-5~8)
+function makeCourtRange(shortName: string, start: number, count: number): string[] {
+  const prefix = shortName.trim() || '코트'
+  const s = Math.max(1, start || 1)
+  return Array.from({ length: count }, (_, i) => `${prefix}-${s + i}`)
+}
+// 기존 코트 목록에서 시작 번호 복원 (예: "제주-5" → 5, 없으면 1)
+function parseCourtStart(courts?: string[] | null): number {
+  const m = courts?.[0]?.match(/-(\d+)$/)
+  return m ? Number(m[1]) : 1
+}
 
 export default function SettingsPage() {
   const [eventId, setEventId] = useState('')
@@ -47,11 +59,13 @@ export default function SettingsPage() {
   const [newVenuePin, setNewVenuePin] = useState('')
   const [newVenueManager, setNewVenueManager] = useState('')
   const [newCourtCount, setNewCourtCount] = useState(8)
+  const [newCourtStart, setNewCourtStart] = useState(1)   // 코트 시작 번호 (대회별 범위 나누기)
   const [venueMsg, setVenueMsg] = useState('')
   const [venueLoading, setVenueLoading] = useState(true)
 
   const [editVenueId, setEditVenueId] = useState<string | null>(null)
   const [editCourtCount, setEditCourtCount] = useState(8)
+  const [editCourtStart, setEditCourtStart] = useState(1)
   const [editShortName, setEditShortName] = useState('')
 
   const [divisions, setDivisions] = useState<Division[]>([])
@@ -239,7 +253,7 @@ export default function SettingsPage() {
     if (!newVenueShortName.trim()) { setVenueMsg('! 약칭을 입력하세요. (예: 제주)'); return }
     if (!newVenuePin.trim() || newVenuePin.length < 4) { setVenueMsg('! PIN 4자리 이상 입력하세요.'); return }
     if (newCourtCount < 1) { setVenueMsg('! 코트 수는 1개 이상이어야 합니다.'); return }
-    const courts = makeCourtNames(newVenueShortName, newCourtCount)
+    const courts = makeCourtRange(newVenueShortName, newCourtStart, newCourtCount)
     const res = await fetch('/api/admin/venues', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -253,15 +267,15 @@ export default function SettingsPage() {
       const j = await res.json().catch(() => ({}))
       setVenueMsg('! ' + (j.error || res.statusText)); return
     }
-    setVenueMsg(`OK 경기장 추가됨 (${newVenueShortName}-1 ~ ${newVenueShortName}-${newCourtCount})`)
-    setNewVenueName(''); setNewVenueShortName(''); setNewVenuePin(''); setNewVenueManager(''); setNewCourtCount(8); setNewDivisionIds([])
+    setVenueMsg(`OK 경기장 추가됨 (${newVenueShortName}-${newCourtStart} ~ ${newVenueShortName}-${newCourtStart + newCourtCount - 1})`)
+    setNewVenueName(''); setNewVenueShortName(''); setNewVenuePin(''); setNewVenueManager(''); setNewCourtCount(8); setNewCourtStart(1); setNewDivisionIds([])
     loadVenues(eventId)
   }
 
   async function saveEditVenue(venueId: string) {
     if (!editShortName.trim()) { setVenueMsg('! 약칭을 입력하세요.'); return }
     if (editCourtCount < 1) { setVenueMsg('! 코트 수는 1개 이상이어야 합니다.'); return }
-    const courts = makeCourtNames(editShortName, editCourtCount)
+    const courts = makeCourtRange(editShortName, editCourtStart, editCourtCount)
     const res = await fetch('/api/admin/venues', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -504,15 +518,20 @@ export default function SettingsPage() {
                 className="text-xs bg-white text-stone-600 px-3 py-2 rounded-lg hover:bg-stone-100 border mb-0.5">랜덤</button>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="text-xs text-stone-600 whitespace-nowrap">시작 번호:</label>
+            <input type="number" min={1} max={99} value={newCourtStart}
+              onChange={e => setNewCourtStart(Math.max(1, Math.min(99, Number(e.target.value))))}
+              className="w-20 border border-stone-300 rounded-lg px-3 py-2 text-sm text-center bg-white" />
             <label className="text-xs text-stone-600 whitespace-nowrap">코트 수:</label>
             <input type="number" min={1} max={30} value={newCourtCount}
               onChange={e => setNewCourtCount(Math.max(1, Math.min(30, Number(e.target.value))))}
               className="w-20 border border-stone-300 rounded-lg px-3 py-2 text-sm text-center bg-white" />
             {newVenueShortName.trim()
-              ? <span className="text-xs text-blue-600">→ {newVenueShortName}-1 ~ {newVenueShortName}-{newCourtCount}</span>
+              ? <span className="text-xs text-blue-600">→ {newVenueShortName}-{newCourtStart} ~ {newVenueShortName}-{newCourtStart + newCourtCount - 1}</span>
               : <span className="text-xs text-stone-400">약칭 입력 시 미리보기</span>}
           </div>
+          <p className="text-[11px] text-stone-400">같은 경기장을 다른 대회와 나눠 쓸 때는 시작 번호로 범위를 나누세요 (예: 대회A 1~4, 대회B 5~8)</p>
           {divisions.length > 0 && (
             <div>
               <label className="text-xs text-stone-600 block mb-1">담당 부서 <span className="text-stone-400">(미선택 시 전 부서 표시)</span></label>
@@ -587,7 +606,7 @@ export default function SettingsPage() {
                     <div className="flex items-center gap-2 flex-shrink-0 ml-2">
                       <button onClick={() => {
                         if (isEditing) { setEditVenueId(null) }
-                        else { setEditVenueId(v.id); setEditCourtCount(courtCount); setEditShortName(shortName); setEditDivisionIds(v.division_ids || []) }
+                        else { setEditVenueId(v.id); setEditCourtCount(courtCount); setEditCourtStart(parseCourtStart(v.courts)); setEditShortName(shortName); setEditDivisionIds(v.division_ids || []) }
                       }} className="text-xs text-blue-600 hover:underline">
                         {isEditing ? '취소' : '수정'}
                       </button>
@@ -605,12 +624,18 @@ export default function SettingsPage() {
                             className="w-24 border border-stone-300 rounded-lg px-2 py-1.5 text-sm bg-white" />
                         </div>
                         <div>
+                          <label className="text-xs text-stone-500 block mb-1">시작 번호</label>
+                          <input type="number" min={1} max={99} value={editCourtStart}
+                            onChange={e => setEditCourtStart(Math.max(1, Math.min(99, Number(e.target.value))))}
+                            className="w-20 border border-stone-300 rounded-lg px-2 py-1.5 text-sm text-center bg-white" />
+                        </div>
+                        <div>
                           <label className="text-xs text-stone-500 block mb-1">코트 수</label>
                           <input type="number" min={1} max={30} value={editCourtCount}
                             onChange={e => setEditCourtCount(Math.max(1, Math.min(30, Number(e.target.value))))}
                             className="w-20 border border-stone-300 rounded-lg px-2 py-1.5 text-sm text-center bg-white" />
                         </div>
-                        {editShortName.trim() && <span className="text-xs text-blue-600 pb-1">→ {editShortName}-1 ~ {editShortName}-{editCourtCount}</span>}
+                        {editShortName.trim() && <span className="text-xs text-blue-600 pb-1">→ {editShortName}-{editCourtStart} ~ {editShortName}-{editCourtStart + editCourtCount - 1}</span>}
                       </div>
                       {divisions.length > 0 && (
                         <div>
