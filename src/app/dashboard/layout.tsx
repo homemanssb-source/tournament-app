@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { EventChooser, kstToday, type EventLite } from '@/components/useEventSelect'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router   = useRouter()
@@ -21,7 +22,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [checking, setChecking]   = useState(true)
   const [menuOpen, setMenuOpen]   = useState(false)
   const [eventId, setEventId]     = useState('')
-  const [events, setEvents]       = useState<{ id: string; name: string }[]>([])
+  const [events, setEvents]       = useState<EventLite[]>([])
+  const [todayEvents, setTodayEvents] = useState<EventLite[]>([])   // 오늘 날짜 대회들
+  const [needChoose, setNeedChoose]   = useState(false)             // 같은 날 2개+ → 선택 화면
   const [openIndiv, setOpenIndiv] = useState(false)
   const [openTeam, setOpenTeam]   = useState(false)
 
@@ -55,14 +58,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         setEvents(evList ?? [])
 
         // 3. 대회 ID 결정 (localStorage 사용 → 다른 창과 공유)
-        const stored = localStorage.getItem('dashboard_event_id')
-        const storedValid = stored && (evList ?? []).some(e => e.id === stored)
+        //    ✅ 같은 날 대회가 2개 이상이면 몰래 자동 선택하지 않고 고르게 한다
+        //       (주최가 다른 대회를 실수로 만지는 것 방지)
+        const list = evList ?? []
+        const today = kstToday()
+        const todays = list.filter(e => e.date === today)
+        setTodayEvents(todays)
 
-        if (storedValid) {
+        const stored = localStorage.getItem('dashboard_event_id')
+        const storedValid = stored && list.some(e => e.id === stored)
+        const storedIsToday = todays.some(e => e.id === stored)
+
+        if (storedValid && (todays.length < 2 || storedIsToday)) {
+          // 이 기기에서 이미 고른 대회 (오늘 2개+면 그 중 하나일 때만 인정)
           setEventId(stored!)
+        } else if (todays.length >= 2) {
+          // 오늘 대회 여러 개 → 선택 화면
+          setNeedChoose(true)
         } else {
-          const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().split('T')[0]
-          const list = evList ?? []
           const upcoming = list.filter(e => e.date >= today)
           const fallback = [...list].reverse()
           const best = upcoming[0] ?? fallback[0]
@@ -121,6 +134,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   if (isLoginPage) return <>{children}</>
   if (checking) return <div className="min-h-screen flex items-center justify-center text-stone-400">인증 확인 중...</div>
+  // ✅ 같은 날 대회가 2개 이상이면 먼저 고르게 함
+  if (needChoose) return (
+    <EventChooser events={todayEvents} title="오늘 운영할 대회를 선택하세요"
+      subtitle={`오늘 대회가 ${todayEvents.length}개 있습니다. 담당 대회를 눌러주세요.`}
+      onPick={id => { handleEventChange(id); setNeedChoose(false) }} />
+  )
 
   function navLink(href: string, label: string, emoji: string, indent = false) {
     const fullHref = href.includes('event_id') ? href
@@ -137,12 +156,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     )
   }
 
+  const currentEventName = events.find(e => e.id === eventId)?.name || ''
+
   return (
     <div className="min-h-screen flex flex-col md:flex-row">
       {/* Mobile Header */}
       <div className="md:hidden bg-white border-b px-4 py-3 flex items-center justify-between sticky top-0 z-20">
         <button onClick={() => setMenuOpen(!menuOpen)} className="text-xl">☰</button>
-        <span className="font-bold text-sm">⚙️ 운영 대시보드</span>
+        <div className="min-w-0 text-center">
+          <div className="font-bold text-sm">⚙️ 운영 대시보드</div>
+          {currentEventName && (
+            <div className="text-[11px] text-tennis-700 font-semibold truncate max-w-[60vw]">📌 {currentEventName}</div>
+          )}
+        </div>
         <button onClick={handleLogout} className="text-xs text-stone-400">로그아웃</button>
       </div>
 
@@ -152,6 +178,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Link href="/" className="text-xs text-stone-400 hover:text-stone-600">← 홈으로</Link>
           <h2 className="font-bold mt-1">⚙️ 운영 대시보드</h2>
           <p className="text-xs text-stone-400 mt-0.5 truncate">{user?.email}</p>
+          {currentEventName && (
+            <div className="mt-2 rounded-lg bg-tennis-50 border border-tennis-200 px-2.5 py-1.5">
+              <div className="text-[10px] text-tennis-600">현재 운영 중</div>
+              <div className="text-xs font-bold text-tennis-800 truncate">📌 {currentEventName}</div>
+            </div>
+          )}
         </div>
 
         {/* 대회 선택 드롭다운 */}
