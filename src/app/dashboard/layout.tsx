@@ -60,11 +60,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         setUser(session.user)
 
         // 1-1. 내 권한 (역할 + 접근 가능 대회). 운영자는 배정된 대회만, 메인 관리자는 전체
-        const { data: access } = await supabase.rpc('rpc_my_access')
-        const myRole: string = (access as any)?.role || ''
-        const myIds: string[] | null = myRole === 'admin'
-          ? null
-          : (Array.isArray((access as any)?.event_ids) ? (access as any).event_ids : [])
+        //      ⚠️ rpc_my_access가 아직 없거나(마이그레이션 015 미적용) 오류면 기존처럼
+        //      전체 접근으로 동작(fail-open) — 유일한 계정인 메인 관리자가 잠기는 것 방지
+        const { data: access, error: accessErr } = await supabase.rpc('rpc_my_access')
+        let myRole: string = (access as any)?.role || ''
+        let myIds: string[] | null
+        if (accessErr) {
+          console.warn('[Dashboard] rpc_my_access 없음/오류 → 전체 접근(레거시):', accessErr.message)
+          myRole = 'admin'; myIds = null
+        } else {
+          myIds = myRole === 'admin'
+            ? null
+            : (Array.isArray((access as any)?.event_ids) ? (access as any).event_ids : [])
+        }
         setRole(myRole); setAllowedIds(myIds); allowedRef.current = myIds
 
         // 2. 대회 목록 로드 (날짜 오름차순) → 권한 범위로 제한
