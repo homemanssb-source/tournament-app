@@ -9,11 +9,16 @@
 // ✅ 푸시 알림 로그 메뉴 추가 (/dashboard/push-logs)
 // ============================================================
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { EventChooser, kstToday, type EventLite } from '@/components/useEventSelect'
+
+// ✅ 운영자는 배정된 대회만 보이게 (allowed=null → 메인 관리자, 전체)
+function scopeEvents(list: EventLite[], allowed: string[] | null): EventLite[] {
+  return allowed ? list.filter(e => allowed.includes(e.id)) : list
+}
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router   = useRouter()
@@ -25,6 +30,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [events, setEvents]       = useState<EventLite[]>([])
   const [todayEvents, setTodayEvents] = useState<EventLite[]>([])   // 오늘 날짜 대회들
   const [needChoose, setNeedChoose]   = useState(false)             // 같은 날 2개+ → 선택 화면
+  const [role, setRole]               = useState('')                // 'admin' | 'operator'
+  const [allowedIds, setAllowedIds]   = useState<string[] | null>(null)  // null = 전체(관리자)
+  const allowedRef = useRef<string[] | null>(null)                  // 목록 갱신 리스너용
   const [openIndiv, setOpenIndiv] = useState(false)
   const [openTeam, setOpenTeam]   = useState(false)
 
@@ -51,16 +59,24 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         if (!session) { router.push('/dashboard/login'); return }
         setUser(session.user)
 
-        // 2. 대회 목록 로드 (날짜 오름차순)
+        // 1-1. 내 권한 (역할 + 접근 가능 대회). 운영자는 배정된 대회만, 메인 관리자는 전체
+        const { data: access } = await supabase.rpc('rpc_my_access')
+        const myRole: string = (access as any)?.role || ''
+        const myIds: string[] | null = myRole === 'admin'
+          ? null
+          : (Array.isArray((access as any)?.event_ids) ? (access as any).event_ids : [])
+        setRole(myRole); setAllowedIds(myIds); allowedRef.current = myIds
+
+        // 2. 대회 목록 로드 (날짜 오름차순) → 권한 범위로 제한
         const { data: evList } = await supabase
           .from('events').select('id, name, date')
           .order('date', { ascending: true })
-        setEvents(evList ?? [])
+        const list = scopeEvents(evList ?? [], myIds)
+        setEvents(list)
 
         // 3. 대회 ID 결정 (localStorage 사용 → 다른 창과 공유)
         //    ✅ 같은 날 대회가 2개 이상이면 몰래 자동 선택하지 않고 고르게 한다
         //       (주최가 다른 대회를 실수로 만지는 것 방지)
-        const list = evList ?? []
         const today = kstToday()
         const todays = list.filter(e => e.date === today)
         setTodayEvents(todays)
@@ -114,7 +130,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       const { data } = await supabase
         .from('events').select('id, name, date')
         .order('date', { ascending: true })
-      if (data) setEvents(data)
+      if (data) setEvents(scopeEvents(data, allowedRef.current))
     }
     window.addEventListener('dashboard_events_changed', refreshEvents)
     window.addEventListener('focus', refreshEvents)
@@ -134,6 +150,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   if (isLoginPage) return <>{children}</>
   if (checking) return <div className="min-h-screen flex items-center justify-center text-stone-400">인증 확인 중...</div>
+  // ✅ 운영자인데 배정된 대회가 없으면 안내 (관리자에게 배정 요청)
+  if (role !== 'admin' && allowedIds && allowedIds.length === 0) return (
+    <div className="min-h-screen flex items-center justify-center bg-stone-50 p-4">
+      <div className="bg-white rounded-2xl border border-stone-200 p-6 w-full max-w-md text-center">
+        <div className="text-3xl mb-2">📭</div>
+        <p className="font-bold">배정된 대회가 없습니다</p>
+        <p className="text-xs text-stone-400 mt-1">
+          {role ? '메인 관리자에게 담당 대회 배정을 요청하세요.' : '이 계정은 운영자로 등록되어 있지 않습니다. 메인 관리자에게 문의하세요.'}
+        </p>
+        <button onClick={handleLogout} className="mt-4 text-xs text-stone-400 hover:text-red-500">🚪 로그아웃</button>
+      </div>
+    </div>
+  )
   // ✅ 같은 날 대회가 2개 이상이면 먼저 고르게 함
   if (needChoose) return (
     <EventChooser events={todayEvents} title="오늘 운영할 대회를 선택하세요"
@@ -244,6 +273,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {/* ✅ [FIX] label에서 이모지 제거 → emoji 파라미터와 중복 방지 */}
           {navLink('/dashboard/push-logs', '알림 로그',  '📡')}
           {navLink('/dashboard/settings',  '설정',       '⚙️')}
+          {role === 'admin' && navLink('/dashboard/operators', '운영자 관리', '👤')}
           <hr className="my-2" />
 
           <button onClick={handleLogout}
