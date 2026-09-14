@@ -82,6 +82,12 @@ function makeCourtNames(shortName: string, count: number): string[] {
   const prefix = shortName?.trim() || '코트'
   return Array.from({ length: count }, (_, i) => `${prefix}-${i + 1}`)
 }
+// ✅ 저장된 코트 목록(courts[])이 있으면 그대로 사용 — 같은 경기장을 대회별로
+//    코트 범위를 나눠 쓸 수 있게 (예: 대회A 1~4, 대회B 5~8). 없으면 1부터 생성(기존 동작).
+function venueCourts(v: { short_name?: string; name?: string; court_count?: number; courts?: string[] | null }): string[] {
+  if (v.courts && v.courts.length > 0) return v.courts
+  return makeCourtNames(v.short_name || v.name || '', v.court_count || 0)
+}
 function sortGroupMatches(list: MatchSlim[]): MatchSlim[] {
   const rem = [...list], sorted: MatchSlim[] = []
   while (rem.length > 0) {
@@ -135,19 +141,17 @@ export default function CourtsPage() {
   const courtNames = React.useMemo(() => {
     if (selectedVenue === 'ALL') {
       if (venues.length === 0) return Array.from({ length: 10 }, (_, i) => `코트-${i + 1}`)
-      return venues.flatMap(v => makeCourtNames(v.short_name || v.name, v.court_count || v.courts?.length || 0))
+      return venues.flatMap(v => venueCourts(v))
     }
     const venue = venues.find(v => v.id === selectedVenue)
     if (!venue) return []
-    return makeCourtNames(venue.short_name || venue.name, venue.court_count || venue.courts?.length || 0)
+    return venueCourts(venue)
   }, [selectedVenue, venues])
 
   // ✅ [FIX-②] 전체 베뉴 기준 글로벌 코트 목록 (베뉴 선택과 무관하게 항상 전체)
   const allCourtNames = React.useMemo(() => {
     if (venuesRef.current.length === 0) return courtNames
-    return venuesRef.current.flatMap(v =>
-      makeCourtNames(v.short_name || v.name, v.court_count || v.courts?.length || 0)
-    )
+    return venuesRef.current.flatMap(v => venueCourts(v))
   }, [venues]) // venues state 변경 시 재계산
 
   const [autoDiv, setAutoDiv]       = useState('')
@@ -214,9 +218,7 @@ export default function CourtsPage() {
       if (m.court && m.court_order) counter[m.court] = Math.max(counter[m.court] || 0, m.court_order)
     }
     // 전체 베뉴 기준 글로벌 코트 목록
-    const allCN = venuesRef.current.flatMap(v =>
-      makeCourtNames(v.short_name || v.name, v.court_count || v.courts?.length || 0)
-    )
+    const allCN = venuesRef.current.flatMap(v => venueCourts(v))
     for (const t of tieList) {
       const cn = (t as any).court_number; if (!cn) continue
       const court = globalCourtNumToName(cn, allCN, venuesRef.current)
@@ -831,11 +833,11 @@ export default function CourtsPage() {
             <span className="text-xs text-stone-500 font-medium whitespace-nowrap">📍 경기장:</span>
             <button onClick={() => setSelectedVenue('ALL')} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${selectedVenue==='ALL' ? 'bg-[#2d5016] text-white border-[#2d5016]' : 'bg-white text-stone-600 border-stone-300 hover:border-stone-400'}`}>🏟 전체 보기</button>
             {venues.map(v => {
-              const count = v.court_count || v.courts?.length || 0; const sn = v.short_name || v.name
-              return <button key={v.id} onClick={() => setSelectedVenue(v.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${selectedVenue===v.id ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-stone-600 border-stone-300 hover:border-orange-400'}`}>{v.name} <span className="opacity-70">({sn}-1~{sn}-{count})</span></button>
+              const cs = venueCourts(v); const first = cs[0] || '-', last = cs[cs.length - 1] || '-'
+              return <button key={v.id} onClick={() => setSelectedVenue(v.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${selectedVenue===v.id ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-stone-600 border-stone-300 hover:border-orange-400'}`}>{v.name} <span className="opacity-70">({first}~{last})</span></button>
             })}
           </div>
-          {selectedVenueInfo && <p className="text-xs text-stone-400 mt-2">{selectedVenueInfo.short_name}-1 ~ {selectedVenueInfo.short_name}-{selectedVenueInfo.court_count || selectedVenueInfo.courts?.length || 0} · PIN: {selectedVenueInfo.pin_plain}</p>}
+          {selectedVenueInfo && (() => { const cs = venueCourts(selectedVenueInfo); return <p className="text-xs text-stone-400 mt-2">{cs[0] || '-'} ~ {cs[cs.length - 1] || '-'} · PIN: {selectedVenueInfo.pin_plain}</p> })()}
         </div>
       )}
 

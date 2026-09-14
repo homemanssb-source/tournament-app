@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { useEventSelect, EventChooser } from '@/components/useEventSelect'
 import { usePushSubscription } from '@/hooks/usePushSubscription'
 
 type Mode = 'select' | 'individual' | 'team';
@@ -17,7 +18,8 @@ const NOTIF_DONE_KEY = 'pin_notif_done'
 
 export default function PinPage() {
   const router = useRouter()
-  const [selectedEvent, setSelectedEvent] = useState('')
+  // ✅ 대회 자동 선택 (같은 날 2개+면 선택 화면, ?event= 링크 지원) — 공용 훅
+  const { selectedEvent, setSelectedEvent, todayEvents, needChoose } = useEventSelect()
   const [pin, setPin] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -55,38 +57,7 @@ export default function PinPage() {
     if (raw) router.replace('/pin/matches')
   }, [])
 
-  // ✅ localStorage 우선 → 없으면 오늘 기준 가장 가까운 대회 자동 선택 (휴대폰 대응)
-  useEffect(() => {
-    const dashboardEventId = localStorage.getItem('dashboard_event_id')
-    if (dashboardEventId) {
-      setSelectedEvent(dashboardEventId)
-      return
-    }
-    supabase.from('events').select('id, date')
-      .order('date', { ascending: true })
-      .then(({ data }) => {
-        if (!data || data.length === 0) return
-        const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().split('T')[0]
-        // 오늘 날짜와 절댓값 기준 가장 가까운 대회 선택 (과거 포함)
-        const best = data.reduce((prev, curr) => {
-          const prevDiff = Math.abs(new Date(prev.date).getTime() - new Date(today).getTime())
-          const currDiff = Math.abs(new Date(curr.date).getTime() - new Date(today).getTime())
-          return currDiff < prevDiff ? curr : prev
-        })
-        if (best?.id) setSelectedEvent(best.id)
-      })
-  }, [])
-
-  // ✅ 같은 기기 내 다른 탭에서 대회 바꾸면 즉시 반영
-  useEffect(() => {
-    function onStorageChange(e: StorageEvent) {
-      if (e.key === 'dashboard_event_id' && e.newValue) {
-        setSelectedEvent(e.newValue)
-      }
-    }
-    window.addEventListener('storage', onStorageChange)
-    return () => window.removeEventListener('storage', onStorageChange)
-  }, [])
+  // (대회 자동 선택·다른 탭 동기화는 useEventSelect 훅이 담당)
 
   useEffect(() => {
     if (pushStatus === 'success') {
@@ -376,6 +347,9 @@ export default function PinPage() {
       </div>
     )
   }
+
+  // ✅ 같은 날 대회가 2개 이상이면 먼저 고르게 함
+  if (needChoose) return <EventChooser events={todayEvents} onPick={setSelectedEvent} />
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4">
