@@ -79,6 +79,23 @@ export default function GroupsPage() {
           checked_in: ci?.checked_in ?? false, checked_in_at: ci?.checked_in_at ?? null,
         })
       }
+      // ✅ 조 내 순번(seq)으로 정렬 — 화면의 1·2·3번 = 경기 생성 순서(1v2→1v3→2v3)의 기준
+      //    (seq 컬럼이 없거나 옛 조편성이라 null이면 기존 순서 유지)
+      const groupIdsForSeq = Array.from(map.keys())
+      if (groupIdsForSeq.length > 0) {
+        const { data: seqRows, error: seqErr } = await supabase
+          .from('group_members').select('team_id, seq').in('group_id', groupIdsForSeq)
+        if (!seqErr && seqRows) {
+          const seqMap = new Map<string, number>()
+          for (const sr of seqRows as any[]) if (sr.seq != null) seqMap.set(sr.team_id, sr.seq)
+          for (const g of map.values()) {
+            g.members = g.members
+              .map((m, i) => ({ m, i }))
+              .sort((a, b) => ((seqMap.get(a.m.team_id) ?? 999) - (seqMap.get(b.m.team_id) ?? 999)) || (a.i - b.i))
+              .map(x => x.m)
+          }
+        }
+      }
       const groupList = Array.from(map.values()).sort((a, b) => a.num - b.num)
       setGroups(groupList)
 

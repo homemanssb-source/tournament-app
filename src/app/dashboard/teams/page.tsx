@@ -71,15 +71,16 @@ function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: Ed
       if (newGroupId !== team.group_id) {
         // 2-1. 새 조 insert 먼저 (실패하면 기존 상태 유지)
         if (newGroupId) {
+          // ✅ 조 내 순번(seq)은 맨 뒤에 추가. (기존 코드는 존재하지 않는 'seed' 컬럼을 넣어 항상 실패했음)
           const { data: members } = await supabase
             .from('group_members')
-            .select('id')
+            .select('id, seq')
             .eq('group_id', newGroupId)
-          const nextSeed = (members?.length || 0) + 1
+          const nextSeq = Math.max(members?.length || 0, ...((members || []).map((m: any) => m.seq || 0))) + 1
 
           const { error: insErr } = await supabase
             .from('group_members')
-            .insert({ group_id: newGroupId, team_id: team.id, event_id: eventId, seed: nextSeed })
+            .insert({ group_id: newGroupId, team_id: team.id, event_id: eventId, division_id: team.division_id, seq: nextSeq })
           if (insErr) { setMsg('❌ 새 조 배정 실패 (기존 상태 유지): ' + insErr.message); return }
         }
 
