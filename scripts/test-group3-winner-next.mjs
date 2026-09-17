@@ -65,8 +65,8 @@ async function main() {
     return div;
   }
 
-  // 부서A: 10팀, 조크기 3 → 실DB 규칙상 [3,3,2,2]  /  부서B: 4팀, 조크기 4 → [4]
-  const divA = await makeDivision('부서A', 10);
+  // 부서A: 16팀, 조크기 3 → 실DB 규칙상 [3,3,3,3,2,2]  /  부서B: 4팀, 조크기 4 → [4]
+  const divA = await makeDivision('부서A', 16);
   const divB = await makeDivision('부서B', 4);
 
   for (const [div, size] of [[divA, 3], [divB, 4]]) {
@@ -90,7 +90,7 @@ async function main() {
 
   const g3 = groups.filter(g => g.division_id === divA.id && bySeq(g.id).length === 3);
   const g4 = groups.find(g => g.division_id === divB.id && bySeq(g.id).length === 4);
-  check('3팀 조 2개 + 4팀 조 1개 확보', g3.length >= 2 && !!g4, `3팀조 ${g3.length}개, 4팀조 ${g4 ? 1 : 0}개`);
+  check('3팀 조 4개 + 4팀 조 1개 확보', g3.length >= 4 && !!g4, `3팀조 ${g3.length}개, 4팀조 ${g4 ? 1 : 0}개`);
 
   console.log('\n━━━ T2: 경기 생성 순서 = (1v2) → (1v3) → (2v3) ━━━');
   for (const g of g3.slice(0, 2)) {
@@ -146,6 +146,43 @@ async function main() {
     check('코트순서: (1v3) 먼저, (2v3) 마지막 — 그대로', label(after[0], seqs) === '1v3' && label(after[1], seqs) === '2v3');
     const started = after.find(m => m.status === 'IN_PROGRESS');
     check('자동 시작된 경기 = (1v3) (승자 1번의 경기)', started && label(started, seqs) === '1v3', started ? label(started, seqs) + ' 시작됨' : '자동 시작 없음');
+  }
+
+  // ── 1v2가 아닌 다른 경기(2v3)부터 시작해도 규칙이 성립하는가 ──
+  //    트리거는 "조에서 첫 번째로 끝난 경기" 기준이라 어느 쌍이 먼저여도 동작해야 한다.
+  console.log('\n━━━ T7: [2v3부터 — 코트판에서 맨 위로 옮긴 경우] 3번 승리 → (1v3) 먼저, (1v2) 마지막 ━━━');
+  {
+    const g = g3[2]; const seqs = bySeq(g.id).map(x => x.team_id); const s3 = seqs[2];
+    await assign(g.id, 'T-4');
+    const ms = await fetchGroupMatches(g.id);
+    const pick = (l) => ms.find(m => label(m, seqs) === l);
+    // 운영자가 2v3을 코트 맨 위로: 2v3 #1, 1v2 #2, 1v3 #3
+    await sb.from('matches').update({ court_order: 1 }).eq('id', pick('2v3').id);
+    await sb.from('matches').update({ court_order: 2 }).eq('id', pick('1v2').id);
+    await sb.from('matches').update({ court_order: 3 }).eq('id', pick('1v3').id);
+    const r = await sb.rpc('rpc_submit_match_result', { p_match_id: pick('2v3').id, p_score: '4:6', p_winner_team_id: s3 });
+    check('2v3 결과 입력 성공 (3번 승리)', !r.error, r.error?.message || '');
+    const after = (await fetchGroupMatches(g.id)).filter(m => m.status !== 'FINISHED').sort((a, b) => a.court_order - b.court_order);
+    console.log('   결과 입력 후 남은 경기:', after.map(m => `${label(m, seqs)}(#${m.court_order}, ${m.status})`).join(' → '));
+    check('코트순서: 승자(3번)의 (1v3)이 먼저, 패자(2번)의 (1v2)가 마지막', label(after[0], seqs) === '1v3' && label(after[1], seqs) === '1v2');
+    const started = after.find(m => m.status === 'IN_PROGRESS');
+    check('자동 시작된 경기 = (1v3)', started && label(started, seqs) === '1v3', started ? label(started, seqs) + ' 시작됨' : '자동 시작 없음');
+  }
+
+  console.log('\n━━━ T8: [2v3부터 — 순서는 그대로 두고 "시작"만 누른 경우] 3번 승리 ━━━');
+  {
+    const g = g3[3]; const seqs = bySeq(g.id).map(x => x.team_id); const s3 = seqs[2];
+    await assign(g.id, 'T-5');                       // 1v2 #1, 1v3 #2, 2v3 #3 (기본 순서 그대로)
+    const ms = await fetchGroupMatches(g.id);
+    const m23 = ms.find(m => label(m, seqs) === '2v3');
+    await sb.from('matches').update({ status: 'IN_PROGRESS' }).eq('id', m23.id);   // 운영자가 2v3 수동 시작
+    const r = await sb.rpc('rpc_submit_match_result', { p_match_id: m23.id, p_score: '4:6', p_winner_team_id: s3 });
+    check('2v3 결과 입력 성공 (3번 승리)', !r.error, r.error?.message || '');
+    const after = (await fetchGroupMatches(g.id)).filter(m => m.status !== 'FINISHED').sort((a, b) => a.court_order - b.court_order);
+    console.log('   결과 입력 후 남은 경기:', after.map(m => `${label(m, seqs)}(#${m.court_order}, ${m.status})`).join(' → '));
+    check('코트순서가 (1v3) 먼저, (1v2) 마지막으로 교정됨', label(after[0], seqs) === '1v3' && label(after[1], seqs) === '1v2');
+    const started = after.find(m => m.status === 'IN_PROGRESS');
+    console.log('   (참고) 자동 시작:', started ? label(started, seqs) + ' 시작됨' : '없음 — 끝난 경기가 코트 맨 아래(#3)라 "그 아래 대기 경기"가 없어서');
   }
 
   console.log('\n━━━ T5: 4팀 조는 기존 방식 그대로 (순서 변화 없음) ━━━');
