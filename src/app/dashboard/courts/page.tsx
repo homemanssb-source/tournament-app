@@ -89,7 +89,9 @@ function venueCourts(v: { short_name?: string; name?: string; court_count?: numb
   return makeCourtNames(v.short_name || v.name || '', v.court_count || 0)
 }
 function sortGroupMatches(list: MatchSlim[]): MatchSlim[] {
-  const rem = [...list], sorted: MatchSlim[] = []
+  // ✅ slot 순으로 먼저 정렬 — 생성 순서(1v2→1v3→2v3)와, 3팀 조에서 DB 트리거가 1경기 결과 후
+  //    바꿔놓은 순서(승자 경기 먼저)를 그대로 따른다. (기존엔 조회 순서가 불확정이라 임의 순서였음)
+  const rem = [...list].sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0)), sorted: MatchSlim[] = []
   while (rem.length > 0) {
     const prev = sorted[sorted.length - 1]
     const idx = prev ? rem.findIndex(m =>
