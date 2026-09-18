@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useEventId, useDivisions } from '@/components/useDashboard'
-import { fillSlotsIfGroupComplete } from '@/lib/tournament'
+import { fillSlotsIfGroupComplete, groupPlaceholders } from '@/lib/tournament'
 import type { TieWithClubs } from '@/types/team'
 
 interface MatchSlim {
@@ -13,6 +13,7 @@ interface MatchSlim {
   division_name: string; division_id: string; locked_by_participant: boolean
   group_label: string | null; is_team_tie?: boolean; slot?: number | null
   ended_at?: string | null   // 경기 종료 시각 (KST로 표시)
+  group_id?: string | null   // 조 (자리표시 계산용)
 }
 
 // 종료 시각을 KST HH:mm 으로 (기기 시간대와 무관)
@@ -135,6 +136,7 @@ export default function CourtsPage() {
   const [msg, setMsg]         = useState('')
   const [venues, setVenues]   = useState<Venue[]>([])
   const [selectedVenue, setSelectedVenue] = useState<string>('ALL')
+  const [seqMap, setSeqMap] = useState<Record<string, number>>({})   // team_id → 조 내 순번
 
   const venuesRef  = useRef<Venue[]>([])
   const matchesRef = useRef<MatchSlim[]>([])
@@ -155,6 +157,20 @@ export default function CourtsPage() {
     if (venuesRef.current.length === 0) return courtNames
     return venuesRef.current.flatMap(v => venueCourts(v))
   }, [venues]) // venues state 변경 시 재계산
+
+  // ✅ 3팀 조 자리표시 + 순번 접두 — 코트판에 그릴 때만 팀명을 바꿔 보여준다 (데이터 불변)
+  //    첫 경기가 끝나기 전엔 남은 두 경기를 (앞 경기 승자)/(앞 경기 패자) vs 3번 으로 표시
+  const placeholders = React.useMemo(() => groupPlaceholders(matches as any), [matches])
+  function decorate(m: MatchSlim): MatchSlim {
+    if (m.is_team_tie || m.stage !== 'GROUP') return m
+    const ph = placeholders[m.id]
+    const pre = (id: string, name: string) => (seqMap[id] != null ? String(seqMap[id]) + "번 " + name : name)
+    return {
+      ...m,
+      team_a_name: ph?.a ? ph.a : pre(m.team_a_id, m.team_a_name),
+      team_b_name: ph?.b ? ph.b : pre(m.team_b_id, m.team_b_name),
+    }
+  }
 
   const [autoDiv, setAutoDiv]       = useState('')
   const [autoStage, setAutoStage]   = useState<StageKey | string>('GROUP')
@@ -300,6 +316,13 @@ export default function CourtsPage() {
         }) as MatchSlim[]
       const tieList = ((tieRes.data||[]) as any[]).map(t=>({...t,_group_label:t.group_id?(_grpMap[t.group_id]||null):null})) as TieWithClubs[]
       setMatches(matchList); matchesRef.current = matchList
+      // ✅ 조 내 순번(1번·2번…) — 코트판 팀명 앞에 표시 (없으면 생략)
+      try {
+        const { data: gmRows } = await supabase.from('group_members').select('team_id, seq').eq('event_id', eventId)
+        const sm: Record<string, number> = {}
+        for (const r of (gmRows || []) as any[]) if (r.seq != null) sm[r.team_id] = r.seq
+        setSeqMap(sm)
+      } catch {}
       setTies(tieList);      tiesRef.current    = tieList
       syncCourtOrderRef(matchList, tieList)
 
@@ -977,7 +1000,7 @@ export default function CourtsPage() {
 
         {/* 미배정 컬럼 */}
         <UnassignedColumn
-          unassigned={unassigned}
+          unassigned={(unassigned).map(decorate)}
           divColors={divColors}
           touchOver={touchOver}
           onDragOver={handleDragOver}
@@ -1048,7 +1071,7 @@ export default function CourtsPage() {
                     const firstPendingIdx = courtItems.findIndex(mm => mm.status === 'PENDING')
                     const canStart = !m.is_team_tie && m.status === 'PENDING' && allIdx === firstPendingIdx
                     return (
-                      <MatchChip key={m.id} m={m} badge={badge}
+                      <MatchChip key={m.id} m={decorate(m)} badge={badge}
                         isCurrentSlot={m.status==='PENDING'&&allIdx===currentIdx}
                         divColor={divColors[m.division_id]}
                         allMatches={allFinalsMatches.length > 0 ? allFinalsMatches : matches}

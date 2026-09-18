@@ -1,6 +1,7 @@
 'use client'
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { groupPlaceholders } from '@/lib/tournament'
 
 interface CourtMatch {
   id: string; match_num: string; court: string; court_order: number
@@ -10,6 +11,7 @@ interface CourtMatch {
   team_a_id: string; team_b_id: string
   winner_team_id: string | null; is_team_tie?: boolean; ended_at?: string | null
   group_label?: string | null
+  group_id?: string | null; slot?: number | null   // 3팀 조 자리표시 계산용
 }
 
 // round 값 → 짧은 한국어 라벨 (대시보드와 동일 규칙)
@@ -42,6 +44,12 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
   const [venueFilter, setVenueFilter] = useState<string>('ALL')
   const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({})
   const inputRef = useRef<HTMLInputElement>(null)
+  // 3팀 조: 첫 경기가 끝나기 전엔 남은 두 경기를 (앞 경기 승자)/(앞 경기 패자) vs 3번 으로 표시
+  const placeholders = React.useMemo(() => groupPlaceholders(matches as any), [matches])
+  const deco = (m: CourtMatch): CourtMatch => {
+    const ph = placeholders[m.id]; if (!ph || m.is_team_tie) return m
+    return { ...m, team_a_name: ph.a ?? m.team_a_name, team_b_name: ph.b ?? m.team_b_name }
+  }
   const suggRef  = useRef<HTMLDivElement>(null)
 
   // ✅ Fix: matches + ties + divisions 3개 쿼리를 Promise.all로 병렬화
@@ -405,20 +413,20 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
                   <div className="text-center py-4 text-stone-400"><div className="text-2xl mb-1">✅</div><div className="text-sm">모든 경기 완료</div></div>
                 ) : (<>
                   {cur && (
-                    <CourtSlot label="🔴 현재 경기" labelColor="bg-red-50 text-red-700 border-red-200" match={cur}
+                    <CourtSlot label="🔴 현재 경기" labelColor="bg-red-50 text-red-700 border-red-200" match={deco(cur)}
                       highlight={isSearchCourt && (cur.team_a_name.toLowerCase().includes((searchResult?.name||'').toLowerCase()) || cur.team_b_name.toLowerCase().includes((searchResult?.name||'').toLowerCase()))} />
                   )}
                   {w1 && (
-                    <CourtSlot label="🟡 다음 대기" labelColor="bg-amber-50 text-amber-700 border-amber-200" match={w1}
+                    <CourtSlot label="🟡 다음 대기" labelColor="bg-amber-50 text-amber-700 border-amber-200" match={deco(w1)}
                       highlight={isSearchCourt && (w1.team_a_name.toLowerCase().includes((searchResult?.name||'').toLowerCase()) || w1.team_b_name.toLowerCase().includes((searchResult?.name||'').toLowerCase()))} />
                   )}
                   {w2 && (
-                    <CourtSlot label="🟢 대기 2" labelColor="bg-green-50 text-green-700 border-green-200" match={w2}
+                    <CourtSlot label="🟢 대기 2" labelColor="bg-green-50 text-green-700 border-green-200" match={deco(w2)}
                       highlight={isSearchCourt && (w2.team_a_name.toLowerCase().includes((searchResult?.name||'').toLowerCase()) || w2.team_b_name.toLowerCase().includes((searchResult?.name||'').toLowerCase()))} />
                   )}
                   {ai >= 0 && ai + 3 < cm.length && (
                     <RemainingMatches
-                      matches={cm.slice(ai + 3).filter(m => m.status !== 'FINISHED')}
+                      matches={cm.slice(ai + 3).filter(m => m.status !== 'FINISHED').map(deco)}
                       searchName={isSearchCourt ? searchResult?.name : undefined} />
                   )}
                 </>)}

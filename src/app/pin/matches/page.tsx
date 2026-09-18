@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { usePushSubscription } from '@/hooks/usePushSubscription'
-import { fillSlotsIfGroupComplete } from '@/lib/tournament'
+import { fillSlotsIfGroupComplete, groupPlaceholders } from '@/lib/tournament'
 
 interface PinMatch {
   id: string; match_num: string; stage: string; round: string
@@ -26,6 +26,7 @@ interface FinalsMatch {
 interface CourtQueueMatch {
   id: string; court_order: number; status: string
   team_a_name: string; team_b_name: string; division_name: string; division_id: string
+  group_label?: string | null; team_a_id?: string | null; team_b_id?: string | null; slot?: number | null   // 3팀 조 자리표시용
 }
 
 interface InAppNotif {
@@ -52,6 +53,12 @@ export default function PinMatchesPage() {
   const [session, setSession]     = useState<any>(null)
   const [matches, setMatches]     = useState<PinMatch[]>([])
   const [courtQueues, setCourtQueues] = useState<Map<string, CourtQueueMatch[]>>(new Map())
+  // 3팀 조 자리표시: 같은 코트 대기열에 조의 3경기가 다 있으므로 여기서 계산 (첫 경기 전엔 승자/패자 자리표시)
+  const queuePlaceholders = groupPlaceholders(Array.from(courtQueues.values()).flat() as any)
+  const decoQueue = (q: CourtQueueMatch): CourtQueueMatch => {
+    const ph = queuePlaceholders[q.id]; if (!ph) return q
+    return { ...q, team_a_name: ph.a ?? q.team_a_name, team_b_name: ph.b ?? q.team_b_name }
+  }
   const [loading, setLoading]     = useState(true)   // 최초 진입 시만 true, loadData finally에서 항상 해제
   const [msg, setMsg]             = useState('')
 
@@ -291,7 +298,7 @@ export default function PinMatchesPage() {
             const myCourtDate = courtDateMap[court]
             let q = supabase
               .from('v_matches_with_teams')
-              .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date')
+              .select('id, court, court_order, status, score, team_a_name, team_b_name, division_name, division_id, match_date, group_label, team_a_id, team_b_id, slot')
               .eq('event_id', s.event_id)
               .eq('court', court)
               .order('court_order')
@@ -608,7 +615,7 @@ export default function PinMatchesPage() {
                     const isLive   = m.status === 'IN_PROGRESS'
                     const isDone   = m.status === 'FINISHED'
                     const canInput = isLive && !m.locked_by_participant
-                    const queue    = m.court ? courtQueues.get(m.court) || [] : []
+                    const queue    = (m.court ? courtQueues.get(m.court) || [] : []).map(decoQueue)
                     const showQueue = m.court && queue.length > 0 && !isDone
                     const loser    = loserScores[m.id] || ''
 
@@ -732,7 +739,7 @@ export default function PinMatchesPage() {
 
                           {!isDone && !isLive && (
                             <div className="text-center py-2 text-xs text-stone-400">
-                              ⏳ 경기 대기 중 · 진행中이 되면 점수 입력 가능
+                              ⏳ 경기 대기 중 · 진행中이 되면 점수 입력 가능{queuePlaceholders[m.id] && <span className="block mt-1 text-amber-600">🔀 앞 경기 결과에 따라 순서가 정해집니다 — 이기면 바로 다음, 지면 마지막</span>}
                             </div>
                           )}
                         </div>
