@@ -43,6 +43,8 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
   const [dateFilter, setDateFilter] = useState<string>(initialDate || 'ALL')
   const [venueFilter, setVenueFilter] = useState<string>('ALL')
   const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({})
+  // 당일 첫 경기 시작 시각: 경기장별 start_time(없으면 대회 start_time). 코트에 아직 시작된 경기가 없을 때만 표시
+  const [firstStart, setFirstStart] = useState<{ byVenue: Record<string, string>; event: string }>({ byVenue: {}, event: '' })
   const inputRef = useRef<HTMLInputElement>(null)
   // 3팀 조: 첫 경기가 끝나기 전엔 남은 두 경기를 (앞 경기 승자)/(앞 경기 패자) vs 3번 으로 표시
   const placeholders = React.useMemo(() => groupPlaceholders(matches as any), [matches])
@@ -61,7 +63,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
       in_progress: 'IN_PROGRESS', completed: 'FINISHED',
     }
 
-    const [matchRes, tieRes, divRes, venueRes, grpRes] = await Promise.all([
+    const [matchRes, tieRes, divRes, venueRes, grpRes, evRes] = await Promise.all([
       supabase.from('v_matches_with_teams').select('*')
         .eq('event_id', eventId).not('court', 'is', null)
         .order('court').order('court_order'),
@@ -70,9 +72,18 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
         .eq('event_id', eventId).not('court_number', 'is', null)
         .order('court_number').order('tie_order'),
       supabase.from('divisions').select('id, name, match_date').eq('event_id', eventId),
-      supabase.from('venues').select('id, short_name, name, court_count').eq('event_id', eventId).order('created_at'),
+      supabase.from('venues').select('id, short_name, name, court_count, start_time').eq('event_id', eventId).order('created_at'),
       supabase.from('groups').select('id, group_label').eq('event_id', eventId),
+      supabase.from('events').select('start_time').eq('id', eventId).maybeSingle(),
     ])
+    {
+      const byVenue: Record<string, string> = {}
+      for (const v of (venueRes.data || []) as any[]) {
+        if (v.start_time) byVenue[v.short_name || v.name] = String(v.start_time).slice(0, 5)
+      }
+      const evStart = (evRes.data as any)?.start_time ? String((evRes.data as any).start_time).slice(0, 5) : ''
+      setFirstStart({ byVenue, event: evStart })
+    }
     const grpMap: Record<string, string> = {}
     for (const g of (grpRes.data || []) as any[]) {
       if (g.group_label) grpMap[g.id] = g.group_label
@@ -397,6 +408,9 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
           const w2      = ai >= 0 && ai + 2 < cm.length ? cm[ai + 2] : null
           const allDone = fc === tc
           const isSearchCourt = searchResult?.court === court
+          // 이 코트에서 아직 아무 경기도 시작/종료되지 않았으면 당일 첫 경기 시작 시각 표시
+          const notStarted = tc > 0 && ci < 0 && fc === 0
+          const startAt = notStarted ? (firstStart.byVenue[getVenueName(court)] || firstStart.event) : ''
 
           return (
             <div key={court} className={`bg-white rounded-xl border overflow-hidden transition-all ${isSearchCourt ? 'ring-2 ring-blue-500 shadow-lg' : ''}`}>
@@ -413,7 +427,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
                   <div className="text-center py-4 text-stone-400"><div className="text-2xl mb-1">✅</div><div className="text-sm">모든 경기 완료</div></div>
                 ) : (<>
                   {cur && (
-                    <CourtSlot label="🔴 현재 경기" labelColor="bg-red-50 text-red-700 border-red-200" match={deco(cur)}
+                    <CourtSlot label={startAt ? `⏰ 첫 경기 · ${startAt} 시작 예정` : '🔴 현재 경기'} labelColor="bg-red-50 text-red-700 border-red-200" match={deco(cur)}
                       highlight={isSearchCourt && (cur.team_a_name.toLowerCase().includes((searchResult?.name||'').toLowerCase()) || cur.team_b_name.toLowerCase().includes((searchResult?.name||'').toLowerCase()))} />
                   )}
                   {w1 && (
