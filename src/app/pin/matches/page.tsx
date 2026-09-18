@@ -739,7 +739,10 @@ export default function PinMatchesPage() {
 
                           {!isDone && !isLive && (
                             <div className="text-center py-2 text-xs text-stone-400">
-                              ⏳ 경기 대기 중 · 진행中이 되면 점수 입력 가능{queuePlaceholders[m.id] && <span className="block mt-1 text-amber-600">🔀 앞 경기 결과에 따라 순서가 정해집니다 — 이기면 바로 다음, 지면 마지막</span>}
+                              ⏳ 경기 대기 중 · 진행中이 되면 점수 입력 가능{queuePlaceholders[m.id] && (() => { const ph = queuePlaceholders[m.id]; const meInFirst = m.my_side === 'A' ? !!ph.a : !!ph.b; return (
+                                <span className="block mt-1 text-amber-600">
+                                  {meInFirst ? '🔀 앞 경기에서 이기면 바로 다음 경기, 지면 마지막 경기입니다' : '🔀 앞 경기 승자와 먼저, 패자와 나중에 붙습니다 (앞 경기 결과 후 확정)'}
+                                </span>) })()}
                             </div>
                           )}
                         </div>
