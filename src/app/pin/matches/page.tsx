@@ -53,6 +53,13 @@ export default function PinMatchesPage() {
   const [session, setSession]     = useState<any>(null)
   const [matches, setMatches]     = useState<PinMatch[]>([])
   const [courtQueues, setCourtQueues] = useState<Map<string, CourtQueueMatch[]>>(new Map())
+  // 당일 첫 경기 시작 시각 (경기장 start_time → 없으면 대회 start_time). 코트에 시작된 경기가 없을 때 첫 경기에만 표시
+  const [firstStart, setFirstStart] = useState<{ byVenue: Record<string, string>; event: string }>({ byVenue: {}, event: '' })
+  const firstStartFor = (court: string | null): string => {
+    if (!court) return ''
+    const venue = court.includes('-') ? court.split('-').slice(0, -1).join('-') : court
+    return firstStart.byVenue[venue] || firstStart.event
+  }
   // 3팀 조 자리표시: 같은 코트 대기열에 조의 3경기가 다 있으므로 여기서 계산 (첫 경기 전엔 승자/패자 자리표시)
   const queuePlaceholders = groupPlaceholders(Array.from(courtQueues.values()).flat() as any)
   const decoQueue = (q: CourtQueueMatch): CourtQueueMatch => {
@@ -336,6 +343,18 @@ export default function PinMatchesPage() {
       }
 
       setCourtQueues(queueMap)
+
+      if (s.event_id && courts.length > 0) {
+        try {
+          const [{ data: vs }, { data: ev }] = await Promise.all([
+            supabase.from('venues').select('short_name, name, start_time').eq('event_id', s.event_id),
+            supabase.from('events').select('start_time').eq('id', s.event_id).maybeSingle(),
+          ])
+          const byVenue: Record<string, string> = {}
+          for (const v of (vs || []) as any[]) if (v.start_time) byVenue[v.short_name || v.name] = String(v.start_time).slice(0, 5)
+          setFirstStart({ byVenue, event: (ev as any)?.start_time ? String((ev as any).start_time).slice(0, 5) : '' })
+        } catch { /* 표시용이므로 실패해도 무시 */ }
+      }
 
       const eventId = s.event_id
       if (eventId) {
@@ -739,6 +758,14 @@ export default function PinMatchesPage() {
 
                           {!isDone && !isLive && (
                             <div className="text-center py-2 text-xs text-stone-400">
+                              {(() => {
+                                // 내 경기가 이 코트의 첫 경기이고 아직 아무 경기도 시작되지 않았으면 시작 예정 시각 표시
+                                const q = m.court ? courtQueues.get(m.court) || [] : []
+                                const nothingStarted = q.length > 0 && q.every(x => x.status === 'PENDING')
+                                const isFirst = q.length > 0 && q[0].id === m.id
+                                const t = nothingStarted && isFirst ? firstStartFor(m.court) : ''
+                                return t ? <span className="block mb-1 text-sm font-bold text-[#2d5016]">⏰ 첫 경기 · {t} 시작 예정</span> : null
+                              })()}
                               ⏳ 경기 대기 중 · 진행中이 되면 점수 입력 가능{queuePlaceholders[m.id] && (() => { const ph = queuePlaceholders[m.id]; const meInFirst = m.my_side === 'A' ? !!ph.a : !!ph.b; return (
                                 <span className="block mt-1 text-amber-600">
                                   {meInFirst ? '🔀 앞 경기에서 이기면 바로 다음 경기, 지면 마지막 경기입니다' : '🔀 앞 경기 승자와 먼저, 패자와 나중에 붙습니다 (앞 경기 결과 후 확정)'}
