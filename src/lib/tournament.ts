@@ -65,3 +65,61 @@ export async function fillSlotsIfGroupComplete(
     console.warn('[fillSlots] 예외:', e)
   }
 }
+
+// ============================================================
+// 3팀 조 "자리표시" — 아직 정해지지 않은 상대를 (첫 경기 승자/패자)로 표시
+//
+// 3팀 조는 첫 경기가 끝나기 전엔 누가 3번과 먼저 붙을지 정해지지 않는다(DB 트리거가
+// 첫 경기 결과 후 순서를 바꿈). 그래서 첫 경기가 끝나기 전엔 남은 두 경기를
+//   (첫경기 승자) vs 3번 / (첫경기 패자) vs 3번
+// 로 보여준다. 첫 경기 = 그 조에서 진행중인 경기, 없으면 코트 순번(없으면 slot)이 가장 앞인 경기.
+// 4팀 이상 조나 첫 경기가 끝난 조는 빈 결과(실제 팀명 그대로).
+// ============================================================
+export interface PlaceholderMatch {
+  id: string
+  group_id?: string | null
+  group_label?: string | null
+  division_id?: string | null
+  status: string
+  court?: string | null
+  court_order?: number | null
+  slot?: number | null
+  team_a_id: string | null
+  team_b_id: string | null
+  team_a_name?: string | null
+  team_b_name?: string | null
+}
+export interface PlaceholderNames { a: string | null; b: string | null; note: string }
+
+export function groupPlaceholders(matches: PlaceholderMatch[]): Record<string, PlaceholderNames> {
+  const out: Record<string, PlaceholderNames> = {}
+  const groups = new Map<string, PlaceholderMatch[]>()
+  for (const m of matches) {
+    const key = m.group_id || (m.group_label ? `${m.division_id || ''}|${m.group_label}` : '')
+    if (!key) continue
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(m)
+  }
+  for (const gm of groups.values()) {
+    const teams = new Set<string>()
+    for (const m of gm) { if (m.team_a_id) teams.add(m.team_a_id); if (m.team_b_id) teams.add(m.team_b_id) }
+    if (teams.size !== 3 || gm.length !== 3) continue
+    if (gm.some(m => m.status === 'FINISHED')) continue   // 첫 경기가 끝났으면 실제 팀명
+    const orderKey = (m: PlaceholderMatch) =>
+      m.court_order != null ? m.court_order : (m.slot != null ? 1000 + m.slot : 9999)
+    const first = gm.find(m => m.status === 'IN_PROGRESS')
+      || [...gm].sort((x, y) => orderKey(x) - orderKey(y))[0]
+    const rest = gm.filter(m => m.id !== first.id).sort((x, y) => orderKey(x) - orderKey(y))
+    const firstLabel = `${(first.team_a_name || '').split('/')[0]} vs ${(first.team_b_name || '').split('/')[0]}`
+    rest.forEach((m, i) => {
+      const inFirst = (id: string | null) => !!id && (id === first.team_a_id || id === first.team_b_id)
+      const tag = i === 0 ? '앞 경기 승자' : '앞 경기 패자'
+      out[m.id] = {
+        a: inFirst(m.team_a_id) ? `(${tag})` : null,
+        b: inFirst(m.team_b_id) ? `(${tag})` : null,
+        note: `${firstLabel} → ${tag}`,
+      }
+    })
+  }
+  return out
+}

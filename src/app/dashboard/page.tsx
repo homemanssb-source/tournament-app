@@ -230,9 +230,11 @@ export default function DashboardPage() {
         for (const m of gMatches) {
           if (!teamWins[m.team_a_id]) teamWins[m.team_a_id] = { name: m.team_a_name, id: m.team_a_id, wins: 0, diff: 0 }
           if (!teamWins[m.team_b_id]) teamWins[m.team_b_id] = { name: m.team_b_name, id: m.team_b_id, wins: 0, diff: 0 }
-          const [sa, sb] = (m.score || '0:0').split(':').map(Number)
-          if (m.winner_team_id === m.team_a_id) { teamWins[m.team_a_id].wins++; teamWins[m.team_a_id].diff += (sa - sb) }
-          else if (m.winner_team_id === m.team_b_id) { teamWins[m.team_b_id].wins++; teamWins[m.team_b_id].diff += (sb - sa) }
+          // ✅ 승자 기준으로 읽기 (점수가 "승자 먼저"로 저장되는 경우가 대부분)
+          const [n1, n2] = (m.score || '0:0').split(':').map(Number)
+          const hi = Math.max(n1 || 0, n2 || 0), lo = Math.min(n1 || 0, n2 || 0)
+          if (m.winner_team_id === m.team_a_id) { teamWins[m.team_a_id].wins++; teamWins[m.team_a_id].diff += (hi - lo); teamWins[m.team_b_id].diff -= (hi - lo) }
+          else if (m.winner_team_id === m.team_b_id) { teamWins[m.team_b_id].wins++; teamWins[m.team_b_id].diff += (hi - lo); teamWins[m.team_a_id].diff -= (hi - lo) }
         }
 
         const teams = Object.values(teamWins)
