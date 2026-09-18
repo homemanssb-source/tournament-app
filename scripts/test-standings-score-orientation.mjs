@@ -1,6 +1,7 @@
 // ============================================================
 // 진단: 점수 저장 방향(승자 먼저 vs 팀A:팀B) 과 조별 순위/본선 진출
-// 실행: node scripts/test-standings-score-orientation.mjs
+// 실행: node scripts/test-standings-score-orientation.mjs [--v2] [--tbd]
+//   --v2  : 다른 점수 설계(정답 A3)   --tbd : 본선을 미리(TBD) 생성해 두고 rpc_fill_tournament_slots 경로 검증
 //
 // 3팀 조에서 1승1패 3자 동률을 만들고, "득실차를 어떻게 읽느냐"에 따라
 // 1위가 달라지도록 점수를 설계한다.
@@ -90,6 +91,13 @@ async function main() {
     return { sent, saved: saved.score, mySide };
   }
 
+  const TBD = process.argv.includes('--tbd');
+  if (TBD) {
+    const pre = await sb.rpc('rpc_generate_tournament', { p_event_id: eventId, p_division_id: div.id, p_advance_per_group: 1, p_allow_tbd: true });
+    if (pre.error) throw new Error('TBD 본선 미리 생성: ' + pre.error.message);
+    console.log('\n━━━ 0) [--tbd] 점수 입력 전 본선 미리 생성 → TBD 슬롯 ' + (pre.data?.tbd_slots ?? '?') + '개 ━━━');
+  }
+
   console.log('\n━━━ 1) 선수 PIN 경로로 점수 입력 — 저장 형식 관찰 ━━━');
   const obs = [];
   const V2 = process.argv.includes('--v2');
@@ -110,8 +118,13 @@ async function main() {
   console.log(`   → 팀B 승리 ${bWins.length}건 중 ${rewritten}건이 "승자 먼저"로 바뀌어 저장됨`);
 
   console.log('\n━━━ 2) 본선 생성 (조 1위만 진출) — DB가 A조 1위로 누구를 올리는가 ━━━');
-  const gen = await sb.rpc('rpc_generate_tournament', { p_event_id: eventId, p_division_id: div.id, p_advance_per_group: 1, p_allow_tbd: false });
-  if (gen.error) throw new Error('본선 생성: ' + gen.error.message);
+  if (TBD) {
+    for (const g of groups) { const r = await sb.rpc('rpc_fill_tournament_slots', { p_event_id: eventId, p_group_id: g.id }); if (r.error) throw new Error('슬롯 채우기: ' + r.error.message); }
+    console.log('   [--tbd] rpc_fill_tournament_slots 로 TBD 슬롯 채움 (조 완료 시 트리거가 먼저 채웠을 수 있음)');
+  } else {
+    const gen = await sb.rpc('rpc_generate_tournament', { p_event_id: eventId, p_division_id: div.id, p_advance_per_group: 1, p_allow_tbd: false });
+    if (gen.error) throw new Error('본선 생성: ' + gen.error.message);
+  }
   const { data: finals } = await sb.from('matches').select('team_a_id, team_b_id').eq('event_id', eventId).eq('stage', 'FINALS');
   const advanced = [...new Set((finals || []).flatMap(f => [f.team_a_id, f.team_b_id]).filter(Boolean))].map(nameOf).sort();
   console.log('   본선 진출팀:', advanced.join(', '));
@@ -120,7 +133,7 @@ async function main() {
   const V2b = process.argv.includes('--v2'); const truth = V2b ? 'A3' : 'A2', misread = V2b ? 'A2' : 'A1';
   console.log('   A조 올바른 1위 = ' + truth + '   /   위치 기준 오독 시 = ' + misread + (V2b ? '   /   (순번 1번 = A1)' : ''));
   console.log(`   DB가 본선에 올린 A조 팀 = ${aAdv}  →  ${aAdv === truth ? '✅ DB 진출 로직은 올바름' : (aAdv === misread ? '❌ DB 진출 로직이 득실차를 거꾸로 읽음 (오독 예측과 정확히 일치)' : '❓ 예측 밖 결과')}`);
-  console.log('   화면(조편성·공개 순위) 계산식은 위치 기준이므로 A1을 1위로 표시함 (코드상 확인됨)');
+  console.log('   (017 적용 후 기대: ✅ / 화면 순위표도 52dd469 부터 승자 기준으로 동일하게 계산)');
   console.log('╚══════════════════════════════════════════════════════════╝');
 }
 
