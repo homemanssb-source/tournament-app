@@ -387,13 +387,24 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     setLoading(true)
-    supabase.from('v_group_board').select('*').eq('event_id', eventId).eq('division_id', divisionId)
-      .order('group_num').order('team_num')
-      .then(({ data: rows }: { data: any[] | null }) => {
+    Promise.all([
+      supabase.from('v_group_board').select('*').eq('event_id', eventId).eq('division_id', divisionId)
+        .order('group_num').order('team_num'),
+      // 조 내 순번(seq): 운영자 조편성 화면·코트 경기 순서(1v2 → …)와 같은 번호를 보여주기 위해
+      supabase.from('group_members').select('group_id, team_id, seq').eq('event_id', eventId).eq('division_id', divisionId),
+    ]).then(([{ data: rows }, { data: mem }]: [{ data: any[] | null }, { data: any[] | null }]) => {
+        const seqMap = new Map<string, number>()
+        for (const m of (mem || [])) if (m.seq != null) seqMap.set(`${m.group_id}|${m.team_id}`, m.seq)
         const map = new Map<string, { label: string; num: number; teams: any[] }>()
         for (const r of (rows || [])) {
           if (!map.has(r.group_id)) map.set(r.group_id, { label: r.group_label, num: r.group_num, teams: [] })
           map.get(r.group_id)!.teams.push(r)
+        }
+        for (const g of map.values()) {
+          g.teams = g.teams.map((t, i) => ({ t, i })).sort((a, b) => {
+            const sa = seqMap.get(`${a.t.group_id}|${a.t.team_id}`) ?? 999, sb = seqMap.get(`${b.t.group_id}|${b.t.team_id}`) ?? 999
+            return sa - sb || a.i - b.i
+          }).map(x => x.t)
         }
         setData(Array.from(map.values()).sort((a, b) => a.num - b.num))
         setLoading(false)
