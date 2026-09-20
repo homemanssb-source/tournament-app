@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useEventId } from '@/components/useDashboard'
 import { supabase } from '@/lib/supabase'
 import { fetchStandings, fetchTies } from '@/lib/team-api'
+import { findParticipantOnlyTeams } from '@/lib/participation'
 import type { StandingWithClub, TieWithClubs } from '@/types/team'
 
 interface EventInfo {
@@ -60,7 +61,7 @@ const ROUND_ORDER: Record<string, number> = {
 const PLACE_ORDER: Record<string, number> = {
   '우승': 1, '준우승': 2, '3-4위': 3,
   '5-8위': 4, '9-16위': 5, '17-32위': 6,
-  '33-64위': 7, '65-128위': 8,
+  '33-64위': 7, '65-128위': 8, '참가': 9,
 }
 
 interface PlayerRank {
@@ -160,6 +161,19 @@ export default function ReportPage() {
           // 나머지: 패자만 해당 순위
           teamPlaceList.push({ team_id: loserId, division_id: m.division_id, division_name: m.division_name, place })
         }
+      }
+
+      // 본선 순위가 없는 팀(예선 탈락 등) → '참가' — 앱A 참가 포인트 대상
+      const { data: rawMatches } = await supabase
+        .from('matches')
+        .select('stage, status, score, group_id, division_id, team_a_id, team_b_id')
+        .eq('event_id', eventId)
+      const placedIds = new Set(teamPlaceList.map(x => x.team_id))
+      for (const p of findParticipantOnlyTeams(rawMatches || [], placedIds)) {
+        teamPlaceList.push({
+          team_id: p.team_id, division_id: p.division_id,
+          division_name: divisions.find(d => d.id === p.division_id)?.name || '', place: '참가',
+        })
       }
 
       if (teamPlaceList.length === 0) { setPlayerRanks([]); return }
@@ -435,7 +449,7 @@ export default function ReportPage() {
         <div className="flex items-center justify-between px-5 py-4 border-b bg-stone-50">
           <div>
             <h3 className="font-bold text-sm">🏆 부서별 순위표</h3>
-            <p className="text-xs text-stone-400 mt-0.5">본선 결과 기준 · 선수 1인 1행</p>
+            <p className="text-xs text-stone-400 mt-0.5">본선 결과 기준 · 예선 탈락은 &apos;참가&apos; · 선수 1인 1행</p>
           </div>
           <button
             onClick={downloadRankCSV}

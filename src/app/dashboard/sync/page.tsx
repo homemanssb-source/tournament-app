@@ -190,7 +190,7 @@ function SyncDashboardInner() {
 
               <div className="bg-white rounded-lg border p-6 space-y-3">
                 <h3 className="font-semibold">본선 결과 전송</h3>
-                <p className="text-sm text-gray-500">개인전 본선 결과를 앱A에 전송합니다.</p>
+                <p className="text-sm text-gray-500">개인전 본선 결과를 앱A에 전송합니다. 예선 탈락팀은 &apos;참가&apos;로 함께 전송됩니다.</p>
                 <button onClick={handlePushResults} disabled={syncing}
                   className="w-full bg-purple-600 text-white py-3 rounded-lg hover:bg-purple-700 disabled:opacity-50">
                   {syncing ? '전송중...' : '본선 결과 전송하기'}

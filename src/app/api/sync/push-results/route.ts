@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { findParticipantOnlyTeams } from '@/lib/participation';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -148,9 +149,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ── 1-1. 본선 순위가 없는 참가팀(예선 탈락 등) → '참가' 포인트 대상 ──
+    const { data: allMatches } = await appB
+      .from('matches')
+      .select('stage, status, score, group_id, division_id, team_a_id, team_b_id')
+      .eq('event_id', event_id);
+
+    const placedIds = new Set<string>(
+      matches.filter(m => m.round && m.winner_team_id)
+        .flatMap(m => [m.team_a_id, m.team_b_id].filter(Boolean) as string[]),
+    );
+    const participantOnly = findParticipantOnlyTeams(allMatches || [], placedIds);
+
     // ── 2. 관련 팀 정보 조회 ──
     // ★ 수정: p1_club, p2_club 추가 조회
-    const teamIds = [...new Set(matches.flatMap(m => [m.team_a_id, m.team_b_id].filter(Boolean)))];
+    const teamIds = [...new Set([
+      ...matches.flatMap(m => [m.team_a_id, m.team_b_id].filter(Boolean)),
+      ...participantOnly.map(p => p.team_id),
+    ])];
     const { data: teamsData } = await appB
       .from('teams')
       .select('id, player1_name, player2_name, division_name, club_name, p1_club, p2_club')
@@ -159,7 +175,10 @@ export async function POST(request: NextRequest) {
     const teamMap = new Map((teamsData || []).map(t => [t.id, t]));
 
     // ── 3. 부서 정보 조회 ──
-    const divIds = [...new Set(matches.map(m => m.division_id).filter(Boolean))];
+    const divIds = [...new Set([
+      ...matches.map(m => m.division_id),
+      ...participantOnly.map(p => p.division_id),
+    ].filter(Boolean))];
     const { data: divsData } = await appB
       .from('divisions')
       .select('id, name')
@@ -190,6 +209,13 @@ export async function POST(request: NextRequest) {
         if (!existingLoser || RANK_PRIORITY[loserRank] < RANK_PRIORITY[existingLoser.rank]) {
           teamBestRank.set(loserId, { rank: loserRank, divisionName: divName });
         }
+      }
+    }
+
+    // 예선 탈락 등 본선 순위가 없는 팀은 '참가'
+    for (const p of participantOnly) {
+      if (!teamBestRank.has(p.team_id)) {
+        teamBestRank.set(p.team_id, { rank: '참가', divisionName: divMap.get(p.division_id) || '' });
       }
     }
 
