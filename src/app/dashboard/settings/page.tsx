@@ -2,6 +2,7 @@
 import React from 'react'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { authHeaders } from '@/lib/auth-headers';
 
 interface Venue {
   id: string; event_id: string; name: string; short_name: string
@@ -115,10 +116,12 @@ export default function SettingsPage() {
   }
 
   async function loadEvent(eid: string) {
-    const { data } = await supabase.from('events').select('name, master_pin_hash, status, start_time, tiebreak_at').eq('id', eid).single()
+    const { data } = await supabase.from('events').select('name, status, start_time, tiebreak_at').eq('id', eid).single()
+    // 마스터 PIN 해시는 외부에 노출하지 않음 (024) — 설정 여부만 조회
+    const { data: pinSet } = await supabase.rpc('rpc_master_pin_status', { p_event_id: eid })
     if (data) {
       setEventName(data.name)
-      setHasMasterPin(!!data.master_pin_hash)
+      setHasMasterPin(!!pinSet)
       setEventStatus(data.status || 'preparing')
       setStartTime(data.start_time || '')
       if ((data as any).tiebreak_at) setTiebreakAt((data as any).tiebreak_at)
@@ -189,7 +192,7 @@ export default function SettingsPage() {
   async function saveVenueStartTime(venueId: string, time: string) {
     setVenueStartTimeSaving(venueId); setVenueTimeMsg('')
     const res = await fetch('/api/admin/venues', {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: await authHeaders(),
       body: JSON.stringify({ id: venueId, start_time: time || null }),
     })
     setVenueStartTimeSaving(null)
@@ -255,7 +258,7 @@ export default function SettingsPage() {
     if (newCourtCount < 1) { setVenueMsg('! 코트 수는 1개 이상이어야 합니다.'); return }
     const courts = makeCourtRange(newVenueShortName, newCourtStart, newCourtCount)
     const res = await fetch('/api/admin/venues', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: await authHeaders(),
       body: JSON.stringify({
         event_id: eventId, name: newVenueName.trim(), short_name: newVenueShortName.trim(),
         courts, court_count: newCourtCount, pin_plain: newVenuePin.trim(),
@@ -277,7 +280,7 @@ export default function SettingsPage() {
     if (editCourtCount < 1) { setVenueMsg('! 코트 수는 1개 이상이어야 합니다.'); return }
     const courts = makeCourtRange(editShortName, editCourtStart, editCourtCount)
     const res = await fetch('/api/admin/venues', {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: await authHeaders(),
       body: JSON.stringify({
         id: venueId,
         short_name: editShortName.trim(), courts, court_count: editCourtCount,
@@ -293,7 +296,7 @@ export default function SettingsPage() {
 
   async function deleteVenue(v: Venue) {
     if (!confirm(v.name + ' 삭제하시겠습니까?')) return
-    const res = await fetch('/api/admin/venues?id=' + encodeURIComponent(v.id), { method: 'DELETE' })
+    const res = await fetch('/api/admin/venues?id=' + encodeURIComponent(v.id), { method: 'DELETE', headers: await authHeaders() })
     if (!res.ok) {
       const j = await res.json().catch(() => ({}))
       setVenueMsg('! ' + (j.error || res.statusText)); return

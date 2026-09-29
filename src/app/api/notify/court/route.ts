@@ -6,6 +6,7 @@
 //    [FIX] setTimeout 대신 await sleep → Vercel 서버리스에서 실행 보장
 import { NextRequest, NextResponse } from 'next/server'
 import { getServiceClient } from '@/lib/supabase'
+import { callerForEvent } from '@/lib/api-auth'
 
 type SubRow = { endpoint: string; p256dh: string; auth: string; team_id: string }
 
@@ -69,10 +70,17 @@ export async function POST(req: NextRequest) {
       process.env.VAPID_PRIVATE_KEY
     )
 
-    const { event_id, court, match_id, finished_match_id, match_date, trigger } = await req.json()
+    const body = await req.json()
+    const { event_id, court, match_id, finished_match_id, match_date, trigger } = body
 
     if (!event_id || !court) {
       return NextResponse.json({ error: 'event_id, court 필수' }, { status: 400 })
+    }
+
+    // 호출자 확인: 운영자 로그인 / 그 대회 경기장 세션(venue_token) / 선수 세션(pin_token)
+    // (그동안 인증 없이 누구나 구독자 전원에게 알림을 보낼 수 있었음)
+    if (!(await callerForEvent(req, body, event_id, supabaseAdmin))) {
+      return NextResponse.json({ error: '권한이 없습니다.' }, { status: 401 })
     }
 
     logData = { event_id, court, trigger: trigger || 'manual' }

@@ -10,11 +10,11 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server';
+import { operatorFromRequest } from '@/lib/api-auth';
 import { createClient } from '@supabase/supabase-js';
 import { findParticipantOnlyTeams } from '@/lib/participation';
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
@@ -115,6 +115,10 @@ async function findMemberByNameAndClub(
 
 export async function POST(request: NextRequest) {
   try {
+    // 앱A 랭킹 포인트를 쓰는 작업 — 운영자 로그인 필요 (그동안 인증 없이 열려 있었음)
+    if (!(await operatorFromRequest(request))) {
+      return NextResponse.json({ success: false, error: '로그인이 필요합니다.' }, { status: 401, headers: corsHeaders });
+    }
     const { event_id, app_a_event_id, tournament_name, tournament_date } = await request.json();
 
     if (!event_id || !app_a_event_id) {

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useEventIdWithParam } from '@/components/useDashboard';
 import { supabase } from '@/lib/supabase';
+import { authHeaders } from '@/lib/auth-headers';
 import { fetchClubs } from '@/lib/team-api';
 import type { Club, SyncLog } from '@/types/team';
 
@@ -58,7 +59,7 @@ function SyncDashboardInner() {
     setSyncing(true); setSyncResult(null);
     try {
       const res = await fetch('/api/sync/pull-team', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await authHeaders(),
         body: JSON.stringify({ event_id: selectedEventId, app_a_event_id: event.app_a_event_id }),
       });
       setSyncResult({ type: 'team', ...(await res.json()) });
@@ -72,7 +73,7 @@ function SyncDashboardInner() {
     setSyncing(true); setSyncResult(null);
     try {
       const res = await fetch('/api/sync/pull-individual', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await authHeaders(),
         body: JSON.stringify({ event_id: selectedEventId, app_a_event_id: event.app_a_event_id }),
       });
       setSyncResult({ type: 'individual', ...(await res.json()) });
@@ -86,7 +87,7 @@ function SyncDashboardInner() {
     setSyncing(true); setSyncResult(null);
     try {
       const res = await fetch('/api/sync/push-results', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await authHeaders(),
         body: JSON.stringify({ event_id: selectedEventId, app_a_event_id: event.app_a_event_id }),
       });
       setSyncResult({ type: 'push-results', ...(await res.json()) });
@@ -99,7 +100,7 @@ function SyncDashboardInner() {
     setSyncing(true); setSyncResult(null);
     try {
       const res = await fetch('/api/sync/pull-events', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: await authHeaders(),
       });
       setSyncResult({ type: 'pull-events', ...(await res.json()) });
       const { data } = await supabase.from('events')

@@ -1,13 +1,16 @@
 // 대시보드 운영자용 venues CRUD
 // venues 테이블 RLS에 INSERT/UPDATE/DELETE 정책이 없어 anon key로 막힘 → service_role 우회
 //
-// 보안: dashboard는 자체 인증 페이지에서 보호되며 외부 노출 안 됨.
-//       추가 검증이 필요하면 user JWT 검증 미들웨어 추가 가능.
+// 보안: 운영자 로그인(Authorization: Bearer <Supabase JWT>) 필요 — 그동안 인증 없이 열려 있었음
 import { NextRequest, NextResponse } from 'next/server'
 import { getServiceClient } from '@/lib/supabase'
+import { operatorFromRequest } from '@/lib/api-auth'
+
+const unauthorized = () => NextResponse.json({ error: '로그인이 필요합니다.' }, { status: 401 })
 
 export async function POST(req: NextRequest) {
   try {
+    if (!(await operatorFromRequest(req))) return unauthorized()
     const body = await req.json()
     const { event_id, name, short_name, courts, court_count, pin_plain, manager_name, division_ids } = body
     if (!event_id || !name || !short_name) {
@@ -27,6 +30,7 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
+    if (!(await operatorFromRequest(req))) return unauthorized()
     const body = await req.json()
     const { id, ...updates } = body
     if (!id) return NextResponse.json({ error: 'id 필수' }, { status: 400 })
@@ -41,6 +45,7 @@ export async function PATCH(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    if (!(await operatorFromRequest(req))) return unauthorized()
     const id = req.nextUrl.searchParams.get('id')
     if (!id) return NextResponse.json({ error: 'id 필수' }, { status: 400 })
     const supabase = getServiceClient()
