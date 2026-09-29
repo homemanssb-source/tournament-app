@@ -45,7 +45,7 @@ function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: Ed
   }
 
   async function handleSave() {
-    if (!p1Name.trim() || !p2Name.trim()) { setMsg('❌ 이름을 모두 입력하세요.'); return }
+    if (!p1Name.trim()) { setMsg('❌ 선수1 이름을 입력하세요.'); return }
     if (pinPlain.trim().length !== 6) { setMsg('❌ PIN은 6자리여야 합니다.'); return } // ← PIN 유효성
     setSaving(true); setMsg('')
     try {
@@ -175,7 +175,7 @@ function EditModal({ team, groups, eventId, divisionName, onClose, onSaved }: Ed
 
         {/* 선수 2 */}
         <div className="space-y-1">
-          <label className="text-xs font-semibold text-stone-500 uppercase tracking-wide">선수 2</label>
+          <label className="text-xs font-semibold text-stone-500 uppercase tracking-wide">선수 2 <span className="normal-case font-normal text-stone-400">(단식은 비워두세요)</span></label>
           <div className="flex gap-2">
             <input
               type="text" value={p2Name} onChange={e => setP2Name(e.target.value)}
@@ -285,7 +285,7 @@ export default function TeamsPage() {
         const q = searchQuery.trim().toLowerCase()
         return (
           t.player1_name.toLowerCase().includes(q) ||
-          t.player2_name.toLowerCase().includes(q) ||
+          (t.player2_name || '').toLowerCase().includes(q) ||
           t.team_name.toLowerCase().includes(q) ||
           (t.club_name || '').toLowerCase().includes(q) ||
           (t.p1_club || '').toLowerCase().includes(q) ||
@@ -345,6 +345,11 @@ export default function TeamsPage() {
     return `${divName}|${p1}|${p2}`
   }
 
+  // 단식(선수2 없음)은 선수1 이름만
+  function makeTeamName(p1: string, p2: string) {
+    return p2 ? `${p1}/${p2}` : p1
+  }
+
   // ✅ DB에서 max team_num 조회 후 +1 — 삭제·동시성 안전
   async function nextTeamNum(offset = 0): Promise<string> {
     const { data } = await supabase
@@ -359,10 +364,10 @@ export default function TeamsPage() {
   }
 
   async function addTeam() {
-    if (!p1Name.trim() || !p2Name.trim()) { setMsg('선수1, 선수2 이름을 모두 입력하세요.'); return }
+    if (!p1Name.trim()) { setMsg('선수1 이름을 입력하세요. (단식은 선수2를 비워두세요)'); return }
     setAddLoading(true); setMsg('')
     const divName = selectedDiv?.name || ''
-    const teamName = `${p1Name.trim()}/${p2Name.trim()}`
+    const teamName = makeTeamName(p1Name.trim(), p2Name.trim())
     const pin = generatePin()
     const teamNum = await nextTeamNum()
     const { error } = await supabase.from('teams').insert({
@@ -378,9 +383,9 @@ export default function TeamsPage() {
   }
 
   async function saveEdit(id: string) {
-    if (!editP1.trim() || !editP2.trim()) return
+    if (!editP1.trim()) return
     const divName = selectedDiv?.name || ''
-    const teamName = `${editP1.trim()}/${editP2.trim()}`
+    const teamName = makeTeamName(editP1.trim(), editP2.trim())
     const { error } = await supabase.from('teams').update({
       team_name: teamName, player1_name: editP1.trim(), player2_name: editP2.trim(),
       team_key: makeTeamKey(divName, editP1.trim(), editP2.trim()),
@@ -426,32 +431,34 @@ export default function TeamsPage() {
 
     for (const line of dataLines) {
       const parts = line.split(',').map(s => s.trim())
-      if (parts.length < 2) continue
+      if (!parts[0] && parts.length < 2) continue
 
       let divId = selected, divName = selectedDiv?.name || ''
       let player1 = '', player2 = ''
 
-      if (divCol >= 0 && p1Col >= 0 && p2Col >= 0) {
+      if (divCol >= 0 && p1Col >= 0) {
         const csvDiv = parts[divCol]
         const matchDiv = divisions.find(d => d.name === csvDiv)
         if (matchDiv) { divId = matchDiv.id; divName = matchDiv.name }
         else { divName = csvDiv }
-        player1 = parts[p1Col]; player2 = parts[p2Col]
+        player1 = parts[p1Col] || ''; player2 = p2Col >= 0 ? (parts[p2Col] || '') : ''
       } else if (parts.length >= 3 && !hasHeader) {
         const matchDiv = divisions.find(d => d.name === parts[0])
         if (matchDiv) { divId = matchDiv.id; divName = matchDiv.name }
         player1 = parts[1]; player2 = parts[2]
       } else if (parts.length >= 2) {
         player1 = parts[0]; player2 = parts[1]
+      } else {
+        player1 = parts[0]   // 한 칸짜리 줄 = 단식
       }
 
-      if (!player1 || !player2) { skipped++; continue }
+      if (!player1) { skipped++; continue }
 
       const pin = generatePin()
       const teamNum = `T-${String(lastNum + rows.length + 1).padStart(4, '0')}`
       rows.push({
         event_id: eventId, division_id: divId, division_name: divName,
-        team_name: `${player1}/${player2}`, team_key: makeTeamKey(divName, player1, player2),
+        team_name: makeTeamName(player1, player2), team_key: makeTeamKey(divName, player1, player2),
         team_num: teamNum, player1_name: player1, player2_name: player2, pin_plain: pin,
       })
     }
@@ -539,11 +546,11 @@ export default function TeamsPage() {
           <input type="text" placeholder="선수1 이름" value={p1Name}
             onChange={e => setP1Name(e.target.value)}
             className="flex-1 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
-          <input type="text" placeholder="선수2 이름" value={p2Name}
+          <input type="text" placeholder="선수2 이름 (단식은 비움)" value={p2Name}
             onChange={e => setP2Name(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && addTeam()}
             className="flex-1 border border-stone-300 rounded-lg px-3 py-2 text-sm" />
-          <button onClick={addTeam} disabled={addLoading || !p1Name.trim() || !p2Name.trim()}
+          <button onClick={addTeam} disabled={addLoading || !p1Name.trim()}
             className="bg-tennis-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-tennis-700 disabled:opacity-50 whitespace-nowrap">
             + 추가
           </button>
@@ -553,7 +560,7 @@ export default function TeamsPage() {
           <input ref={fileRef} type="file" accept=".csv,.txt" onChange={handleCSV}
             className="text-xs text-stone-500 file:mr-2 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:bg-stone-100 file:text-stone-700" />
         </div>
-        <p className="text-xs text-stone-400 mt-1">CSV 형식: 부서,선수1,선수2 또는 선수1,선수2 (현재 부서에 추가)</p>
+        <p className="text-xs text-stone-400 mt-1">CSV 형식: 부서,선수1,선수2 또는 선수1,선수2 (현재 부서에 추가) · 단식은 선수2를 비우거나 선수1만 한 줄에</p>
       </div>
 
       {/* 팀 목록 */}
@@ -644,7 +651,9 @@ export default function TeamsPage() {
                           ) : (
                             <div>
                               <span className="font-medium">
-                                {searchQuery.trim()
+                                {!t.player2_name
+                                  ? <span className="text-xs font-normal text-stone-400">단식</span>
+                                  : searchQuery.trim()
                                   ? highlightMatch(t.player2_name, searchQuery)
                                   : t.player2_name}
                                 {t.p2_grade && <span className="text-xs text-blue-500 ml-1">{t.p2_grade}</span>}
