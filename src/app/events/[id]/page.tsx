@@ -167,7 +167,8 @@ export default function EventDetailPage() {
 
     const map: Record<string, StandingWithClub[]> = {}
     if (cfg?.team_format === 'full_league') {
-      map['full'] = await fetchStandings(eventId, null)
+      // 부서별 풀리그 — 선택한 부서 것만 (섞이면 1위가 여러 팀으로 보임)
+      map['full'] = await fetchStandings(eventId, null, divId || null)
     } else {
       const { data: grps } = await supabase.from('groups').select('*').eq('event_id', eventId).order('group_num')
       const filteredGrps = divId ? (grps || []).filter((g: any) => g.division_id === divId) : (grps || [])
@@ -748,7 +749,7 @@ function TeamMatchesView({ ties, venues }: { ties: TieWithClubs[]; venues: Venue
           </div>
           <div className="flex items-center justify-between">
             <div className="flex-1">
-              <span className={`font-medium ${tie.winning_club_id === tie.club_a_id ? 'text-green-700' : ''}`}>
+              <span className={`font-medium ${!!tie.winning_club_id && tie.winning_club_id === tie.club_a_id ? 'text-green-700' : ''}`}>
                 {tie.club_a?.name || 'TBD'}
               </span>
             </div>
@@ -764,7 +765,7 @@ function TeamMatchesView({ ties, venues }: { ties: TieWithClubs[]; venues: Venue
               )}
             </div>
             <div className="flex-1 text-right">
-              <span className={`font-medium ${tie.winning_club_id === tie.club_b_id ? 'text-green-700' : ''}`}>
+              <span className={`font-medium ${!!tie.winning_club_id && tie.winning_club_id === tie.club_b_id ? 'text-green-700' : ''}`}>
                 {tie.club_b?.name || 'TBD'}
               </span>
             </div>
@@ -836,8 +837,8 @@ function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
                 </div>
                 <div className="flex flex-col justify-around flex-1" style={{ gap }}>
                   {roundTies.map(tie => {
-                    const aWin = tie.winning_club_id === tie.club_a_id
-                    const bWin = tie.winning_club_id === tie.club_b_id
+                    const aWin = !!tie.winning_club_id && tie.winning_club_id === tie.club_a_id
+                    const bWin = !!tie.winning_club_id && tie.winning_club_id === tie.club_b_id
                     return (
                       <div key={tie.id} className={`border rounded-xl overflow-hidden shadow-sm ${
                         tie.status === 'completed' ? 'border-green-300' :

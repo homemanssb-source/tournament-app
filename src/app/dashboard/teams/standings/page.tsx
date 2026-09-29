@@ -36,7 +36,7 @@ export default function StandingsPage() {
 
     const [cfg, divsRes, grpsRes] = await Promise.all([
       fetchEventTeamConfig(eventId),
-      supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
+      supabase.from('divisions').select('id, name, sort_order, team_match_type').eq('event_id', eventId).order('sort_order'),
       supabase.from('groups').select('*').eq('event_id', eventId).order('division_id').order('group_num'),
     ]);
 
@@ -125,7 +125,14 @@ export default function StandingsPage() {
     if (sorted[0] < 1) { alert('순위는 1 이상이어야 합니다.'); return; }
     setSavingManual(true);
     try {
-      for (const s of all) { await setManualRank(eventId, s.club_id, parseInt(manualRanks[s.club_id]), manualNotes || '수동 결정'); }
+      // 마지막 팀까지 저장되면 동률이 풀리고, DB가 본선 자리를 자동으로 채운다
+      let reseat: any = null;
+      for (const s of all) {
+        const r: any = await setManualRank(eventId, s.club_id, parseInt(manualRanks[s.club_id]), manualNotes || '수동 결정');
+        if (r && r.success === false) throw new Error(r.error || '순위 저장 실패');
+        reseat = r?.reseat ?? null;
+      }
+      if (reseat?.success === false && reseat.reseat_skipped) alert('⚠️ ' + reseat.error);
       setManualModal(null); await loadData();
     } catch (err: any) { alert(err.message || '순위 저장 실패'); }
     finally { setSavingManual(false); }
@@ -153,7 +160,7 @@ export default function StandingsPage() {
             <button key={d.id} onClick={() => setSelectedDiv(d.id)}
               className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
                 selectedDiv === d.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}>{d.name}</button>
+              }`}>{d.name}{(d as any).team_match_type ? ` (${(d as any).team_match_type === '5_doubles' ? 5 : 3}복식)` : ''}</button>
           ))}
         </div>
       )}

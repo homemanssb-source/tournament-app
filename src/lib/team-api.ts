@@ -369,6 +369,26 @@ export async function recordRubberScore(
   return data as RpcResult;
 }
 
+// 완료된 러버 점수 정정 (운영자) — 미완료 러버면 일반 입력으로 처리됨
+export async function correctRubberScore(
+  rubberId: string,
+  set1a: number, set1b: number,
+  set2a?: number | null, set2b?: number | null,
+  set3a?: number | null, set3b?: number | null,
+): Promise<RpcResult & { reseat?: { success: boolean; error?: string } | null }> {
+  const { data, error } = await supabase.rpc('rpc_admin_correct_rubber_score', {
+    p_rubber_id: rubberId,
+    p_set1_a: set1a,
+    p_set1_b: set1b,
+    p_set2_a: set2a ?? null,
+    p_set2_b: set2b ?? null,
+    p_set3_a: set3a ?? null,
+    p_set3_b: set3b ?? null,
+  });
+  if (error) throw error;
+  return data;
+}
+
 export async function pinRecordScore(
   pin: string, rubberId: string,
   set1a: number, set1b: number,

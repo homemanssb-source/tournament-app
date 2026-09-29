@@ -448,19 +448,19 @@ export default function AdminPinManagePage() {
       }
     }
 
-    // ✅ 완료된 tie 재수정 시 경고 (다음 라운드 데이터 손실 위험)
+    // 이미 입력된 러버면 정정 (조별: 순위·본선 재배정 / 토너먼트: 다음 라운드 시작 전까지만)
     const rubber = tieRubbers.find((r: any) => r.id === scoringRubber)
-    const isCompletedTie = selectedTie?.status === 'completed'
-    if (isCompletedTie && rubber?.status === 'completed') {
-      const msg = '⚠️ 이미 완료된 대전입니다.\n' +
-        '점수 수정 시 다음 라운드의 러버 데이터가 초기화될 수 있습니다.\n' +
+    const isCorrection = rubber?.status === 'completed'
+    if (isCorrection) {
+      const msg = '이미 입력된 점수를 정정합니다.\n' +
+        '대전 결과·순위·본선 자리가 다시 계산됩니다.\n' +
         '계속하시겠습니까?'
       if (!confirm(msg)) return
     }
 
     setScoreSaving(true); setScoreError('')
     try {
-      const { data, error: err } = await supabase.rpc('rpc_admin_record_score', {
+      const { data, error: err } = await supabase.rpc(isCorrection ? 'rpc_admin_correct_rubber_score' : 'rpc_admin_record_score', {
         p_rubber_id: scoringRubber,
         p_set1_a: parseInt(set1a), p_set1_b: parseInt(set1b),
         p_set2_a: set2a ? parseInt(set2a) : null, p_set2_b: set2b ? parseInt(set2b) : null,
@@ -468,6 +468,7 @@ export default function AdminPinManagePage() {
       })
       if (err) { setScoreError(err.message); return }
       if (data && !data.success) { setScoreError(data.error || '저장 실패'); return }
+      if (data?.reseat?.success === false && data.reseat.reseat_skipped) alert('⚠️ ' + data.reseat.error)
 
       const [rubberData, tieData] = await Promise.all([
         supabase.from('tie_rubbers').select('*').eq('tie_id', selectedTie!.id).order('rubber_number'),
@@ -752,6 +753,8 @@ export default function AdminPinManagePage() {
                           const rubber = tieRubbers.find((r: any) => r.rubber_number===num)
                           const hasScore = rubber?.set1_a !== null && rubber?.set1_a !== undefined
                           const isScoring = scoringRubber === rubber?.id
+                          // 토너먼트는 과반에서 끝남 — 남은 복식은 입력하지 않음
+                          const deadRubber = !hasScore && tie.status === 'completed' && !!tie.round && !['group', 'full_league'].includes(tie.round)
 
                           return (
                             <div key={num} className={`bg-white rounded-lg border p-3 ${rubber?.status==='completed'?'border-green-200':''}`}>
@@ -795,7 +798,10 @@ export default function AdminPinManagePage() {
                                 </div>
                               )}
 
-                              {!hasScore && !isScoring && rubber && (
+                              {deadRubber && (
+                                <p className="text-xs text-gray-400 text-center py-1">승부 결정 — 입력하지 않음</p>
+                              )}
+                              {!hasScore && !isScoring && rubber && !deadRubber && (
                                 <button onClick={() => startScoring(rubber)}
                                   className="w-full bg-blue-50 text-blue-700 py-2 rounded-lg text-sm font-medium hover:bg-blue-100">
                                   + 점수 입력
