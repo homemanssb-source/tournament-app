@@ -382,14 +382,14 @@ export default function BracketPage() {
                             tie.is_bye ? 'border-gray-200 bg-gray-50' : 'border-gray-200'
                           }`} style={{ minHeight: 72 }}>
                           <div className={`flex items-center justify-between px-3 py-2 text-sm ${
-                            tie.winning_club_id === tie.club_a_id ? 'bg-green-50 font-bold' : ''
+                            !!tie.winning_club_id && tie.winning_club_id === tie.club_a_id ? 'bg-green-50 font-bold' : ''
                           }`}>
                             <span className={isTbdA ? 'text-stone-400 italic' : ''}>{nameA}</span>
                             {tie.status === 'completed' && <span className="font-medium">{tie.club_a_rubbers_won}</span>}
                           </div>
                           <div className="border-t" />
                           <div className={`flex items-center justify-between px-3 py-2 text-sm ${
-                            tie.winning_club_id === tie.club_b_id ? 'bg-green-50 font-bold' : ''
+                            !!tie.winning_club_id && tie.winning_club_id === tie.club_b_id ? 'bg-green-50 font-bold' : ''
                           }`}>
                             <span className={isTbdB ? 'text-stone-400 italic' : ''}>{nameB}</span>
                             {tie.status === 'completed' && <span className="font-medium">{tie.club_b_rubbers_won}</span>}

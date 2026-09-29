@@ -753,6 +753,8 @@ export default function AdminPinManagePage() {
                           const rubber = tieRubbers.find((r: any) => r.rubber_number===num)
                           const hasScore = rubber?.set1_a !== null && rubber?.set1_a !== undefined
                           const isScoring = scoringRubber === rubber?.id
+                          // 토너먼트는 과반에서 끝남 — 남은 복식은 입력하지 않음
+                          const deadRubber = !hasScore && tie.status === 'completed' && !!tie.round && !['group', 'full_league'].includes(tie.round)
 
                           return (
                             <div key={num} className={`bg-white rounded-lg border p-3 ${rubber?.status==='completed'?'border-green-200':''}`}>
@@ -796,7 +798,10 @@ export default function AdminPinManagePage() {
                                 </div>
                               )}
 
-                              {!hasScore && !isScoring && rubber && (
+                              {deadRubber && (
+                                <p className="text-xs text-gray-400 text-center py-1">승부 결정 — 입력하지 않음</p>
+                              )}
+                              {!hasScore && !isScoring && rubber && !deadRubber && (
                                 <button onClick={() => startScoring(rubber)}
                                   className="w-full bg-blue-50 text-blue-700 py-2 rounded-lg text-sm font-medium hover:bg-blue-100">
                                   + 점수 입력

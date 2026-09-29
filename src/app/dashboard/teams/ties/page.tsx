@@ -99,7 +99,7 @@ export default function TiesPage() {
 
     // ✅ 핵심 수정: tie_rubbers가 없으면 운영자가 직접 생성
     // 토너먼트 ties는 lineup_phase를 거치지 않아 rubber 행이 없을 수 있음
-    if (rubbers.length === 0 && !tie.is_bye) {
+    if (rubbers.length === 0 && !tie.is_bye && tie.club_a_id && tie.club_b_id) {
       // ✅ 동시 접속 중복 insert 방지: insert 직전에 재확인
       const recheck = await fetchRubbers(tie.id);
       if (recheck.length > 0) {
@@ -163,10 +163,14 @@ export default function TiesPage() {
     try {
       // 이미 완료된 러버면 정정(순위·본선 재배정까지 DB에서 처리)
       const isCorrection = rubbers.find(r => r.id === rubberId)?.status === 'completed';
+      // 1·2세트를 같은 팀이 이겼으면 3세트 값은 버림 (이전 입력이 남아 저장되는 것 방지)
+      const s2done = !!set2a && !!set2b;
+      const straight = s2done && (parseInt(set1a) > parseInt(set1b)) === (parseInt(set2a) > parseInt(set2b));
+      const useSet3 = s2done && !straight && !!set3a && !!set3b;
       const result = await (isCorrection ? correctRubberScore : recordRubberScore)(
         rubberId, parseInt(set1a), parseInt(set1b),
-        set2a ? parseInt(set2a) : null, set2b ? parseInt(set2b) : null,
-        set3a ? parseInt(set3a) : null, set3b ? parseInt(set3b) : null,
+        s2done ? parseInt(set2a) : null, s2done ? parseInt(set2b) : null,
+        useSet3 ? parseInt(set3a) : null, useSet3 ? parseInt(set3b) : null,
       );
       if (!result.success) { setSaveError(result.error || '저장 실패'); return; }
       const reseat = (result as any).reseat;
@@ -429,7 +433,8 @@ export default function TiesPage() {
                       )}
 
                       {/* ✅ 수정3: 라인업 공개 버튼 */}
-                      {(tie.club_a_lineup_submitted || tie.club_b_lineup_submitted) && (
+                      {/* 양 팀 모두 제출했을 때만 공개 (공개된 상태면 해제 버튼으로 표시) */}
+                      {((tie.club_a_lineup_submitted && tie.club_b_lineup_submitted) || tie.lineup_revealed) && (
                         <button onClick={e => { e.stopPropagation(); handleRevealLineup(tie); }}
                           className={`text-xs px-3 py-1.5 rounded-lg ${
                             tie.lineup_revealed
@@ -470,8 +475,11 @@ export default function TiesPage() {
                         {rubbers.map(r => {
                           const isEditing  = editingRubber === r.id;
                           const hasScore   = r.set1_a !== null;
-                          const rubberWinA = hasScore && (r.set1_a ?? 0) > (r.set1_b ?? 0);
-                          const rubberWinB = hasScore && (r.set1_b ?? 0) > (r.set1_a ?? 0);
+                          // 러버 승자는 DB 판정(세트 수) 기준 — 1세트만 보면 3세트 경기가 틀림
+                          const rubberWinA = r.status === 'completed' && !!r.winning_club_id && r.winning_club_id === tie.club_a_id;
+                          const rubberWinB = r.status === 'completed' && !!r.winning_club_id && r.winning_club_id === tie.club_b_id;
+                          // 토너먼트는 과반에서 끝남 — 남은 복식은 입력하지 않음
+                          const deadRubber = !hasScore && tie.status === 'completed' && !!tie.round && !['group', 'full_league'].includes(tie.round);
                           const laA = tieLineups.find(l => l.rubber_number === r.rubber_number && l.club_id === tie.club_a_id);
                           const laB = tieLineups.find(l => l.rubber_number === r.rubber_number && l.club_id === tie.club_b_id);
 
@@ -523,7 +531,10 @@ export default function TiesPage() {
                                 </div>
                               )}
                               {/* ✅ 점수 없으면 항상 입력 버튼 표시 */}
-                              {!hasScore && !isEditing && (
+                              {deadRubber && (
+                                <p className="text-xs text-gray-400 text-center py-1">승부 결정 — 입력하지 않음</p>
+                              )}
+                              {!hasScore && !isEditing && !deadRubber && (
                                 <button onClick={() => startScoreEdit(r)}
                                   className="w-full bg-blue-50 text-blue-700 py-2 rounded-lg text-sm hover:bg-blue-100 font-medium">
                                   + 점수 입력

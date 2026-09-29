@@ -176,6 +176,16 @@ export default function TeamPinScorePage() {
         .select('*')
         .eq('id', rubberData.tie_id)
         .maybeSingle();
+
+      // 대진 미확정 / 토너먼트에서 이미 승부가 난 대전의 남은 복식은 입력하지 않음
+      if (tieData && (!tieData.club_a_id || !tieData.club_b_id)) {
+        setError('대진이 아직 확정되지 않은 경기입니다.');
+        return;
+      }
+      if (tieData && tieData.status === 'completed' && tieData.round && !['group', 'full_league'].includes(tieData.round)) {
+        setError('이미 승부가 결정된 대전입니다. 남은 복식은 진행하지 않습니다.');
+        return;
+      }
       setTie(tieData);
 
       if (tieData && tieData.club_a_id && tieData.club_b_id) {
