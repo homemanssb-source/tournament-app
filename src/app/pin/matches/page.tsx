@@ -237,16 +237,8 @@ export default function PinMatchesPage() {
         try {
           // 1) 같은 PIN을 공유하는 모든 팀 id 수집
           //    sessionStorage의 venue_pin이 있으면 그것 기준, 없으면 session.team_id로 폴백
-          const pin = (typeof window !== 'undefined' ? sessionStorage.getItem('venue_pin') : '') || ''
-          let myTeamIds: string[] = []
-          if (pin) {
-            const { data: sameTeams } = await supabase
-              .from('teams')
-              .select('id')
-              .eq('event_id', s.event_id)
-              .eq('pin_plain', pin)
-            myTeamIds = (sameTeams || []).map((t: any) => t.id)
-          }
+          //    (PIN 은 외부에서 조회 불가 — 서버가 돌려준 같은 PIN 팀 목록 사용)
+          let myTeamIds: string[] = Array.isArray(data.team_ids) ? data.team_ids : []
           if (myTeamIds.length === 0 && s.team_id) myTeamIds = [s.team_id]
 
           if (myTeamIds.length > 0) {

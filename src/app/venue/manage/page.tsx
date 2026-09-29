@@ -303,7 +303,7 @@ export default function VenueManagePage() {
   // 다음 court_order 계산 (해당 코트의 max + 1)
   async function nextCourtOrderForMatches(courtName: string): Promise<number> {
     const { data } = await supabase.from('matches')
-      .select('court_order').eq('court', courtName)
+      .select('court_order').eq('event_id', session.event_id).eq('court', courtName)
       .order('court_order', { ascending: false }).limit(1)
     return (data?.[0]?.court_order || 0) + 1
   }
@@ -312,6 +312,16 @@ export default function VenueManagePage() {
       .select('court_order').eq('court_number', courtNumber)
       .order('court_order', { ascending: false }).limit(1)
     return (data?.[0]?.court_order || 0) + 1
+  }
+
+  // 개인전 경기 코트 배정·해제·순서 (서버: 그 대회 경기 + 내 코트만)
+  async function setMatchCourt(matchId: string, court: string | null, order: number | null): Promise<string | null> {
+    const { data, error } = await supabase.rpc('rpc_venue_set_match_court', {
+      p_token: session.token, p_match_id: matchId, p_court: court, p_court_order: order,
+    })
+    if (error) return error.message
+    if (data && data.success === false) return data.error || '배정 실패'
+    return null
   }
 
   // 개별 배정/해제 (courtName=null → 해제)
@@ -347,15 +357,9 @@ export default function VenueManagePage() {
       if (data && data.success === false) return data.error || '배정 실패'
       return null
     } else {
-      if (courtName === null) {
-        const { error } = await supabase.from('matches')
-          .update({ court: null, court_order: null }).eq('id', item.id)
-        return error?.message || null
-      }
-      const nextOrd = await nextCourtOrderForMatches(courtName)
-      const { error } = await supabase.from('matches')
-        .update({ court: courtName, court_order: nextOrd }).eq('id', item.id)
-      return error?.message || null
+      // matches 는 직접 수정 불가(025b) — 경기장 세션 토큰으로 서버에서 처리
+      const nextOrd = courtName === null ? null : await nextCourtOrderForMatches(courtName)
+      return await setMatchCourt(item.id, courtName, nextOrd)
     }
   }
 
@@ -470,14 +474,14 @@ export default function VenueManagePage() {
     } else if (item.is_team_tie) {
       const tieId = item.id.replace(/^tie_/, '')
       await updateTieOrder(tieId, other.court_order, item.court)
-      await supabase.from('matches').update({ court_order: item.court_order }).eq('id', other.id)
+      await setMatchCourt(other.id, other.court, item.court_order)
     } else if (other.is_team_tie) {
       const otherId = other.id.replace(/^tie_/, '')
-      await supabase.from('matches').update({ court_order: other.court_order }).eq('id', item.id)
+      await setMatchCourt(item.id, item.court, other.court_order)
       await updateTieOrder(otherId, item.court_order, item.court)
     } else {
-      await supabase.from('matches').update({ court_order: other.court_order }).eq('id', item.id)
-      await supabase.from('matches').update({ court_order: item.court_order }).eq('id', other.id)
+      await setMatchCourt(item.id, item.court, other.court_order)
+      await setMatchCourt(other.id, other.court, item.court_order)
     }
     await loadData()
   }

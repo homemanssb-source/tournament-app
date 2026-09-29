@@ -85,7 +85,7 @@ export default function AdminPinManagePage() {
     setSession(s)
     loadAllMatches(s.event_id)
     loadTiesData(s.event_id)
-    loadPinLocks(s.event_id)
+    loadPinLocks(s.event_id, s.token)
     loadPinData(s.event_id, s.token)
     loadVenues(s.event_id)
 
@@ -122,8 +122,8 @@ export default function AdminPinManagePage() {
     setPinDataLoading(true)
     try {
       const [teamsRes, clubsRes, divsRes] = await Promise.all([
-        supabase.from('teams').select('id, team_num, team_name, division_name, pin_plain')
-          .eq('event_id', eventId).order('division_name').order('team_num'),
+        // 팀 PIN 은 외부 조회 불가 — 관리자 세션 토큰으로 서버에서 받아온다
+        supabase.rpc('rpc_admin_pin_teams', { p_token: token }),
         // 주장 PIN 은 외부 조회 불가 — 관리자 세션 토큰으로 서버에서 받아온다
         supabase.rpc('rpc_admin_pin_clubs', { p_token: token }),
         supabase.from('divisions').select('id, name').eq('event_id', eventId),
@@ -131,7 +131,7 @@ export default function AdminPinManagePage() {
       const divMap: Record<string, string> = {}
       for (const d of (divsRes.data || []) as any[]) divMap[d.id] = d.name
 
-      setPinTeams((teamsRes.data || []) as PinTeam[])
+      setPinTeams((((teamsRes.data as any)?.teams) || []) as PinTeam[])
       setPinClubs((((clubsRes.data as any)?.clubs) || []).map((c: any) => ({
         id: c.id, name: c.name,
         division_name: c.division_id ? (divMap[c.division_id] || '') : '',
@@ -177,16 +177,13 @@ export default function AdminPinManagePage() {
   }
 
   // ── PIN 잠금 목록 로드 (현재 잠긴 것만) ──
-  async function loadPinLocks(eventId: string) {
+  async function loadPinLocks(eventId: string, token?: string) {
     setPinLockLoading(true)
     try {
-      const { data } = await supabase
-        .from('pin_attempts')
-        .select('*')
-        .not('locked_until', 'is', null)
-        .gt('locked_until', new Date().toISOString())
-        .order('updated_at', { ascending: false })
-      setPinLocks((data || []) as PinLock[])
+      // pin_attempts 는 외부 접근 불가(025b) — 관리자 세션 토큰으로 이 대회 잠금만 조회
+      const { data: lockRes } = await supabase.rpc('rpc_admin_pin_locks', { p_token: token ?? session?.token })
+      const data = ((lockRes as any)?.locks || []) as PinLock[]
+      setPinLocks(data)
 
       // club: 패턴에서 club_id 추출 → clubs 테이블에서 이름 조회 (현 이벤트 클럽만)
       const clubIds = (data || [])
@@ -207,8 +204,8 @@ export default function AdminPinManagePage() {
 
   async function handleUnlockPin(targetKey: string) {
     setPinLockMsg('')
-    const { error } = await supabase.from('pin_attempts').delete().eq('target_key', targetKey)
-    if (error) { setPinLockMsg('❌ ' + error.message); return }
+    const { data: ur, error } = await supabase.rpc('rpc_admin_pin_unlock', { p_token: session?.token, p_keys: [targetKey] })
+    if (error || (ur as any)?.success === false) { setPinLockMsg('❌ ' + (error?.message || (ur as any)?.error)); return }
     setPinLockMsg('✅ 잠금 해제됨')
     setTimeout(() => setPinLockMsg(''), 3000)
     if (session) loadPinLocks(session.event_id)
@@ -219,8 +216,8 @@ export default function AdminPinManagePage() {
     setPinLockMsg('')
     const keys = pinLocks.map(l => l.target_key)
     if (keys.length === 0) return
-    const { error } = await supabase.from('pin_attempts').delete().in('target_key', keys)
-    if (error) { setPinLockMsg('❌ ' + error.message); return }
+    const { data: ur, error } = await supabase.rpc('rpc_admin_pin_unlock', { p_token: session?.token, p_keys: keys })
+    if (error || (ur as any)?.success === false) { setPinLockMsg('❌ ' + (error?.message || (ur as any)?.error)); return }
     setPinLockMsg(`✅ ${keys.length}건 일괄 해제`)
     setTimeout(() => setPinLockMsg(''), 3000)
     if (session) loadPinLocks(session.event_id)
@@ -352,8 +349,8 @@ export default function AdminPinManagePage() {
     if (!hasTbd) return
 
     console.log('[AdminPIN] 조 완료 → rpc_fill_tournament_slots:', matchData.group_id)
-    const { data: fillResult, error: fillError } = await supabase.rpc('rpc_fill_tournament_slots', {
-      p_event_id: eventId,
+    const { data: fillResult, error: fillError } = await supabase.rpc('rpc_admin_pin_fill_slots', {
+      p_token: session.token,
       p_group_id: matchData.group_id,
     })
     if (fillError) {
@@ -382,12 +379,11 @@ export default function AdminPinManagePage() {
         '· 이 경기 결과가 덮어써지고 승자가 다음 라운드로 다시 진출합니다.\n' +
         '· 이미 진행된 다음 라운드 결과는 그대로 남으니, 필요하면 뒤 라운드부터 직접 확인·수정하세요.'
       )) {
-        const { error: ue } = await supabase.from('matches').update({
-          score: newScore, winner_team_id: winnerId, status: 'FINISHED', ended_at: new Date().toISOString(),
-        }).eq('id', selectedMatch.id)
-        if (ue) { setLoading(false); setMsg('❌ ' + ue.message); return }
-        // 본선 승자 진출 재처리 (다음 라운드 슬롯 교체)
-        await supabase.rpc('advance_winner', { p_match_id: selectedMatch.id })
+        // matches 직접 수정 불가(025b) — 관리자 세션 토큰으로 서버에서 강제 수정 + 본선 승자 재진출
+        const { data: fr, error: ue } = await supabase.rpc('rpc_admin_pin_force_score', {
+          p_token: session.token, p_match_id: selectedMatch.id, p_score: newScore, p_winner_team_id: winnerId,
+        })
+        if (ue || (fr as any)?.success === false) { setLoading(false); setMsg('❌ ' + (ue?.message || (fr as any)?.error)); return }
         await tryFillTournamentSlotsAdmin(selectedMatch.id, session.event_id)
         setLoading(false)
         setMsg('✅ 강제 수정됨 (운영자 모드)')

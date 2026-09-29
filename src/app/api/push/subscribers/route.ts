@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
 
     // 해당 event의 모든 teams + clubs + subscriptions 조회
     const [teamsRes, clubsRes, divsRes] = await Promise.all([
-      supabase.from('teams').select('id, team_name, team_num, division_name, pin_plain, checked_in')
+      supabase.from('teams').select('id, team_name, team_num, division_name, checked_in, team_pins(pin_plain)')
         .eq('event_id', eventId).order('division_name').order('team_num'),
       supabase.from('clubs').select('id, name, captain_name, division_id, club_pins(captain_pin)')
         .eq('event_id', eventId).order('name'),
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
       id: t.id,
       label: t.team_name,
       sub_label: `#${t.team_num} · ${t.division_name || ''}`,
-      pin: t.pin_plain,
+      pin: (Array.isArray(t.team_pins) ? t.team_pins[0]?.pin_plain : t.team_pins?.pin_plain) ?? null,
       checked_in: t.checked_in || false,
       subscribed: subMap.has(t.id),
       sub_count: subMap.get(t.id)?.count || 0,

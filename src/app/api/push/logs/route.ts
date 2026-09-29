@@ -3,10 +3,12 @@
 // push_logs INSERT는 service_role(notify/court)에서 수행
 // 조회는 이 API route를 통해 대시보드에서 호출
 import { NextRequest, NextResponse } from 'next/server'
+import { operatorFromRequest } from '@/lib/api-auth';
 import { getServiceClient } from '@/lib/supabase'
 
 export async function GET(req: NextRequest) {
   try {
+    if (!(await operatorFromRequest(req))) return NextResponse.json({ error: '로그인이 필요합니다.' }, { status: 401 })
     const { searchParams } = new URL(req.url)
     const event_id = searchParams.get('event_id')
     const limit    = Math.min(parseInt(searchParams.get('limit') || '200'), 500) // 최대 500건 제한

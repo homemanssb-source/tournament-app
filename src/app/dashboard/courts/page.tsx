@@ -1,6 +1,7 @@
 'use client'
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { withVenuePins } from '@/lib/pins'
 import { authHeaders } from '@/lib/auth-headers';
 import { useEventId, useDivisions } from '@/components/useDashboard'
 import { fillSlotsIfGroupComplete, groupPlaceholders } from '@/lib/tournament'
@@ -262,7 +263,7 @@ export default function CourtsPage() {
   async function loadVenues() {
     if (!eventId) return
     const { data } = await supabase.from('venues').select('id, name, short_name, court_count, courts, pin_plain, start_time').eq('event_id', eventId).order('created_at')
-    const list = (data || []) as (Venue & { start_time?: string })[]
+    const list = (await withVenuePins((data || []) as any[])) as (Venue & { start_time?: string })[]   // PIN 은 venue_pins (025)
     setVenues(list as Venue[])
     const vtMap: Record<string, string> = {}
     list.forEach(v => { if (v.start_time) vtMap[v.id] = v.start_time.slice(0,5) })

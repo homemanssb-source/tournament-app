@@ -17,6 +17,11 @@ export async function POST(req: NextRequest) {
 
     const supabase = getServiceClient()
 
+    const ip = (req.headers.get('x-forwarded-for') || '').split(',')[0].trim() || 'unknown'
+    const lockKey = `push_sub:${ip}`
+    const { data: lockMsg } = await supabase.rpc('_pin_check_locked', { p_target_key: lockKey })
+    if (lockMsg) return NextResponse.json({ error: lockMsg }, { status: 429 })
+
     const targetIds: string[] = []
     let teamName: string | null = null
 
@@ -28,7 +33,10 @@ export async function POST(req: NextRequest) {
     const wantIndividual = mode === 'individual' || !mode
 
     if (wantIndividual) {
-      let q = supabase.from('teams').select('id, team_name, event_id').eq('pin_plain', pin)
+      // 팀 PIN 은 team_pins 에 보관 (025)
+      const { data: tpRows } = await supabase.from('team_pins').select('team_id').eq('pin_plain', pin)
+      const tpIds = (tpRows || []).map((r: any) => r.team_id)
+      let q = supabase.from('teams').select('id, team_name, event_id').in('id', tpIds.length ? tpIds : ['00000000-0000-0000-0000-000000000000'])
       if (event_id) q = q.eq('event_id', event_id)
       const { data } = await q
       const teams = data || []
@@ -53,8 +61,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (targetIds.length === 0) {
+      await supabase.rpc('_pin_record_fail', { p_target_key: lockKey, p_max_attempts: 10, p_lockout_minutes: 10 })
       return NextResponse.json({ error: 'PIN이 올바르지 않습니다.' }, { status: 404 })
     }
+    await supabase.rpc('_pin_record_success', { p_target_key: lockKey })
 
     // ✅ 같은 endpoint의 과거 구독 정리 (다른 대회/다른 team_id 지우기)
     //    동일 기기는 endpoint가 고유하므로, 사용자가 새로 구독하면 이전 context는 폐기

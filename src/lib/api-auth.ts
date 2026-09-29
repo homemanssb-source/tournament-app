@@ -38,3 +38,14 @@ export async function callerForEvent(req: NextRequest, body: any, eventId: strin
   if (await sessionValid(svc, 'pin_sessions', body?.pin_token, eventId)) return 'pin';
   return null;
 }
+
+// Vercel Cron: CRON_SECRET 이 설정돼 있고 헤더가 일치할 때만 (설정이 없으면 항상 거부 — 열어두지 않음)
+export function isCronRequest(req: NextRequest): boolean {
+  const secret = process.env.CRON_SECRET;
+  return !!secret && req.headers.get('authorization') === `Bearer ${secret}`;
+}
+
+// 운영자 로그인 또는 Cron
+export async function operatorOrCron(req: NextRequest): Promise<boolean> {
+  return isCronRequest(req) || !!(await operatorFromRequest(req));
+}

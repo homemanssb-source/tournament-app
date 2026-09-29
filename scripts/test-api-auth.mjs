@@ -91,6 +91,18 @@ async function main() {
   r = await post('/api/notify/court', { event_id: E1.id, court: 'T-1', trigger: 'finished', pin_token: pTok });
   ok(r.status === 200, `그 대회 선수 세션 → ${r.status}`);
 
+  console.log('\nA5  동기화·알림 기록·자동 동기화 (025)');
+  for (const p of ['/api/sync/pull-events', '/api/sync/pull-individual', '/api/sync/pull-team', '/api/sync/update-clubs']) {
+    r = await post(p, { event_id: E1.id, app_a_event_id: '00000000-0000-0000-0000-000000000000' });
+    ok(r.status === 401, `${p} 인증 없음 → ${r.status}`);
+  }
+  r = await fetch(BASE + `/api/push/logs?event_id=${E1.id}`);
+  ok(r.status === 401, `/api/push/logs 인증 없음 → ${r.status}`);
+  r = await fetch(BASE + '/api/sync/auto-pull');
+  ok(r.status === 401, `/api/sync/auto-pull 인증 없음 → ${r.status}`);
+  r = await fetch(BASE + '/api/sync/auto-pull', { headers: { Authorization: 'Bearer wrong' } });
+  ok(r.status === 401, `/api/sync/auto-pull 틀린 비밀값 → ${r.status}`);
+
   console.log('\nA4  구독자 현황');
   r = await fetch(BASE + `/api/push/subscribers?event_id=${E1.id}`);
   ok(r.status === 401, `인증 없음 → ${r.status}`);

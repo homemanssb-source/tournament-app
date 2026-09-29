@@ -2,6 +2,7 @@
 import React from 'react'
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { withTeamPins } from '@/lib/pins'
 import { useEventId, useDivisions, DivisionTabs } from '@/components/useDashboard'
 
 interface Team {
@@ -321,7 +322,7 @@ export default function TeamsPage() {
       .eq('event_id', eventId).eq('division_id', selected)
       .order('team_num')
     if (error) { setMsg('❌ 팀 목록 로드 실패: ' + error.message) }
-    setTeams(data || [])
+    setTeams(await withTeamPins(data || []))   // PIN 은 team_pins 에 보관 (025)
     setLoading(false)
   }
 
