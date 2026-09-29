@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServiceClient } from '@/lib/supabase'
 import { callerForEvent } from '@/lib/api-auth'
+import { findFilledSlotTargets, type SlotMatch, type SlotLog } from '@/lib/slot-filled-notify'
 
 type SubRow = { endpoint: string; p256dh: string; auth: string; team_id: string }
 
@@ -52,7 +53,81 @@ async function sendOne(
 // 대기 헬퍼
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
+// ✅ 본선 빈자리가 채워진 팀에게 알림 (경기 완료 알림 때마다 같은 대회 전체를 확인)
+//    규칙은 src/lib/slot-filled-notify.ts 참고. 실패해도 원래 알림 응답에는 영향 없음
+async function notifyFilledSlots(
+  supabaseAdmin: ReturnType<typeof getServiceClient>,
+  webpush: any,
+  eventId: string
+) {
+  const { data: finals } = await supabaseAdmin
+    .from('v_matches_with_teams')
+    .select('id, court, status, stage, round, match_date, division_name, team_a_id, team_b_id, team_a_name, team_b_name')
+    .eq('event_id', eventId).eq('stage', 'FINALS').eq('status', 'PENDING').not('court', 'is', null)
+  if (!finals?.length) return
+
+  const { data: logs } = await supabaseAdmin
+    .from('push_logs')
+    .select('court, division_name, team_a_name, team_b_name')
+    .eq('event_id', eventId)
+    .in('court', [...new Set((finals as any[]).map(m => m.court))])
+
+  const kstToday = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const targets = findFilledSlotTargets(finals as SlotMatch[], (logs || []) as SlotLog[], kstToday)
+
+  // 로그가 곧 '이미 보냄' 표시라 반드시 남겨야 함 — trigger 값이 거부되면 'finished' 로 다시 저장
+  const insertLog = async (row: Record<string, any>) => {
+    const { error } = await supabaseAdmin.from('push_logs').insert(row)
+    if (error) await supabaseAdmin.from('push_logs').insert({ ...row, trigger: 'finished' })
+  }
+
+  for (const { match: m, teamId } of targets) {
+    const logRow = {
+      event_id: eventId, court: m.court, trigger: 'slot_filled',
+      team_a_name: m.team_a_name, team_b_name: m.team_b_name, division_name: m.division_name,
+    }
+    const { data: subs } = await supabaseAdmin
+      .from('push_subscriptions').select('endpoint, p256dh, auth, team_id').eq('team_id', teamId)
+    if (!subs?.length) {
+      // 구독이 없어도 로그는 남김 — 다음 경기 완료 때 다시 찾지 않도록
+      await insertLog({ ...logRow, sent: 0, failed: 0, no_sub: true })
+      continue
+    }
+    const payload = JSON.stringify({
+      title: `🎾 ${m.court} - 본선 대진이 확정되었습니다!`,
+      body: `${m.team_a_name} vs ${m.team_b_name} (${m.division_name || ''}${m.round ? ' ' + m.round : ''})`,
+      icon: '/icon-192x192.png',
+      tag: `slot-${m.id}-${Date.now()}`,
+      url: '/pin/matches',
+      data: { court: m.court, match_id: m.id },
+    })
+    let sent = 0, failed = 0
+    const expired: string[] = []
+    const reasons: string[] = []
+    await Promise.all((subs as SubRow[]).map(async (sub) => {
+      const r = await sendOne(webpush, sub, payload, { urgency: 'high' as const, TTL: 300 })
+      if (r.kind === 'ok') sent++
+      else { failed++; reasons.push(r.kind + ': ' + r.reason); if (r.kind === 'expired') expired.push(sub.endpoint) }
+    }))
+    if (expired.length) await supabaseAdmin.from('push_subscriptions').delete().in('endpoint', expired)
+    await insertLog({
+      ...logRow, sent, failed, no_sub: false,
+      error_msg: reasons.length ? reasons.slice(0, 5).join(' | ').slice(0, 500) : null,
+    })
+  }
+}
+
 export async function POST(req: NextRequest) {
+  const after: { eventId?: string; webpush?: any } = {}
+  const res = await handleCourtNotify(req, after)
+  if (after.eventId && after.webpush) {
+    try { await notifyFilledSlots(getServiceClient(), after.webpush, after.eventId) }
+    catch (e) { console.error('[notify/court] slot_filled', e) }
+  }
+  return res
+}
+
+async function handleCourtNotify(req: NextRequest, after: { eventId?: string; webpush?: any }) {
   let logData: Record<string, any> = {}
   let supabaseAdmin: ReturnType<typeof getServiceClient> | null = null
 
@@ -84,6 +159,7 @@ export async function POST(req: NextRequest) {
     }
 
     logData = { event_id, court, trigger: trigger || 'manual' }
+    if (trigger === 'finished') { after.eventId = event_id; after.webpush = webpush }
 
     const lastPart = court.split('-').pop() || ''
     const courtNum = /^\d+$/.test(lastPart)
