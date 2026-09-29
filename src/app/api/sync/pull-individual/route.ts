@@ -139,14 +139,26 @@ export async function POST(request: NextRequest) {
       logMap.set(l.app_a_record_id, { app_b_record_id: l.app_b_record_id, status: l.status });
     }
 
-    // 7. 앱B 기존 teams 한 번에 로드 → player1+player2+division 기준 중복 체크
+    // 7. 앱B 기존 teams 한 번에 로드 → division+선수 이름 기준 중복 체크
+    //    같은 이름이어도 소속 클럽(학교)이 다르면 다른 선수(동명이인)로 본다.
+    //    클럽이 비어 있는 팀(수동 등록 등)은 이름만 같아도 중복으로 본다.
+    //    (단식은 선수2가 없어 이름 키가 '부서|이름|' 이 되므로 동명이인이 쉽게 겹친다)
     const { data: existingTeams } = await appB
       .from('teams')
-      .select('player1_name, player2_name, division_id')
+      .select('player1_name, player2_name, division_id, p1_club, p2_club')
       .eq('event_id', event_id);
-    const existingTeamKeys = new Set(
-      (existingTeams || []).map((t: any) => `${t.division_id}|${t.player1_name}|${t.player2_name}`)
-    );
+    const existingTeamClubs = new Map<string, { c1: string | null; c2: string | null }[]>();
+    const rememberTeam = (key: string, c1: string | null, c2: string | null) => {
+      const list = existingTeamClubs.get(key) || [];
+      list.push({ c1: c1 || null, c2: c2 || null });
+      existingTeamClubs.set(key, list);
+    };
+    for (const t of (existingTeams || []) as any[]) {
+      rememberTeam(`${t.division_id}|${t.player1_name}|${t.player2_name}`, t.p1_club, t.p2_club);
+    }
+    const isDuplicateTeam = (key: string, c1: string | null, c2: string | null) =>
+      (existingTeamClubs.get(key) || []).some(ex =>
+        (!ex.c1 || !c1 || ex.c1 === c1) && (!ex.c2 || !c2 || ex.c2 === c2));
 
     let syncedCount = 0;
     let updatedCount = 0;
@@ -226,7 +238,7 @@ export async function POST(request: NextRequest) {
 
         // teams 테이블 기반 중복 체크 (sync_log에 없는 신규)
         const teamKey = `${appBDivisionId}|${p1Name}|${p2Name}`;
-        if (existingTeamKeys.has(teamKey)) {
+        if (isDuplicateTeam(teamKey, p1Club, p2Club)) {
           duplicateCount++;
           await appB.from('sync_log').insert({
             event_id, sync_type: 'individual',
@@ -256,7 +268,7 @@ export async function POST(request: NextRequest) {
           app_b_table: 'teams', status: 'synced',
         });
 
-        existingTeamKeys.add(teamKey);
+        rememberTeam(teamKey, p1Club, p2Club);
         syncedCount++;
 
       } catch (e: any) {
