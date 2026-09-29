@@ -145,6 +145,19 @@ export default function PinMatchesPage() {
 
     if (error) { setMsg(error.message); return }
     setMsg('✅ 결과가 저장되었습니다!')
+
+    // ✅ 점수 제출 후 다음 대기팀 알림 (/pin/matches 와 동일)
+    const match = matches.find(m => m.id === matchId)
+    if (match?.court) {
+      fetch('/api/notify/court', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id: session.event_id, pin_token: session.token,
+          court: match.court, finished_match_id: matchId, trigger: 'finished',
+        }),
+      }).catch(() => {})
+    }
     loadData(session)
   }
 

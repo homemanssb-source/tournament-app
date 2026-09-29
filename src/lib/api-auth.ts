@@ -24,18 +24,19 @@ export async function operatorFromRequest(req: NextRequest, svc: Svc = getServic
   return role === 'admin' || role === 'operator' ? { id: uid, role } : null;
 }
 
-async function sessionValid(svc: Svc, table: 'venue_sessions' | 'pin_sessions', token: unknown, eventId: string): Promise<boolean> {
+async function sessionValid(svc: Svc, table: 'venue_sessions' | 'pin_sessions' | 'admin_pin_sessions', token: unknown, eventId: string): Promise<boolean> {
   if (typeof token !== 'string' || !token) return false;
   const { data } = await svc.from(table).select('event_id')
     .eq('token', token).eq('is_active', true).gt('expires_at', new Date().toISOString()).maybeSingle();
   return !!data && (data as any).event_id === eventId;
 }
 
-// 운영자 또는 그 대회의 경기장/선수 세션
-export async function callerForEvent(req: NextRequest, body: any, eventId: string, svc: Svc = getServiceClient()): Promise<'operator' | 'venue' | 'pin' | null> {
+// 운영자 또는 그 대회의 경기장/선수/관리자 PIN 세션
+export async function callerForEvent(req: NextRequest, body: any, eventId: string, svc: Svc = getServiceClient()): Promise<'operator' | 'venue' | 'pin' | 'admin_pin' | null> {
   if (await operatorFromRequest(req, svc)) return 'operator';
   if (await sessionValid(svc, 'venue_sessions', body?.venue_token, eventId)) return 'venue';
   if (await sessionValid(svc, 'pin_sessions', body?.pin_token, eventId)) return 'pin';
+  if (await sessionValid(svc, 'admin_pin_sessions', body?.admin_pin_token, eventId)) return 'admin_pin';
   return null;
 }
 
