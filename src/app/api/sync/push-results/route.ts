@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { operatorFromRequest } from '@/lib/api-auth';
 import { createClient } from '@supabase/supabase-js';
 import { findParticipantOnlyTeams } from '@/lib/participation';
+import { getAppAClient } from '@/lib/app-a-server';
 
 const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -21,13 +22,6 @@ const corsHeaders = {
 
 export async function OPTIONS() {
   return NextResponse.json({}, { headers: corsHeaders });
-}
-
-function getAppAClient() {
-  const url = process.env.APP_A_SUPABASE_URL!;
-  const key = process.env.APP_A_ANON_KEY;
-  if (!key) throw new Error('APP_A_ANON_KEY not set');
-  return createClient(url, key);
 }
 
 function getAppBServiceClient() {
