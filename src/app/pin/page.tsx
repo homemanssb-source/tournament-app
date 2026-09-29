@@ -153,21 +153,13 @@ export default function PinPage() {
     if (!selectedEvent) { setError('대회 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.'); return }
     setError(''); setLoading(true)
     try {
-      // ✅ event_id 필터: 과거 대회의 동일 PIN 매칭 차단
-      // 같은 팀이 여러 부서로 신청한 경우 clubs 테이블에 부서별 row가 생기므로 event 안에서 전체 조회
-      const { data: clubs } = await supabase
-        .from('clubs').select('id, name, event_id, division_id')
-        .eq('captain_pin', pin)
-        .eq('event_id', selectedEvent)
-      if (!clubs || clubs.length === 0) { setError('팀 PIN에 해당하는 클럽을 찾을 수 없습니다.'); setLoading(false); return }
-
-      // 부서 이름 맵핑 — 여러 부서에 걸친 경우만 조회
-      const divIds = [...new Set(clubs.map(c => c.division_id).filter(Boolean))] as string[]
+      // 주장 PIN 확인은 서버에서 (PIN 은 외부에서 조회 불가, 연속 실패 시 잠금)
+      // 같은 팀이 여러 부서로 신청한 경우 부서별 클럽이 모두 돌아온다
+      const { data: res, error: rpcErr } = await supabase.rpc('rpc_captain_login', { p_event_id: selectedEvent, p_pin: pin })
+      if (rpcErr || !res?.success) { setError(res?.error || rpcErr?.message || '팀 PIN에 해당하는 클럽을 찾을 수 없습니다.'); setLoading(false); return }
+      const clubs = (res.clubs || []) as { id: string; name: string; event_id: string; division_id: string | null; division_name: string | null }[]
       const divNameMap: Record<string, string> = {}
-      if (divIds.length > 0) {
-        const { data: divs } = await supabase.from('divisions').select('id, name').in('id', divIds)
-        for (const d of (divs || [])) divNameMap[(d as any).id] = (d as any).name
-      }
+      for (const c of clubs) if (c.division_id && c.division_name) divNameMap[c.division_id] = c.division_name
 
       // 부서별 그룹핑
       const divMap = new Map<string, DivisionChoice>()

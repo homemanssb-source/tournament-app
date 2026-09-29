@@ -3,6 +3,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { useEventId } from '@/components/useDashboard'
+import { supabase } from '@/lib/supabase'
 
 interface PushLog {
   id: string
@@ -108,7 +109,10 @@ export default function PushLogsPage() {
     if (!eventId) return
     setSubsLoading(true)
     try {
-      const res = await fetch(`/api/push/subscribers?event_id=${eventId}`)
+      const { data: sess } = await supabase.auth.getSession()
+      const res = await fetch(`/api/push/subscribers?event_id=${eventId}`, {
+        headers: { Authorization: `Bearer ${sess.session?.access_token || ''}` },
+      })
       if (!res.ok) throw new Error('조회 실패')
       const data = await res.json()
       setSubRows(data.rows || [])

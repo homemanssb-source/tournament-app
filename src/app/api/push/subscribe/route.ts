@@ -39,7 +39,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (targetIds.length === 0 && wantTeam) {
-      let q = supabase.from('clubs').select('id, name, event_id').eq('captain_pin', pin)
+      // 주장 PIN 은 club_pins 에 보관 (022)
+      const { data: pinRows } = await supabase.from('club_pins').select('club_id').eq('captain_pin', pin)
+      const pinClubIds = (pinRows || []).map((r: any) => r.club_id)
+      let q = supabase.from('clubs').select('id, name, event_id').in('id', pinClubIds.length ? pinClubIds : ['00000000-0000-0000-0000-000000000000'])
       if (event_id) q = q.eq('event_id', event_id)
       const { data } = await q
       const clubs = data || []

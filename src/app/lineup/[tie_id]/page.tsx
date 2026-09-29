@@ -12,12 +12,21 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { fetchClubMembers, fetchLineups, fetchAllLineupsForTie, submitLineup, fetchRubbers } from '@/lib/team-api';
+import { fetchClubMembers, fetchAllLineupsForTie, submitLineup, fetchRubbers } from '@/lib/team-api';
 import { getGenderLabel, formatSetScore, getMatchTypeShort } from '@/lib/team-utils';
 import type { Tie, Club, ClubMember, TeamLineup, LineupEntry, TieRubber } from '@/types/team';
 import PinSubscribeButton from '@/components/PinSubscribeButton'
 
 type Step = 'pin' | 'edit' | 'submitted' | 'revealed';
+
+// 서버(rpc_captain_tie)가 확인한 주장 정보 — PIN 비교는 서버에서만 (PIN 은 외부에서 조회 불가)
+type CaptainCheck = { success: boolean; error?: string; side?: 'a' | 'b'; my_lineups?: { rubber_number: number; player1_id: string; player2_id: string }[] };
+
+async function verifyCaptain(tieId: string, pin: string): Promise<CaptainCheck> {
+  const { data, error } = await supabase.rpc('rpc_captain_tie', { p_tie_id: tieId, p_pin: pin });
+  if (error) return { success: false, error: error.message };
+  return data as CaptainCheck;
+}
 
 export default function LineupPage() {
   const params = useParams();
@@ -79,27 +88,17 @@ export default function LineupPage() {
       setTeamMatchType(t.rubber_count === 5 ? '5_doubles' : t.rubber_count === 3 ? '3_doubles' : ev?.team_match_type || null);
       setAllowPlayerReuse(ev?.allow_player_reuse ?? true);
       // ✅ lineup_revealed OR 경기 진행중/완료 → 바로 revealed 단계
+      const savedPin = readSavedPin();
       if (t.lineup_revealed || (t.club_a_lineup_submitted && t.club_b_lineup_submitted)) {
         setStep('revealed');
         await loadRevealedData(tieId, ca, cb);
         await loadRubbers(tieId);
+        // 점수 입력용: 저장된 PIN 이 이 대전 주장 것이면 조용히 복원
+        if (savedPin && ca && cb) {
+          const res = await verifyCaptain(tieId, savedPin);
+          if (res.success) { setPinInput(savedPin); setMyClub(res.side === 'a' ? ca : cb); setOpponentClub(res.side === 'a' ? cb : ca); }
+        }
         setLoading(false); return;
-      }
-      // ✅ tie별 키 → 일반 키 → localStorage 순으로 폴백 (12시간 유효)
-      let savedPin: string | null = sessionStorage.getItem(`captain_pin_${tieId}`);
-      if (!savedPin) savedPin = sessionStorage.getItem('captain_pin');
-      if (!savedPin) {
-        try {
-          const lsRaw = localStorage.getItem('captain_pin_session');
-          if (lsRaw) {
-            const parsed = JSON.parse(lsRaw);
-            if (parsed._savedAt && Date.now() - parsed._savedAt < 12 * 60 * 60 * 1000) {
-              savedPin = parsed.pin;
-            } else {
-              localStorage.removeItem('captain_pin_session');
-            }
-          }
-        } catch {}
       }
       if (savedPin && ca && cb) {
         const ok = await tryAutoLogin(savedPin, ca, cb, t);
@@ -113,6 +112,26 @@ export default function LineupPage() {
     })();
     return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
   }, [tieId]);
+
+  // ✅ tie별 키 → 일반 키 → localStorage 순으로 폴백 (12시간 유효)
+  function readSavedPin(): string | null {
+    let savedPin: string | null = sessionStorage.getItem(`captain_pin_${tieId}`);
+    if (!savedPin) savedPin = sessionStorage.getItem('captain_pin');
+    if (!savedPin) {
+      try {
+        const lsRaw = localStorage.getItem('captain_pin_session');
+        if (lsRaw) {
+          const parsed = JSON.parse(lsRaw);
+          if (parsed._savedAt && Date.now() - parsed._savedAt < 12 * 60 * 60 * 1000) {
+            savedPin = parsed.pin;
+          } else {
+            localStorage.removeItem('captain_pin_session');
+          }
+        }
+      } catch {}
+    }
+    return savedPin;
+  }
 
   // 폴링: submitted 상태에서 5초마다 체크
   useEffect(() => {
@@ -133,13 +152,13 @@ export default function LineupPage() {
   }, [step, tieId]);
 
   async function tryAutoLogin(savedPin: string, ca: Club, cb: Club, t: Tie): Promise<boolean> {
-    let club: Club | null = null; let opponent: Club | null = null;
-    if (ca.captain_pin === savedPin) { club = ca; opponent = cb; }
-    else if (cb.captain_pin === savedPin) { club = cb; opponent = ca; }
-    else return false;
+    const res = await verifyCaptain(tieId, savedPin);
+    if (!res.success) return false;
+    const club = res.side === 'a' ? ca : cb;
+    const opponent = res.side === 'a' ? cb : ca;
     setPinInput(savedPin); setMyClub(club); setOpponentClub(opponent);
     const memberList = await fetchClubMembers(club.id); setMembers(memberList);
-    const existing = await fetchLineups(tieId, club.id);
+    const existing = res.my_lineups || [];
     if (existing.length > 0) {
       if (t.lineup_revealed || (t.club_a_lineup_submitted && t.club_b_lineup_submitted)) {
         setStep('revealed'); await loadRevealedData(tieId, ca, cb); await loadRubbers(tieId);
@@ -171,17 +190,17 @@ export default function LineupPage() {
   async function handlePinSubmit() {
     if (pinInput.length !== 6) { setError('PIN 6자리를 입력하세요.'); return; }
     setError('');
-    if (clubA?.captain_pin === pinInput) { setMyClub(clubA); setOpponentClub(clubB); }
-    else if (clubB?.captain_pin === pinInput) { setMyClub(clubB); setOpponentClub(clubA); }
-    else { setError('PIN이 일치하지 않습니다.'); return; }
+    const res = await verifyCaptain(tieId, pinInput);
+    if (!res.success || !clubA || !clubB) { setError(res.error || 'PIN이 일치하지 않습니다.'); return; }
+    const club = res.side === 'a' ? clubA : clubB;
+    setMyClub(club); setOpponentClub(res.side === 'a' ? clubB : clubA);
     sessionStorage.setItem(`captain_pin_${tieId}`, pinInput);
     sessionStorage.setItem('captain_pin', pinInput);
     try {
       localStorage.setItem('captain_pin_session', JSON.stringify({ pin: pinInput, _savedAt: Date.now() }));
     } catch {}
-    const club = clubA?.captain_pin === pinInput ? clubA : clubB!;
     const ml = await fetchClubMembers(club.id); setMembers(ml);
-    const existing = await fetchLineups(tieId, club.id);
+    const existing = res.my_lineups || [];
     if (existing.length > 0 && tie) {
       if (tie.lineup_revealed || tie.status === 'in_progress' || tie.status === 'completed') { setStep('revealed'); await loadRevealedData(tieId, clubA, clubB); await loadRubbers(tieId); }
       else { setLineups(Array.from({ length: tie.rubber_count }, (_, i) => { const l = existing.find(e => e.rubber_number === i + 1); return { player1_id: l?.player1_id || '', player2_id: l?.player2_id || '' }; })); setStep('submitted'); }
@@ -218,6 +237,16 @@ export default function LineupPage() {
       if (ut) setTie(ut);
     } catch (err: any) { setError(err.message || '제출 실패'); }
     finally { setSubmitting(false); }
+  }
+
+  // 공개 화면에서 점수를 넣으려는 주장 확인 (단계는 그대로)
+  async function handleScorePin() {
+    if (pinInput.length !== 6) { setScoreError('PIN 6자리를 입력하세요.'); return; }
+    setScoreError('');
+    const res = await verifyCaptain(tieId, pinInput);
+    if (!res.success || !clubA || !clubB) { setScoreError(res.error || 'PIN이 일치하지 않습니다.'); return; }
+    setMyClub(res.side === 'a' ? clubA : clubB); setOpponentClub(res.side === 'a' ? clubB : clubA);
+    sessionStorage.setItem(`captain_pin_${tieId}`, pinInput);
   }
 
   function getMemberName(id: string): string { return allMembers[id]?.name || members.find(m => m.id === id)?.name || '-'; }
@@ -266,7 +295,10 @@ export default function LineupPage() {
     }
     setScoreSaving(true); setScoreError('');
     try {
-      const { data, error: err } = await supabase.rpc('rpc_admin_record_score', {
+      // 그 대전 주장 PIN 확인 후 입력 (첫 입력만 — 정정은 운영본부)
+      const { data, error: err } = await supabase.rpc('rpc_captain_record_score', {
+        p_tie_id: tieId,
+        p_pin: pinInput,
         p_rubber_id: scoringRubber,
         p_set1_a: parseInt(set1a), p_set1_b: parseInt(set1b),
         p_set2_a: set2a ? parseInt(set2a) : null, p_set2_b: set2b ? parseInt(set2b) : null,
@@ -444,7 +476,7 @@ export default function LineupPage() {
                       {rubber!.winning_club_id && <div className="text-xs text-blue-600 mt-1">승: {rubber!.winning_club_id===clubA?.id?clubA?.name:clubB?.name}</div>}
                     </div>
                   )}
-                  {!hasScore && !isScoring && !tieCompleted && rubber && (
+                  {!hasScore && !isScoring && !tieCompleted && rubber && myClub && (
                     <button onClick={() => startScoring(rubber)} className="w-full bg-blue-50 text-blue-700 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-100">점수 입력</button>
                   )}
                   {isScoring && rubber && (
@@ -474,6 +506,17 @@ export default function LineupPage() {
                 </div>
               );
             })}
+            {!tieCompleted && !myClub && (
+              <div className="bg-white rounded-xl border p-4 space-y-2">
+                <p className="text-sm text-gray-600 text-center">점수 입력은 이 대전 주장 PIN 확인 후 가능합니다.</p>
+                <div className="flex gap-2">
+                  <input type="tel" maxLength={6} value={pinInput} onChange={e => setPinInput(e.target.value.replace(/D/g, ''))} placeholder="주장 PIN 6자리"
+                    className="flex-1 text-center tracking-widest border-2 rounded-lg py-2 focus:border-blue-500 outline-none" onKeyDown={e => e.key === 'Enter' && handleScorePin()} />
+                  <button onClick={handleScorePin} className="bg-blue-600 text-white px-4 rounded-lg text-sm font-medium">확인</button>
+                </div>
+                {scoreError && !scoringRubber && <p className="text-red-500 text-xs text-center">{scoreError}</p>}
+              </div>
+            )}
             {tieCompleted && <div className="bg-gray-100 rounded-xl p-3 text-center text-sm text-gray-500">🔒 대전 완료 — 점수 수정은 운영본부에서만 가능합니다.</div>}
           </div>
         )}

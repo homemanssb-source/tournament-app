@@ -5,6 +5,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServiceClient } from '@/lib/supabase'
 
+// 요청마다 인증 확인 — 정적 생성 금지
+export const dynamic = 'force-dynamic'
+
 export async function GET(req: NextRequest) {
   try {
     const eventId = req.nextUrl.searchParams.get('event_id')
@@ -12,11 +15,21 @@ export async function GET(req: NextRequest) {
 
     const supabase = getServiceClient()
 
+    // PIN 이 포함된 응답 — 로그인한 운영자/관리자만 (Authorization: Bearer <Supabase JWT>)
+    const auth = req.headers.get('authorization') || ''
+    const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
+    const { data: userData } = token ? await supabase.auth.getUser(token) : { data: { user: null } }
+    const uid = userData?.user?.id
+    const { data: profile } = uid ? await supabase.from('user_profiles').select('role').eq('id', uid).single() : { data: null }
+    if (!profile || !['admin', 'operator'].includes((profile as any).role)) {
+      return NextResponse.json({ error: '로그인이 필요합니다.' }, { status: 401 })
+    }
+
     // 해당 event의 모든 teams + clubs + subscriptions 조회
     const [teamsRes, clubsRes, divsRes] = await Promise.all([
       supabase.from('teams').select('id, team_name, team_num, division_name, pin_plain, checked_in')
         .eq('event_id', eventId).order('division_name').order('team_num'),
-      supabase.from('clubs').select('id, name, captain_name, captain_pin, division_id')
+      supabase.from('clubs').select('id, name, captain_name, division_id, club_pins(captain_pin)')
         .eq('event_id', eventId).order('name'),
       supabase.from('divisions').select('id, name').eq('event_id', eventId),
     ])
@@ -60,7 +73,7 @@ export async function GET(req: NextRequest) {
       id: c.id,
       label: c.name,
       sub_label: `${divMap[c.division_id] || '부서 미지정'} · 캡틴 ${c.captain_name || '-'}`,
-      pin: c.captain_pin,
+      pin: (Array.isArray(c.club_pins) ? c.club_pins[0]?.captain_pin : c.club_pins?.captain_pin) ?? null,
       checked_in: false,
       subscribed: subMap.has(c.id),
       sub_count: subMap.get(c.id)?.count || 0,

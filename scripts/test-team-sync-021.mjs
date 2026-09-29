@@ -148,7 +148,7 @@ async function main() {
   console.log('\nS6  주장 PIN 변경');
   A.entries[0].captain_pin = '999999';
   r = await sync();
-  ok((await sb.from('clubs').select('captain_pin').eq('id', ga.id).single()).data.captain_pin === '999999', '앱A PIN 반영');
+  ok((await sb.from('club_pins').select('captain_pin').eq('club_id', ga.id).single()).data?.captain_pin === '999999', '앱A PIN 반영 (club_pins)');
 
   console.log('\nS7  1부 대전 후 경기방식 변경');
   A.divisions[0].team_match_type = '3_doubles';

@@ -86,7 +86,7 @@ export default function AdminPinManagePage() {
     loadAllMatches(s.event_id)
     loadTiesData(s.event_id)
     loadPinLocks(s.event_id)
-    loadPinData(s.event_id)
+    loadPinData(s.event_id, s.token)
     loadVenues(s.event_id)
 
     // ✅ 단체전 ties 상태 30초마다 자동 갱신 (라인업 제출/점수 변경 실시간 반영)
@@ -118,21 +118,21 @@ export default function AdminPinManagePage() {
 
   // ── PIN 확인용 데이터 로드 (팀관리 + 클럽관리) ──
   // FK 조인이 PostgREST 스키마 캐시에 없어서 divisions를 별도로 가져와 클라이언트 매핑
-  async function loadPinData(eventId: string) {
+  async function loadPinData(eventId: string, token: string) {
     setPinDataLoading(true)
     try {
       const [teamsRes, clubsRes, divsRes] = await Promise.all([
         supabase.from('teams').select('id, team_num, team_name, division_name, pin_plain')
           .eq('event_id', eventId).order('division_name').order('team_num'),
-        supabase.from('clubs').select('id, name, captain_name, captain_pin, division_id')
-          .eq('event_id', eventId).order('name'),
+        // 주장 PIN 은 외부 조회 불가 — 관리자 세션 토큰으로 서버에서 받아온다
+        supabase.rpc('rpc_admin_pin_clubs', { p_token: token }),
         supabase.from('divisions').select('id, name').eq('event_id', eventId),
       ])
       const divMap: Record<string, string> = {}
       for (const d of (divsRes.data || []) as any[]) divMap[d.id] = d.name
 
       setPinTeams((teamsRes.data || []) as PinTeam[])
-      setPinClubs((clubsRes.data || []).map((c: any) => ({
+      setPinClubs((((clubsRes.data as any)?.clubs) || []).map((c: any) => ({
         id: c.id, name: c.name,
         division_name: c.division_id ? (divMap[c.division_id] || '') : '',
         captain_name: c.captain_name,
@@ -409,10 +409,11 @@ export default function AdminPinManagePage() {
     if (selectedTie?.id === tie.id) { setSelectedTie(null); setScoringRubber(null); return }
     setSelectedTie(tie); setScoringRubber(null); setTieMsg('')
     const [lineupData, rubberData] = await Promise.all([
-      supabase.from('team_lineups').select('*').eq('tie_id', tie.id).order('rubber_number'),
+      // 공개 전 라인업은 외부 조회 불가 — 관리자 세션 토큰으로
+      supabase.rpc('rpc_admin_pin_tie_lineups', { p_token: session.token, p_tie_id: tie.id }),
       supabase.from('tie_rubbers').select('*').eq('tie_id', tie.id).order('rubber_number'),
     ])
-    setTieLineups((lineupData.data || []) as TeamLineup[])
+    setTieLineups((((lineupData.data as any)?.lineups) || []) as TeamLineup[])
     setTieRubbers(rubberData.data || [])
     const mm: Record<string, ClubMember> = {}
     if (tie.club_a_id) { (await fetchClubMembers(tie.club_a_id)).forEach(m => { mm[m.id]=m }) }
@@ -460,7 +461,9 @@ export default function AdminPinManagePage() {
 
     setScoreSaving(true); setScoreError('')
     try {
-      const { data, error: err } = await supabase.rpc(isCorrection ? 'rpc_admin_correct_rubber_score' : 'rpc_admin_record_score', {
+      // 관리자 세션 토큰으로 입력/정정 (완료된 러버면 서버에서 정정 처리)
+      const { data, error: err } = await supabase.rpc('rpc_admin_pin_rubber_score', {
+        p_token: session.token,
         p_rubber_id: scoringRubber,
         p_set1_a: parseInt(set1a), p_set1_b: parseInt(set1b),
         p_set2_a: set2a ? parseInt(set2a) : null, p_set2_b: set2b ? parseInt(set2b) : null,

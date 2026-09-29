@@ -27,6 +27,8 @@ export default function AdminPinPage() {
     setLoading(false)
 
     if (err) { setError(err.message || '마스터 PIN이 올바르지 않습니다.'); return }
+    // 연속 실패 잠금 버전은 실패를 결과로 돌려준다
+    if (!data?.success || !data?.token) { setError(data?.error || '마스터 PIN이 올바르지 않습니다.'); return }
 
     // ✅ 화면 닫아도 세션 유지 (서버 토큰 만료 시까지)
     localStorage.setItem('admin_pin_session', JSON.stringify(data))

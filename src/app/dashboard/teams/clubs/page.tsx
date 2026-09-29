@@ -56,7 +56,12 @@ export default function ClubsPage() {
         fetchClubs(eventId, selected),
         fetchEventTeamConfig(eventId),
       ]);
-      setClubs(data);
+      // 주장 PIN 은 club_pins 에 보관 (익명 조회 불가) — 로그인 운영자만 읽어서 합친다
+      const { data: pins } = data.length
+        ? await supabase.from('club_pins').select('club_id, captain_pin').in('club_id', data.map(c => c.id))
+        : { data: [] as { club_id: string; captain_pin: string | null }[] };
+      const pinMap = new Map((pins || []).map(p => [p.club_id, p.captain_pin]));
+      setClubs(data.map(c => ({ ...c, captain_pin: pinMap.get(c.id) ?? c.captain_pin ?? null })));
       setConfig(cfg);
     } finally {
       setLoading(false);
