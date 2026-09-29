@@ -4,6 +4,7 @@
 // 사용법: <PinSubscribeButton pin={pin} onSuccess={() => {}} />
 
 import { usePushSubscription } from '@/hooks/usePushSubscription'
+import PushHelp, { usePushEnv } from '@/components/PushHelp'
 
 interface Props {
   pin: string          // 선수/팀장이 입력한 PIN
@@ -14,9 +15,10 @@ interface Props {
 
 export default function PinSubscribeButton({ pin, mode, eventId, onSuccess }: Props) {
   const { status, message, subscribeWithPin } = usePushSubscription()
+  const env = usePushEnv()
 
-  // 브라우저 미지원이면 숨김
-  if (typeof window !== 'undefined' && !('PushManager' in window)) return null
+  // 알림을 켤 수 없는 폰이면 버튼 대신 방법 안내 (예전엔 조용히 숨겨서 왜 없는지 몰랐음)
+  if (env && env !== 'ok' && status !== 'success') return <PushHelp env={env} compact />
 
   async function handleClick() {
     if (!pin || pin.length < 6) return
