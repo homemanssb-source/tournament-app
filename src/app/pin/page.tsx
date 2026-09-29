@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useEventSelect, EventChooser } from '@/components/useEventSelect'
 import { usePushSubscription } from '@/hooks/usePushSubscription'
+import PushHelp, { usePushEnv } from '@/components/PushHelp'
 
 type Mode = 'select' | 'individual' | 'team';
 
@@ -31,6 +32,9 @@ export default function PinPage() {
   const [teamNextState, setTeamNextState] = useState<{ choices?: DivisionChoice[]; clubIds?: string[] } | null>(null)
 
   const { status: pushStatus, message: pushMessage, subscribeWithPin } = usePushSubscription()
+  // 알림을 켤 수 없는 폰(카톡 브라우저·홈 화면 미추가 아이폰·차단)이면 켜기 버튼 대신 방법 안내
+  const pushEnv = usePushEnv()
+  const pushBlocked = !!pushEnv && pushEnv !== 'ok'
   const [loginSuccess, setLoginSuccess] = useState(false)
   const [loginPin, setLoginPin] = useState('')
   const [checkinLoading, setCheckinLoading] = useState(false)
@@ -307,7 +311,8 @@ export default function PinPage() {
             </div>
           ) : (
             <>
-              <button
+              <PushHelp env={pushEnv} />
+              {!pushBlocked && <button
                 onClick={handleAllowNotification}
                 disabled={pushStatus === 'loading' || checkinLoading}
                 className="w-full bg-green-600 text-white font-bold py-4 rounded-xl hover:bg-green-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2 text-lg shadow-lg"
@@ -317,7 +322,7 @@ export default function PinPage() {
                 ) : (
                   <>✅ 참석 확인 &amp; 알림 켜기</>
                 )}
-              </button>
+              </button>}
               {pushStatus === 'error' && (
                 <p className="text-xs text-red-500 text-center">{pushMessage}</p>
               )}
@@ -327,9 +332,9 @@ export default function PinPage() {
               >
                 알림 없이 계속하기
               </button>
-              <p className="text-xs text-stone-300 text-center">
+              {!pushBlocked && <p className="text-xs text-stone-300 text-center">
                 건너뛰면 참석 확인이 되지 않습니다
-              </p>
+              </p>}
             </>
           )}
         </div>
@@ -399,11 +404,12 @@ export default function PinPage() {
               </div>
             ) : (
               <>
-                <button onClick={handleTeamAllowNotification}
+                <PushHelp env={pushEnv} />
+                {!pushBlocked && <button onClick={handleTeamAllowNotification}
                   disabled={pushStatus === 'loading' || checkinLoading}
                   className="w-full bg-green-600 text-white font-bold py-4 rounded-xl hover:bg-green-700 disabled:opacity-50 transition-all text-lg shadow-lg">
                   {(pushStatus === 'loading' || checkinLoading) ? '⏳ 처리 중...' : '✅ 알림 켜기'}
-                </button>
+                </button>}
                 {pushStatus === 'error' && <p className="text-xs text-red-500">{pushMessage}</p>}
                 <button onClick={handleTeamSkipNotification} className="w-full text-stone-400 text-sm py-3 hover:text-stone-600">
                   건너뛰기

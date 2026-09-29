@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { usePushSubscription } from '@/hooks/usePushSubscription'
+import PushHelp, { usePushEnv } from '@/components/PushHelp'
 import { fillSlotsIfGroupComplete, groupPlaceholders } from '@/lib/tournament'
 
 interface PinMatch {
@@ -77,6 +78,7 @@ export default function PinMatchesPage() {
 
   const [notifAllowed, setNotifAllowed]     = useState(false)
   const [notifRequested, setNotifRequested] = useState(false)
+  const pushEnv = usePushEnv()
   const notifAllowedRef = useRef(false)  // ✅ loadData 재생성 없이 최신값 참조
   const loadDataRef = useRef<((s: any) => Promise<void>) | null>(null)  // ✅ 인터벌에서 최신 loadData 참조
   const prevWaitRef = useRef<Map<string, number>>(new Map())
@@ -598,6 +600,21 @@ export default function PinMatchesPage() {
       </header>
 
       <main className="max-w-2xl mx-auto px-4 py-5">
+        {/* 🔔 알림이 꺼져 있으면 눈에 띄게 안내 — 켤 수 없는 폰이면 방법을 알려줌 */}
+        {!notifAllowed && pushEnv && (
+          pushEnv === 'ok' ? (
+            <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 space-y-2">
+              <p className="font-bold">🔔 코트 차례 알림이 꺼져 있어요</p>
+              <p>켜 두면 내 경기 차례·코트 변경 때 앱이 꺼져 있어도 알림이 와요.</p>
+              <button onClick={requestNotification}
+                className="w-full bg-amber-500 text-white font-bold py-2.5 rounded-lg hover:bg-amber-600">
+                🔔 알림 켜기
+              </button>
+            </div>
+          ) : (
+            <div className="mb-4"><PushHelp env={pushEnv} /></div>
+          )
+        )}
         {msg && (
           <div className={`mb-4 px-4 py-2.5 rounded-xl text-sm font-medium ${
             msg.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
