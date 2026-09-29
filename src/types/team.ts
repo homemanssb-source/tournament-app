@@ -76,6 +76,7 @@ export interface TieRubber {
   status: 'pending' | 'in_progress' | 'completed';
   court_number: number | null;
   pin_code: string | null;
+  is_walkover?: boolean;   // 공오더로 자동 기록된 러버 (023)
   created_at: string;
 }
 
@@ -84,8 +85,8 @@ export interface TeamLineup {
   tie_id: string;
   club_id: string;
   rubber_number: number;
-  player1_id: string;
-  player2_id: string;
+  player1_id: string | null;   // 둘 다 null = 공오더 (023)
+  player2_id: string | null;
   submitted_at: string;
   submitted_by: string;
   is_revealed: boolean;

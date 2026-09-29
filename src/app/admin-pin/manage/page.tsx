@@ -771,12 +771,12 @@ export default function AdminPinManagePage() {
                               {(laA || laB) && (
                                 <div className="grid grid-cols-5 items-center gap-1 text-xs mb-2">
                                   <div className="col-span-2 text-right">
-                                    <div className="font-medium">{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</div>
+                                    <div className="font-medium">{laA && !laA.player1_id && !laA.player2_id ? '공오더' : <>{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</>}</div>
                                     <div className="text-gray-400">{tie.club_a?.name}</div>
                                   </div>
                                   <div className="text-center text-gray-400 font-bold">vs</div>
                                   <div className="col-span-2">
-                                    <div className="font-medium">{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</div>
+                                    <div className="font-medium">{laB && !laB.player1_id && !laB.player2_id ? '공오더' : <>{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</>}</div>
                                     <div className="text-gray-400">{tie.club_b?.name}</div>
                                   </div>
                                 </div>
@@ -786,6 +786,7 @@ export default function AdminPinManagePage() {
                                 <div className="flex items-center justify-between">
                                   <div className="text-center flex-1 py-1 bg-gray-50 rounded text-sm font-bold">
                                     {formatSetScore(rubber.set1_a, rubber.set1_b)}
+                                    {rubber.is_walkover && <span className="ml-1 text-xs text-orange-600">(공오더)</span>}
                                     {rubber.set2_a !== null && ' / '+formatSetScore(rubber.set2_a, rubber.set2_b)}
                                     {rubber.set3_a !== null && ' / '+formatSetScore(rubber.set3_a, rubber.set3_b)}
                                     {rubber.winning_club_id && (

@@ -58,7 +58,7 @@ async function cleanup() {
 
 const PIN_A = '731001', PIN_B = '731002', PIN_C = '731003', MASTER = '9731';
 const rpcA = async (fn, args) => { const r = await anon.rpc(fn, args); return r.error ? { success: false, error: r.error.message, _err: true } : r.data; };
-const lineupOf = (members) => [1, 2, 3].map(n => ({ rubber_number: n, player1_id: members[(n - 1) % 4].id, player2_id: members[n % 4].id }));
+const lineupOf = (members) => [1, 2, 3].map(n => ({ rubber_number: n, player1_id: members[2 * n - 2].id, player2_id: members[2 * n - 1].id }));
 
 async function main() {
   const name = `__TEST_TEAM_pin022_${Date.now()}`;
@@ -75,7 +75,7 @@ async function main() {
   ]).select(), '클럽');
   const [A, B, C] = ['핀A', '핀B', '핀C'].map(n => clubs.find(c => c.name === n));
   const mem = {};
-  for (const c of [A, B, C]) mem[c.id] = must(await sb.from('club_members').insert([1, 2, 3, 4].map(i => ({ club_id: c.id, name: `${c.name}-${i}`, member_order: i }))).select(), '선수');
+  for (const c of [A, B, C]) mem[c.id] = must(await sb.from('club_members').insert([1, 2, 3, 4, 5, 6].map(i => ({ club_id: c.id, name: `${c.name}-${i}`, member_order: i }))).select(), '선수');
   must(await sb.rpc('rpc_generate_full_league', { p_event_id: eventId, p_division_id: div.id }), '풀리그');
   const ties = must(await sb.from('ties').select('*').eq('event_id', eventId).order('tie_order'), '대전');
   const tAB = ties.find(t => [t.club_a_id, t.club_b_id].sort().join() === [A.id, B.id].sort().join());

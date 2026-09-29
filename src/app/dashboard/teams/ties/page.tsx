@@ -500,13 +500,13 @@ export default function TiesPage() {
                               {(laA || laB) && (
                                 <div className="grid grid-cols-5 items-center gap-1 mb-3 text-xs">
                                   <div className={`col-span-2 text-right rounded p-1 ${rubberWinA ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}>
-                                    <div>{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</div>
+                                    <div>{laA && !laA.player1_id && !laA.player2_id ? '공오더' : <>{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</>}</div>
                                     <div className="text-gray-400">{tie.club_a?.name}</div>
                                     {!laA?.is_revealed && <div className="text-orange-400 text-[10px]">미공개</div>}
                                   </div>
                                   <div className="text-center text-gray-400 font-bold">vs</div>
                                   <div className={`col-span-2 text-left rounded p-1 ${rubberWinB ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}>
-                                    <div>{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</div>
+                                    <div>{laB && !laB.player1_id && !laB.player2_id ? '공오더' : <>{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</>}</div>
                                     <div className="text-gray-400">{tie.club_b?.name}</div>
                                     {!laB?.is_revealed && <div className="text-orange-400 text-[10px]">미공개</div>}
                                   </div>
@@ -522,6 +522,7 @@ export default function TiesPage() {
                                   <div className="text-center flex-1">
                                     <div className="text-lg font-bold">
                                       {formatSetScore(r.set1_a, r.set1_b)}
+                                      {r.is_walkover && <span className="ml-1 text-xs text-orange-600">(공오더)</span>}
                                       {r.set2_a !== null && ' / ' + formatSetScore(r.set2_a, r.set2_b)}
                                       {r.set3_a !== null && ' / ' + formatSetScore(r.set3_a, r.set3_b)}
                                     </div>
