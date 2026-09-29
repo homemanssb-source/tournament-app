@@ -6,6 +6,7 @@ import { authHeaders } from '@/lib/auth-headers';
 import { useEventId, useDivisions } from '@/components/useDashboard'
 import { fillSlotsIfGroupComplete, groupPlaceholders } from '@/lib/tournament'
 import { requestSlotCheck } from '@/lib/slot-check'
+import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import type { TieWithClubs } from '@/types/team'
 
 interface MatchSlim {
@@ -693,6 +694,10 @@ export default function CourtsPage() {
 
   async function startMatch(matchId: string) {
     if (matchId.startsWith('tie_')) return
+    // 같은 선수가 다른 코트에서 경기 중이면 확인 (여러 부서 출전 — 예: 학생 단식+복식)
+    const target = matchesRef.current.find(m => m.id === matchId)
+    const busy = target ? busyElsewhere(target, matchesRef.current) : []
+    if (busy.length > 0 && !confirm(`⚠️ 다른 코트에서 경기 중인 선수가 있습니다.\n\n${describeConflicts(busy)}\n\n그래도 이 경기를 시작할까요?`)) return
     await supabase.from('matches').update({ status:'IN_PROGRESS' }).eq('id', matchId); loadMatches()
   }
 
@@ -821,6 +826,18 @@ export default function CourtsPage() {
   const byCourt = new Map<string, MatchSlim[]>()
   for (const name of filteredCourtNames) byCourt.set(name, [])
   for (const m of dateFilteredItems) { if (m.court && byCourt.has(m.court)) byCourt.get(m.court)!.push(m) }
+
+  // 코트별 "지금 경기"에 같은 선수가 두 코트 이상 걸린 경우 (전체 코트 기준)
+  const courtConflicts = findCourtConflicts(dateFilteredItems)
+  const conflictLines = [...new Set(
+    dateFilteredItems.filter(m => courtConflicts.has(m.id))
+      .flatMap(m => courtConflicts.get(m.id)!.map(c => c.player))
+  )].map(player => {
+    const courts = dateFilteredItems
+      .filter(m => courtConflicts.get(m.id)?.some(c => c.player === player))
+      .map(m => `${m.court} ${m.status === 'IN_PROGRESS' ? '진행중' : '대기'}(${m.division_name})`)
+    return `${player}: ${courts.join(' · ')}`
+  })
 
   const filteredAll = viewFilter==='ALL' ? dateFilteredItems : dateFilteredItems.filter(m=>m.division_id===viewFilter)
   const unassigned  = filteredAll
@@ -1003,6 +1020,17 @@ export default function CourtsPage() {
         </div>
       </div>
 
+      {/* 선수 중복 경고 — 한 선수가 동시에 두 코트에 걸림 */}
+      {conflictLines.length > 0 && (
+        <div className="mb-4 p-3 rounded-xl border border-red-300 bg-red-50 text-sm text-red-700">
+          <p className="font-bold mb-1">⚠️ 같은 선수가 동시에 두 코트에 배정돼 있습니다</p>
+          <ul className="space-y-0.5 text-xs">
+            {conflictLines.map(line => <li key={line}>· {line}</li>)}
+          </ul>
+          <p className="text-[11px] text-red-500 mt-1">코트 순서를 바꾸거나 한 경기를 뒤로 미뤄주세요.</p>
+        </div>
+      )}
+
       {/* ═══ 메인 그리드: 미배정 + 코트 ═══ */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4 items-start">
 
@@ -1081,6 +1109,7 @@ export default function CourtsPage() {
                     return (
                       <MatchChip key={m.id} m={decorate(m)} badge={badge}
                         isCurrentSlot={m.status==='PENDING'&&allIdx===currentIdx}
+                        conflicts={courtConflicts.get(m.id)}
                         divColor={divColors[m.division_id]}
                         allMatches={allFinalsMatches.length > 0 ? allFinalsMatches : matches}
                         onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
@@ -1199,8 +1228,9 @@ function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }:
 }
 
 // ── MatchChip 컴포넌트
-function MatchChip({ m, badge, divColor, isCurrentSlot, allMatches, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
+function MatchChip({ m, badge, divColor, isCurrentSlot, conflicts, allMatches, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
   m: MatchSlim; badge?: string; divColor?: string; isCurrentSlot?: boolean
+  conflicts?: PlayerConflict[]
   allMatches?: MatchSlim[]
   onDragStart: (id: string) => void; onClickScore: () => void
   onClickStart?: () => void; onClickUnassign?: () => void
@@ -1297,6 +1327,11 @@ function MatchChip({ m, badge, divColor, isCurrentSlot, allMatches, onDragStart,
       </div>
       {m.score && (
         <div className={`mt-0.5 font-bold ${isTeam?'text-blue-600':done?'text-stone-400':'text-tennis-600'}`}>{m.score}</div>
+      )}
+      {conflicts && conflicts.length > 0 && (
+        <div className="mt-1 px-1.5 py-1 rounded bg-red-100 text-red-700 text-[10px] leading-snug">
+          ⚠️ 선수 중복: {describeConflicts(conflicts)}
+        </div>
       )}
     </div>
   )

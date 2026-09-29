@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 
 // ──────────────────────────────────────────────────────────
 // 현장관리: 조회 + 시작 + 점수입력 + 코트 배정/재배정/자동배정
@@ -207,6 +208,9 @@ export default function VenueManagePage() {
     }
   }
 
+  // 코트별 "지금 경기"에 같은 선수가 두 코트 이상 걸린 경우
+  const courtConflicts = findCourtConflicts(dateFilteredMatches)
+
   // [FIX V2] 미배정 배너 (날짜 필터 + 부서 필터)
   const allUnassigned = dateFilteredMatches.filter(m => !m.court && m.status !== 'FINISHED')
   const filteredUnassignedByDiv = filterDiv === 'ALL'
@@ -288,6 +292,9 @@ export default function VenueManagePage() {
     if (matchId.startsWith('tie_')) return
     setMsg('')
     const item = matches.find(m => m.id === matchId)
+    // 같은 선수가 다른 코트에서 경기 중이면 확인 (여러 부서 출전 — 예: 학생 단식+복식)
+    const busy = item ? busyElsewhere(item, matches) : []
+    if (busy.length > 0 && !confirm(`⚠️ 다른 코트에서 경기 중인 선수가 있습니다.\n\n${describeConflicts(busy)}\n\n그래도 이 경기를 시작할까요?`)) return
     const { error } = await supabase.rpc('rpc_venue_start_match', {
       p_token: session.token,
       p_match_id: matchId,
@@ -716,6 +723,7 @@ export default function VenueManagePage() {
                             m={inProgressMatch}
                             badge="🔴 진행중"
                             badgeStyle="bg-red-50 border-red-300"
+                            conflicts={courtConflicts.get(inProgressMatch.id)}
                             canStart={false}
                             onStart={() => {}}
                             onScore={() => openScoreEdit(inProgressMatch)}
@@ -744,6 +752,7 @@ export default function VenueManagePage() {
                               m={m}
                               badge={badge}
                               badgeStyle={badgeStyle}
+                              conflicts={courtConflicts.get(m.id)}
                               canStart={canStart}
                               onStart={() => startMatch(m.id)}
                               onScore={() => openScoreEdit(m)}
@@ -879,10 +888,11 @@ export default function VenueManagePage() {
 }
 
 // ── 코트 경기 카드 (재배정 드롭다운 포함)
-function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore, courts, onAssign, onMoveUp, onMoveDown }: {
+function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, onScore, courts, onAssign, onMoveUp, onMoveDown }: {
   m: VenueMatch
   badge: string
   badgeStyle: string
+  conflicts?: PlayerConflict[]
   canStart: boolean
   onStart: () => void
   onScore: () => void
@@ -964,6 +974,11 @@ function CourtMatchCard({ m, badge, badgeStyle, canStart, onStart, onScore, cour
       </div>
       {isInProgress && m.score && (
         <div className="mt-2 text-right text-base font-bold text-red-600">{m.score}</div>
+      )}
+      {conflicts && conflicts.length > 0 && (
+        <div className="mt-2 px-2 py-1.5 rounded-lg bg-red-100 text-red-700 text-xs leading-snug">
+          ⚠️ 선수 중복: {describeConflicts(conflicts)}
+        </div>
       )}
 
       {/* 코트 이동/해제 드롭다운 */}
