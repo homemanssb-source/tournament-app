@@ -1,6 +1,6 @@
 // ============================================================
 // 단체전 휴대폰 리허설용 임시 대회
-//   node scripts/rehearsal-team-event.mjs create   → 대회 + 2클럽(선수 4명씩) + 풀리그 1대전 + 마스터 PIN
+//   node scripts/rehearsal-team-event.mjs create   → 대회 + 2클럽(선수 6명씩) + 풀리그 1대전 + 마스터 PIN, 공오더 허용 부서
 //   node scripts/rehearsal-team-event.mjs delete   → 이름이 '리허설_단체전_' 으로 시작하는 대회 전부 삭제
 // 앱A 연동 없음(자동 동기화 대상 아님). 3복식, 주장 PIN 모드.
 // ============================================================
@@ -28,14 +28,14 @@ async function create() {
     status: 'active', event_type: 'team', team_format: 'full_league', team_rubber_count: 3,
     team_sets_per_rubber: 1, allow_player_reuse: true, lineup_mode: 'captain_pin', team_match_type: '3_doubles',
   }).select().single(), '대회');
-  const div = must(await sb.from('divisions').insert({ event_id: ev.id, name: '리허설부', sort_order: 1 }).select().single(), '부서');
+  const div = must(await sb.from('divisions').insert({ event_id: ev.id, name: '리허설부', sort_order: 1, allow_empty_order: true }).select().single(), '부서');
   const clubs = must(await sb.from('clubs').insert([
     { event_id: ev.id, division_id: div.id, name: '리허설A클럽', captain_name: 'A주장', captain_pin: PIN_A, seed_number: 1 },
     { event_id: ev.id, division_id: div.id, name: '리허설B클럽', captain_name: 'B주장', captain_pin: PIN_B, seed_number: 2 },
   ]).select(), '클럽');
   for (const c of clubs) {
     const tag = c.name.includes('A') ? 'A' : 'B';
-    must(await sb.from('club_members').insert([1, 2, 3, 4].map(i => ({
+    must(await sb.from('club_members').insert([1, 2, 3, 4, 5, 6].map(i => ({
       club_id: c.id, name: `${tag}선수${i}`, gender: i % 2 ? 'M' : 'F', member_order: i, is_captain: i === 1,
     }))), '선수');
   }
