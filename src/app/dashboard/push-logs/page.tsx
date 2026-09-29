@@ -23,6 +23,7 @@ const TRIGGER_LABEL: Record<string, string> = {
   finished:      '경기완료',
   court_changed: '코트변경',
   manual:        '수동',
+  slot_filled:   '대진확정',
 }
 
 function StatusBadge({ log }: { log: PushLog }) {
