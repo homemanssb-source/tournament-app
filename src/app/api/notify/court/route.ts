@@ -148,14 +148,21 @@ async function handleCourtNotify(req: NextRequest, after: { eventId?: string; we
     const body = await req.json()
     const { event_id, court, match_id, finished_match_id, match_date, trigger } = body
 
-    if (!event_id || !court) {
+    // slot_check: 결과 수정·수동 순위 확정처럼 "다음 경기 준비" 알림은 필요 없고
+    //             본선 빈자리 채움 알림만 확인할 때 (코트 없이 호출 가능)
+    if (!event_id || (!court && trigger !== 'slot_check')) {
       return NextResponse.json({ error: 'event_id, court 필수' }, { status: 400 })
     }
 
-    // 호출자 확인: 운영자 로그인 / 그 대회 경기장 세션(venue_token) / 선수 세션(pin_token)
+    // 호출자 확인: 운영자 로그인 / 그 대회 경기장 세션(venue_token) / 선수 세션(pin_token) / 관리자 PIN(admin_pin_token)
     // (그동안 인증 없이 누구나 구독자 전원에게 알림을 보낼 수 있었음)
     if (!(await callerForEvent(req, body, event_id, supabaseAdmin))) {
       return NextResponse.json({ error: '권한이 없습니다.' }, { status: 401 })
+    }
+
+    if (trigger === 'slot_check') {
+      after.eventId = event_id; after.webpush = webpush
+      return NextResponse.json({ ok: true })
     }
 
     logData = { event_id, court, trigger: trigger || 'manual' }

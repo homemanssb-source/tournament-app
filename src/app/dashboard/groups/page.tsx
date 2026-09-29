@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import { requestSlotCheck } from '@/lib/slot-check'
 import { useEventId, useDivisions, DivisionTabs } from '@/components/useDashboard'
 
 interface GroupMember {
@@ -292,6 +293,7 @@ export default function GroupsPage() {
         setMsg(`✅ ${groupLabel} 수동 순위 확정 및 본선 슬롯 채우기 완료!`)
       }
 
+      requestSlotCheck(eventId)
       setRankModal(null)
       loadGroups()
     } finally {
@@ -314,6 +316,7 @@ export default function GroupsPage() {
       `✅ ${groupLabel} 본선 슬롯 채우기 완료!` +
       ` (채움 ${data.filled}개${data.remaining_tbd > 0 ? ` · 남은 TBD ${data.remaining_tbd}` : ' · 모든 TBD 해소'})`
     )
+    requestSlotCheck(eventId)
     loadGroups()
   }
 

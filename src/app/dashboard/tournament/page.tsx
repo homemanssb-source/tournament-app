@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { requestSlotCheck } from '@/lib/slot-check'
 import { useEventId, useDivisions, DivisionTabs } from '@/components/useDashboard'
 import TournamentBracket from '@/components/TournamentBracket'
 
@@ -178,6 +179,7 @@ export default function TournamentPage() {
       ` (채움 ${data.filled}개, BYE처리 ${data.bye_processed}개)` +
       (data.remaining_tbd > 0 ? ` • 남은 TBD: ${data.remaining_tbd}` : ' • 모든 TBD 해소!')
     )
+    requestSlotCheck(eventId)
     loadBracket()
     loadGroupProgress()
   }

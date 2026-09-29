@@ -362,6 +362,19 @@ export default function AdminPinManagePage() {
     }
   }
 
+  // 결과 저장 뒤 알림: 처음 끝난 경기면 다음 대기팀 '경기 준비', 이미 끝난 경기 수정이면 본선 빈자리 알림만 확인
+  function notifyAfterScore(m: { id: string; status: string; court: string | null }) {
+    if (!session) return
+    const first = m.status !== 'FINISHED' && !!m.court
+    fetch('/api/notify/court', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(first
+        ? { event_id: session.event_id, admin_pin_token: session.token, court: m.court, finished_match_id: m.id, trigger: 'finished' }
+        : { event_id: session.event_id, admin_pin_token: session.token, trigger: 'slot_check' }),
+    }).catch(() => {})
+  }
+
   async function handleUpdateScore() {
     if (!session||!selectedMatch||!newScore||!newWinner) { setMsg('점수와 승자를 모두 입력해주세요.'); return }
     setLoading(true); setMsg('')
@@ -385,6 +398,7 @@ export default function AdminPinManagePage() {
         })
         if (ue || (fr as any)?.success === false) { setLoading(false); setMsg('❌ ' + (ue?.message || (fr as any)?.error)); return }
         await tryFillTournamentSlotsAdmin(selectedMatch.id, session.event_id)
+        notifyAfterScore(selectedMatch)
         setLoading(false)
         setMsg('✅ 강제 수정됨 (운영자 모드)')
         loadAllMatches(session.event_id); setSelectedMatch(null)
@@ -395,6 +409,7 @@ export default function AdminPinManagePage() {
 
     // ✅ 조별 경기인 경우 본선 TBD 슬롯 자동 채우기
     await tryFillTournamentSlotsAdmin(selectedMatch.id, session.event_id)
+    notifyAfterScore(selectedMatch)
 
     setLoading(false)
     setMsg('✅ 결과가 수정되었습니다.')

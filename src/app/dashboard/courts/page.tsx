@@ -5,6 +5,7 @@ import { withVenuePins } from '@/lib/pins'
 import { authHeaders } from '@/lib/auth-headers';
 import { useEventId, useDivisions } from '@/components/useDashboard'
 import { fillSlotsIfGroupComplete, groupPlaceholders } from '@/lib/tournament'
+import { requestSlotCheck } from '@/lib/slot-check'
 import type { TieWithClubs } from '@/types/team'
 
 interface MatchSlim {
@@ -663,6 +664,8 @@ export default function CourtsPage() {
     if (!editMatch || !editScore || !editWinner) { setMsg('점수와 승자를 모두 입력해주세요.'); return }
     setSubmitting(true); setMsg('')
     const winnerId = editWinner === 'A' ? editMatch.team_a_id : editMatch.team_b_id
+    // 처음 끝난 경기 → 다음 대기팀 '경기 준비' 알림 / 이미 끝난 경기 수정 → 본선 빈자리 알림만 확인
+    const wasFinished = editMatch.status === 'FINISHED'
     try {
       const { error: rpcError } = await supabase.rpc('rpc_submit_match_result', { p_match_id:editMatch.id, p_score:editScore, p_winner_team_id:winnerId })
       if (rpcError) {
@@ -677,10 +680,12 @@ export default function CourtsPage() {
         } else { setMsg('❌ ' + rpcError.message); return }
       } else {
         setMsg('✅ 결과 저장됨')
-        if (editMatch.court) sendCourtNotify(editMatch.court, 'finished')
       }
       // ✅ [2-3] 조별 경기였다면 본선 슬롯 자동 채우기 (선수 브라우저가 못 채운 경우 대비 안전망)
       await fillSlotsIfGroupComplete(eventId, editMatch)
+      // 알림은 슬롯 채우기 뒤에 — 새로 채워진 본선 팀도 같은 호출에서 확인되도록
+      if (!wasFinished && editMatch.court) sendCourtNotify(editMatch.court, 'finished')
+      else requestSlotCheck(eventId)
       setEditMatch(null)
       await loadMatches()
     } finally { setSubmitting(false) }
