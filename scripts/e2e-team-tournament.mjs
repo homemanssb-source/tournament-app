@@ -184,7 +184,7 @@ async function createClubsWithMembers(eventId, divisionId, names, memberCount = 
   return { clubs, members };
 }
 
-async function submitLineupAndScore(tie, clubA, clubB, membersA, membersB, scores) {
+async function submitLineupAndScore(tie, clubA, clubB, membersA, membersB, scores, { stopAtMajority = false } = {}) {
   // scores: [{winner: 'a'|'b', s1a, s1b, s2a?, s2b?, s3a?, s3b?}, ...]
   const lineupA = scores.map((_, i) => ({
     rubber_number: i + 1,
@@ -215,7 +215,11 @@ async function submitLineupAndScore(tie, clubA, clubB, membersA, membersB, score
     throw new Error('rubbers 자동 생성 안 됨');
   }
 
+  const majority = Math.floor(rubbers.length / 2) + 1;
+  let winsA = 0, winsB = 0;
   for (let i = 0; i < rubbers.length && i < scores.length; i++) {
+    // 토너먼트는 과반에서 대전 종료 — 남은 복식은 입력 불가 (019)
+    if (stopAtMajority && (winsA >= majority || winsB >= majority)) break;
     const r = rubbers[i];
     const s = scores[i];
     const { data: sr, error } = await sb.rpc('rpc_admin_record_score', {
@@ -226,6 +230,7 @@ async function submitLineupAndScore(tie, clubA, clubB, membersA, membersB, score
     });
     if (error) throw new Error(`러버 ${r.rubber_number}: ${error.message}`);
     if (sr && !sr.success) throw new Error(`러버 ${r.rubber_number}: ${sr.error}`);
+    if (s.winner === 'a') winsA++; else winsB++;
   }
 }
 
@@ -405,7 +410,7 @@ async function scenario3() {
     const scores = aWins ?
       [{winner:'a',s1a:6,s1b:3}, {winner:'a',s1a:6,s1b:4}, {winner:'b',s1a:3,s1b:6}] :
       [{winner:'b',s1a:3,s1b:6}, {winner:'b',s1a:4,s1b:6}, {winner:'a',s1a:6,s1b:3}];
-    await submitLineupAndScore(tie, ca, cb, members[ca.id], members[cb.id], scores);
+    await submitLineupAndScore(tie, ca, cb, members[ca.id], members[cb.id], scores, { stopAtMajority: true });
   }
   ok('SF 점수 입력');
 
@@ -419,7 +424,7 @@ async function scenario3() {
     const scores = aWins ?
       [{winner:'a',s1a:6,s1b:0}, {winner:'a',s1a:6,s1b:1}, {winner:'b',s1a:1,s1b:6}] :
       [{winner:'b',s1a:0,s1b:6}, {winner:'b',s1a:1,s1b:6}, {winner:'a',s1a:6,s1b:1}];
-    await submitLineupAndScore(final, ca, cb, members[ca.id], members[cb.id], scores);
+    await submitLineupAndScore(final, ca, cb, members[ca.id], members[cb.id], scores, { stopAtMajority: true });
     ok(`결승 종료: 우승 = ${aWins ? ca.name : cb.name}`);
   } else {
     warn('결승 ties club 미할당 — 자동 진출 로직 점검 필요');
