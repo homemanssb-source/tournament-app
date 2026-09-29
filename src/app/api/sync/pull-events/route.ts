@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
         // 3. 해당 대회의 부서(divisions) 동기화
         const { data: appADivs } = await appA
           .from('event_divisions')
-          .select('division_id, division_name')
+          .select('division_id, division_name, team_match_type')
           .eq('event_id', ae.event_id)
           .order('created_at');
 
@@ -151,16 +151,28 @@ export async function POST(request: NextRequest) {
           // 앱B에 이미 있는 부서 조회
           const { data: existingDivs } = await appB
             .from('divisions')
-            .select('id, name')
+            .select('id, name, team_match_type')
             .eq('event_id', appBEventId);
 
-          const existingDivNames = new Set(
-            (existingDivs || []).map(d => d.name)
+          const existingDivByName = new Map(
+            (existingDivs || []).map(d => [d.name, d])
           );
 
           for (let i = 0; i < appADivs.length; i++) {
             const div = appADivs[i];
-            if (existingDivNames.has(div.division_name)) continue;
+            const existingDiv = existingDivByName.get(div.division_name);
+            if (existingDiv) {
+              // 부서별 경기방식(3/5복식) 반영 — 이미 대전이 있는 부서는 바꾸지 않음
+              if ((existingDiv.team_match_type ?? null) !== (div.team_match_type ?? null)) {
+                const { count } = await appB.from('ties').select('id', { count: 'exact', head: true }).eq('division_id', existingDiv.id);
+                if ((count ?? 0) > 0) {
+                  errors.push(`${ae.event_name} 부서 ${div.division_name}: 앱A 경기방식이 바뀌었지만 이미 대전이 있어 반영하지 않았습니다.`);
+                } else {
+                  await appB.from('divisions').update({ team_match_type: div.team_match_type ?? null }).eq('id', existingDiv.id);
+                }
+              }
+              continue;
+            }
 
             const { error: divErr } = await appB
               .from('divisions')
@@ -168,6 +180,7 @@ export async function POST(request: NextRequest) {
                 event_id: appBEventId,
                 name: div.division_name,
                 sort_order: i + 1,
+                team_match_type: div.team_match_type ?? null,
               });
 
             if (divErr) {

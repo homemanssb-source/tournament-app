@@ -219,6 +219,12 @@ function SyncDashboardInner() {
                 ) : (
                   <p className="text-red-700">실패: {syncResult.error}</p>
                 )}
+                {syncResult.cancelled?.map((c: string, i: number) => (
+                  <p key={`c${i}`} className="text-orange-600 text-xs">🚫 앱A에서 취소됨: {c} — 앱B 클럽은 그대로 있습니다 (필요하면 직접 삭제)</p>
+                ))}
+                {syncResult.warnings?.map((w: string, i: number) => (
+                  <p key={`w${i}`} className="text-orange-600 text-xs">⚠️ {w}</p>
+                ))}
                 {syncResult.unmatched?.map((u: string, i: number) => (
                   <p key={`u${i}`} className="text-orange-600 text-xs">⚠️ 부서매핑 실패: {u}</p>
                 ))}

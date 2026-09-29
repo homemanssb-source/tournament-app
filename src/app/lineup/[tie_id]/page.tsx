@@ -75,7 +75,8 @@ export default function LineupPage() {
         .select('team_sets_per_rubber, team_match_type, allow_player_reuse')
         .eq('id', t.event_id).maybeSingle();
       setSetsPerRubber(ev?.team_sets_per_rubber || 1);
-      setTeamMatchType(ev?.team_match_type || null);
+      // 부서마다 3/5복식이 다를 수 있으므로 대전의 복식 수 기준
+      setTeamMatchType(t.rubber_count === 5 ? '5_doubles' : t.rubber_count === 3 ? '3_doubles' : ev?.team_match_type || null);
       setAllowPlayerReuse(ev?.allow_player_reuse ?? true);
       // ✅ lineup_revealed OR 경기 진행중/완료 → 바로 revealed 단계
       if (t.lineup_revealed || (t.club_a_lineup_submitted && t.club_b_lineup_submitted)) {

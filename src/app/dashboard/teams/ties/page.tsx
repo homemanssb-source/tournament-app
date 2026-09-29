@@ -54,7 +54,7 @@ export default function TiesPage() {
         fetchEventTeamConfig(eventId),
         fetchTies(eventId),
         supabase.from('groups').select('*').eq('event_id', eventId).order('division_id').order('group_num'),
-        supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
+        supabase.from('divisions').select('id, name, sort_order, team_match_type').eq('event_id', eventId).order('sort_order'),
         supabase.from('venues').select('short_name, court_count, courts').eq('event_id', eventId).order('created_at'),
       ]);
       setConfig(cfg);
@@ -106,15 +106,8 @@ export default function TiesPage() {
         rubbers = recheck;
       } else {
         const rubberCount = tie.rubber_count || config?.team_rubber_count || 3;
-        const rubberType  = config?.team_match_type || 'doubles';
-
-        // rubber_type 결정 (단식/복식 혼합 패턴 - 기본 3러버: 복식,단식,복식)
-        const getType = (n: number, total: number): string => {
-          if (total === 1) return rubberType;
-          if (total === 3) return n === 2 ? 'singles' : 'doubles';
-          if (total === 5) return [2,4].includes(n) ? 'singles' : 'doubles';
-          return rubberType;
-        };
+        // 3복식/5복식 — 모든 러버가 복식
+        const getType = (_n: number, _total: number): string => 'doubles';
 
         const genPin = () => String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
 
@@ -330,7 +323,7 @@ export default function TiesPage() {
             <button key={d.id} onClick={() => setSelectedDiv(d.id)}
               className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
                 selectedDiv === d.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}>{d.name}</button>
+              }`}>{d.name}{(d as any).team_match_type ? ` (${(d as any).team_match_type === '5_doubles' ? 5 : 3}복식)` : ''}</button>
           ))}
         </div>
       )}

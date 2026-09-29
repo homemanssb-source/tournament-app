@@ -40,7 +40,7 @@ export default function BracketPage() {
     try {
       // 부서 목록
       const { data: divs } = await supabase
-        .from('divisions').select('id, name, sort_order')
+        .from('divisions').select('id, name, sort_order, team_match_type')
         .eq('event_id', eventId).order('sort_order');
       const divList = divs || [];
       setDivisions(divList);
@@ -215,7 +215,7 @@ export default function BracketPage() {
             <button key={d.id} onClick={() => setSelectedDiv(d.id)}
               className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
                 selectedDiv === d.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}>{d.name}</button>
+              }`}>{d.name}{(d as any).team_match_type ? ` (${(d as any).team_match_type === '5_doubles' ? 5 : 3}복식)` : ''}</button>
           ))}
         </div>
       )}

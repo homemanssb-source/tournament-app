@@ -86,7 +86,7 @@ export default function GroupsPage() {
 
     // ✅ 부서, config, clubs, groups, ties를 한 번에 병렬 fetch
     const [divsRes, cfg, clubList, grpsRes, tieList] = await Promise.all([
-      supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
+      supabase.from('divisions').select('id, name, sort_order, team_match_type').eq('event_id', eventId).order('sort_order'),
       fetchEventTeamConfig(eventId),
       fetchClubs(eventId),
       supabase.from('groups').select('*').eq('event_id', eventId).order('group_num'),
@@ -179,7 +179,7 @@ export default function GroupsPage() {
             <button key={d.id} onClick={() => setSelectedDiv(d.id)}
               className={`px-4 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
                 selectedDiv === d.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}>{d.name}</button>
+              }`}>{d.name}{(d as any).team_match_type ? ` (${(d as any).team_match_type === '5_doubles' ? 5 : 3}복식)` : ''}</button>
           ))}
         </div>
       )}
