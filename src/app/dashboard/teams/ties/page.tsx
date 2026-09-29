@@ -10,7 +10,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useEventIdWithParam } from '@/components/useDashboard';
 import {
   fetchTies, fetchRubbers, fetchEventTeamConfig,
-  fetchClubMembers, recordRubberScore, calculateStandings,
+  fetchClubMembers, recordRubberScore, correctRubberScore, calculateStandings,
   advanceTournamentWinner,
 } from '@/lib/team-api';
 import { supabase } from '@/lib/supabase';
@@ -168,12 +168,16 @@ export default function TiesPage() {
     if (!set1a || !set1b) { setSaveError('1세트 점수를 입력하세요.'); return; }
     setSaving(true); setSaveError('');
     try {
-      const result = await recordRubberScore(
+      // 이미 완료된 러버면 정정(순위·본선 재배정까지 DB에서 처리)
+      const isCorrection = rubbers.find(r => r.id === rubberId)?.status === 'completed';
+      const result = await (isCorrection ? correctRubberScore : recordRubberScore)(
         rubberId, parseInt(set1a), parseInt(set1b),
         set2a ? parseInt(set2a) : null, set2b ? parseInt(set2b) : null,
         set3a ? parseInt(set3a) : null, set3b ? parseInt(set3b) : null,
       );
       if (!result.success) { setSaveError(result.error || '저장 실패'); return; }
+      const reseat = (result as any).reseat;
+      if (reseat && reseat.success === false && reseat.reseat_skipped) alert('⚠️ ' + reseat.error);
 
       const updatedRubbers = await fetchRubbers(selectedTie!.id);
       setRubbers(updatedRubbers);

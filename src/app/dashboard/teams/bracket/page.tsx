@@ -143,11 +143,14 @@ export default function BracketPage() {
     });
     setGenerating(false);
     if (error) { setMsg('❌ ' + error.message); return; }
+    if (!data?.success) { setMsg('❌ ' + (data?.error || '토너먼트 생성 실패')); return; }
     const tbd = data?.tbd_slots || 0;
+    const undecided: string[] = data?.undecided_groups || [];
     setMsg(
       `✅ 토너먼트 생성 완료! ${data?.ties_created || ''}경기` +
       ` (BYE ${data?.byes || 0}개)` +
-      (tbd > 0 ? ` • TBD ${tbd}슬롯 — 조 경기 완료 시 자동으로 채워집니다` : '')
+      (tbd > 0 ? ` • 미정 ${tbd}자리 — 조 경기 완료·동률 결정 시 자동으로 채워집니다` : '') +
+      (undecided.length > 0 ? ` • ⚠️ 동률 결정 필요: ${undecided.join(', ')} (순위표에서 결정)` : '')
     );
     loadDivData(selectedDiv);
   }
@@ -186,7 +189,9 @@ export default function BracketPage() {
     setFilling(null);
     if (error) { setMsg('❌ ' + error.message); return; }
     if (!data?.success) { setMsg('❌ ' + (data?.error || '실패')); return; }
-    setMsg(`✅ ${groupName} 슬롯 채우기 완료!`);
+    setMsg(data?.filled > 0 || data?.changed > 0
+      ? `✅ ${groupName} 슬롯 ${data.filled}자리 채움`
+      : `ℹ️ ${groupName}: 바뀐 자리가 없습니다 (이미 채워졌거나 동률 결정 필요)`);
     loadDivData(selectedDiv);
   }
 
@@ -259,7 +264,7 @@ export default function BracketPage() {
               <label className="text-sm text-stone-600">조별 진출:</label>
               <select value={advancePerGroup} onChange={e => setAdvancePerGroup(Number(e.target.value))}
                 className="border rounded-lg px-3 py-1.5 text-sm">
-                {[1, 2, 3].map(n => <option key={n} value={n}>각 조 {n}위</option>)}
+                {[1, 2].map(n => <option key={n} value={n}>각 조 {n}위</option>)}
               </select>
             </div>
             {groupProgress.groups.length > 0 && (
