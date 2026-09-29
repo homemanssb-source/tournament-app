@@ -12,12 +12,7 @@ export function getServiceClient() {
   return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, serviceKey);
 }
 
-// ── 앱A 읽기 전용 클라이언트 (연동용) ──
-export function getAppAClient() {
-  const appAAnonKey = process.env.APP_A_ANON_KEY;
-  if (!appAAnonKey) throw new Error('APP_A_ANON_KEY not set');
-  return createClient(process.env.APP_A_SUPABASE_URL!, appAAnonKey);
-}
+// 앱A 클라이언트는 서버 전용 src/lib/app-a-server.ts 를 사용
 
 // ============================================================
 // Types (기존 개인전)
