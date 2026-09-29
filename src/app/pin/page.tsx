@@ -353,6 +353,9 @@ export default function PinPage() {
       <p className="text-stone-500 text-sm mb-8">내 팀 전용 PIN 입력</p>
 
       <div className="w-full max-w-sm space-y-4">
+        {/* 알림이 안 되는 폰이면 PIN 넣기 전에 먼저 안내 — 다른 브라우저/홈 화면 아이콘으로 옮기면 PIN 을 다시 넣어야 하므로
+            (단체전 알림 켜기 화면은 자체 안내가 있어 중복 표시 안 함) */}
+        {!teamNotifPrompt && <PushHelp env={pushEnv} compact />}
         {mode === 'select' && (
           <div className="space-y-3">
             <button onClick={() => setMode('individual')}
