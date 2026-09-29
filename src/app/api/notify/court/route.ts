@@ -179,6 +179,7 @@ async function handleCourtNotify(req: NextRequest, after: { eventId?: string; we
     let teamBName = ''
     let divisionName = ''
     let targetId = ''
+    let targetDate: string | null = null   // 대상 경기의 경기일 (대회 전 보류 판단용)
 
     if (finished_match_id) {
       const { data: finishedMatch } = await supabaseAdmin
@@ -190,7 +191,7 @@ async function handleCourtNotify(req: NextRequest, after: { eventId?: string; we
       if (finishedMatch) {
         let q = supabaseAdmin
           .from('v_matches_with_teams')
-          .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status, score, court_order')
+          .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, status, score, court_order, match_date')
           .eq('event_id', event_id)
           .eq('court', finishedMatch.court || court)
           .order('court_order')
@@ -208,17 +209,19 @@ async function handleCourtNotify(req: NextRequest, after: { eventId?: string; we
           teamAId = target.team_a_id; teamBId = target.team_b_id
           teamAName = target.team_a_name; teamBName = target.team_b_name
           divisionName = target.division_name; targetId = target.id
+          targetDate = target.match_date ?? null
         }
       }
     } else if (match_id) {
       const { data } = await supabaseAdmin
         .from('v_matches_with_teams')
-        .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name')
+        .select('id, team_a_id, team_b_id, team_a_name, team_b_name, division_name, match_date')
         .eq('id', match_id).single()
       if (data) {
         teamAId = data.team_a_id; teamBId = data.team_b_id
         teamAName = data.team_a_name; teamBName = data.team_b_name
         divisionName = data.division_name; targetId = data.id
+        targetDate = data.match_date ?? null
       }
     } else {
       // ✅ 단체전 ties: 코트 + 날짜 필터링 (어제 못 끝낸 tie를 잘못 잡지 않게)
@@ -258,6 +261,7 @@ async function handleCourtNotify(req: NextRequest, after: { eventId?: string; we
           teamAId = activeTie.club_a_id; teamBId = activeTie.club_b_id
           targetId = activeTie.id
           divisionName = divMap[activeTie.division_id]?.name || '단체전'
+          targetDate = divMap[activeTie.division_id]?.match_date ?? null
           const [{ data: clubA }, { data: clubB }] = await Promise.all([
             supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_a_id).single(),
             supabaseAdmin.from('clubs').select('name').eq('id', activeTie.club_b_id).single(),
@@ -293,11 +297,27 @@ async function handleCourtNotify(req: NextRequest, after: { eventId?: string; we
           teamAId = target.team_a_id; teamBId = target.team_b_id
           teamAName = target.team_a_name; teamBName = target.team_b_name
           divisionName = target.division_name; targetId = target.id
+          targetDate = target.match_date ?? null
         }
       }
     }
 
     logData = { ...logData, team_a_name: teamAName, team_b_name: teamBName, division_name: divisionName }
+
+    // ✅ 대회 전 코트 변경은 선수에게 보내지 않음 (H.B컵: 9/17·18 코트 배정 중 실제 알림이 나감)
+    //    기준일 = 대상 경기의 경기일, 없으면 대회일. 운영자가 누르는 '수동' 알림은 그대로 발송
+    if (trigger === 'court_changed' && (teamAId || teamBId)) {
+      let playDate = targetDate
+      if (!playDate) {
+        const { data: ev } = await supabaseAdmin.from('events').select('date').eq('id', event_id).single()
+        playDate = (ev as any)?.date ?? null
+      }
+      const kstToday = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+      if (playDate && playDate > kstToday) {
+        savePushLog(supabaseAdmin, { ...logData, sent: 0, failed: 0, no_sub: false, error_msg: `skipped: 경기일(${playDate}) 전 코트 변경 — 발송 안 함` })
+        return NextResponse.json({ sent: 0, skipped: true, message: `경기일(${playDate}) 전이라 알림을 보내지 않았습니다` })
+      }
+    }
 
     if (!teamAId && !teamBId) {
       savePushLog(supabaseAdmin, { ...logData, sent: 0, failed: 0, no_sub: true })
