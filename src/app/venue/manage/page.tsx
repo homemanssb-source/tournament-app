@@ -365,6 +365,7 @@ export default function VenueManagePage() {
     if (!session?.event_id || !courtName) return
     try {
       const body: any = { event_id: session.event_id, court: courtName, trigger }
+      body.venue_token = session.token   // 알림 API 호출자 확인용
       if (dateFilter && dateFilter !== 'ALL') body.match_date = dateFilter
       await fetch('/api/notify/court', {
         method: 'POST',

@@ -482,6 +482,7 @@ export default function PinMatchesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           event_id: session.event_id,
+          pin_token: session.token,           // 알림 API 호출자 확인용
           court: match.court,
           finished_match_id: matchId,        // 방금 끝난 경기 ID (다음 순서 찾기용)
           match_date: match.match_date || null, // 날짜 필터용

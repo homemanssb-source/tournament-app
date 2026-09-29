@@ -1,6 +1,7 @@
 'use client'
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
+import { authHeaders } from '@/lib/auth-headers';
 import { useEventId, useDivisions } from '@/components/useDashboard'
 import { fillSlotsIfGroupComplete, groupPlaceholders } from '@/lib/tournament'
 import type { TieWithClubs } from '@/types/team'
@@ -249,7 +250,7 @@ export default function CourtsPage() {
   async function sendCourtNotify(court: string, trigger: 'manual' | 'finished' | 'court_changed', matchId?: string) {
     setNotifying(court)
     try {
-      const res  = await fetch('/api/notify/court', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ event_id:eventId, court, match_id:matchId, trigger }) })
+      const res  = await fetch('/api/notify/court', { method:'POST', headers: await authHeaders(), body: JSON.stringify({ event_id:eventId, court, match_id:matchId, trigger }) })
       const json = await res.json()
       const m = json.sent > 0 ? `✅ ${json.sent}명 알림 전송` : `ℹ️ ${json.message || '구독자 없음'}`
       setNotifyMsg(prev => ({ ...prev, [court]: m }))
@@ -354,10 +355,11 @@ export default function CourtsPage() {
   // ✅ 자동배정 완료 후 코트별 푸시 일괄 발송
   async function sendBulkNotify(courts: string[]) {
     const unique = [...new Set(courts)]
+    const headers = await authHeaders()
     await Promise.all(unique.map(court =>
       fetch('/api/notify/court', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ event_id: eventId, court, trigger: 'court_changed' }),
       }).catch(() => {})
     ))
