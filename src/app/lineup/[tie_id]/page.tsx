@@ -42,7 +42,8 @@ export default function LineupPage() {
   const [myClub, setMyClub] = useState<Club | null>(null);
   const [opponentClub, setOpponentClub] = useState<Club | null>(null);
   const [members, setMembers] = useState<ClubMember[]>([]);
-  const [lineups, setLineups] = useState<{ player1_id: string; player2_id: string }[]>([]);
+  // empty = 공오더(이 복식 비움 — 허용 부서만, 대전당 1개)
+  const [lineups, setLineups] = useState<{ player1_id: string; player2_id: string; empty?: boolean }[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [revealedLineups, setRevealedLineups] = useState<TeamLineup[]>([]);
   const [allMembers, setAllMembers] = useState<Record<string, ClubMember>>({});
@@ -60,7 +61,7 @@ export default function LineupPage() {
   const [setsPerRubber, setSetsPerRubber] = useState(1);
   // ★ 신규: 경기방식 표시용
   const [teamMatchType, setTeamMatchType] = useState<string | null>(null);
-  const [allowPlayerReuse, setAllowPlayerReuse] = useState(true);
+  const [allowEmptyOrder, setAllowEmptyOrder] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clubARef = useRef<Club | null>(null);
   const clubBRef = useRef<Club | null>(null);
@@ -81,12 +82,16 @@ export default function LineupPage() {
       clubARef.current = ca; clubBRef.current = cb;
       // ★ 수정: team_match_type도 함께 조회
       const { data: ev } = await supabase.from('events')
-        .select('team_sets_per_rubber, team_match_type, allow_player_reuse')
+        .select('team_sets_per_rubber, team_match_type')
         .eq('id', t.event_id).maybeSingle();
       setSetsPerRubber(ev?.team_sets_per_rubber || 1);
       // 부서마다 3/5복식이 다를 수 있으므로 대전의 복식 수 기준
       setTeamMatchType(t.rubber_count === 5 ? '5_doubles' : t.rubber_count === 3 ? '3_doubles' : ev?.team_match_type || null);
-      setAllowPlayerReuse(ev?.allow_player_reuse ?? true);
+      // 공오더 허용은 부서 설정 (선수 중복은 항상 금지 — 서버에서도 검사)
+      if (t.division_id) {
+        const { data: dv } = await supabase.from('divisions').select('allow_empty_order').eq('id', t.division_id).maybeSingle();
+        setAllowEmptyOrder(!!dv?.allow_empty_order);
+      }
       // ✅ lineup_revealed OR 경기 진행중/완료 → 바로 revealed 단계
       const savedPin = readSavedPin();
       if (t.lineup_revealed || (t.club_a_lineup_submitted && t.club_b_lineup_submitted)) {
@@ -165,7 +170,7 @@ export default function LineupPage() {
       } else {
         setLineups(Array.from({ length: t.rubber_count }, (_, i) => {
           const l = existing.find(e => e.rubber_number === i + 1);
-          return { player1_id: l?.player1_id || '', player2_id: l?.player2_id || '' };
+          return { player1_id: l?.player1_id || '', player2_id: l?.player2_id || '', empty: !!l && !l.player1_id && !l.player2_id };
         }));
         setStep('submitted');
       }
@@ -203,32 +208,29 @@ export default function LineupPage() {
     const existing = res.my_lineups || [];
     if (existing.length > 0 && tie) {
       if (tie.lineup_revealed || tie.status === 'in_progress' || tie.status === 'completed') { setStep('revealed'); await loadRevealedData(tieId, clubA, clubB); await loadRubbers(tieId); }
-      else { setLineups(Array.from({ length: tie.rubber_count }, (_, i) => { const l = existing.find(e => e.rubber_number === i + 1); return { player1_id: l?.player1_id || '', player2_id: l?.player2_id || '' }; })); setStep('submitted'); }
+      else { setLineups(Array.from({ length: tie.rubber_count }, (_, i) => { const l = existing.find(e => e.rubber_number === i + 1); return { player1_id: l?.player1_id || '', player2_id: l?.player2_id || '', empty: !!l && !l.player1_id && !l.player2_id }; })); setStep('submitted'); }
     } else if (tie) { setLineups(Array.from({ length: tie.rubber_count }, () => ({ player1_id: '', player2_id: '' }))); setStep('edit'); }
   }
 
   async function handleSubmit() {
     if (!tie || !myClub) return;
+    const empties = lineups.filter(l => l.empty).length;
+    if (empties > 0 && !allowEmptyOrder) { setError('이 부서는 공오더를 허용하지 않습니다.'); return; }
+    if (empties > 1) { setError('공오더는 대전당 1개 복식까지만 가능합니다.'); return; }
+    // 선수 중복 금지 (모든 부서): 한 선수는 한 대전에서 복식 1개에만
+    const used = new Map<string, number>();
     for (let i = 0; i < lineups.length; i++) {
+      if (lineups[i].empty) continue;
       if (!lineups[i].player1_id || !lineups[i].player2_id) { setError('복식 '+(i+1)+'의 선수를 모두 선택하세요.'); return; }
       if (lineups[i].player1_id === lineups[i].player2_id) { setError('복식 '+(i+1)+'에 같은 선수를 두 번 배정할 수 없습니다.'); return; }
-    }
-    // ✅ allow_player_reuse=false인 경우 러버간 선수 중복 사용 검증
-    if (!allowPlayerReuse) {
-      const used = new Map<string, number>();
-      for (let i = 0; i < lineups.length; i++) {
-        for (const pid of [lineups[i].player1_id, lineups[i].player2_id]) {
-          if (used.has(pid)) {
-            setError(`선수 중복: 복식 ${used.get(pid)}과 복식 ${i+1}에 같은 선수가 배정되었습니다. (선수 재사용 불가 설정)`);
-            return;
-          }
-          used.set(pid, i+1);
-        }
+      for (const pid of [lineups[i].player1_id, lineups[i].player2_id]) {
+        if (used.has(pid)) { setError('선수 중복: 복식 '+used.get(pid)+'과 복식 '+(i+1)+'에 같은 선수가 있습니다. 한 선수는 복식 1개에만 출전합니다.'); return; }
+        used.set(pid, i+1);
       }
     }
     setError(''); setSubmitting(true);
     try {
-      const entries: LineupEntry[] = lineups.map((l, i) => ({ rubber_number: i+1, player1_id: l.player1_id, player2_id: l.player2_id }));
+      const entries: LineupEntry[] = lineups.map((l, i) => ({ rubber_number: i+1, player1_id: l.empty ? '' : l.player1_id, player2_id: l.empty ? '' : l.player2_id }));
       const result = await submitLineup(tieId, myClub.id, pinInput, entries);
       if (!result.success) { setError(result.error || '제출 실패'); return; }
       if (result.revealed) { setStep('revealed'); await loadRevealedData(tieId, clubA, clubB); await loadRubbers(tieId); }
@@ -380,7 +382,20 @@ export default function LineupPage() {
             </div>
             {lineups.map((lineup, idx) => (
               <div key={idx} className="bg-white rounded-xl border p-4">
-                <div className="font-medium text-sm text-gray-600 mb-3">복식 {idx+1}</div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="font-medium text-sm text-gray-600">복식 {idx+1}</div>
+                  {allowEmptyOrder && (
+                    <label className={`text-xs flex items-center gap-1 ${!lineup.empty && lineups.some(l => l.empty) ? 'text-gray-300' : 'text-orange-600'}`}>
+                      <input type="checkbox" checked={!!lineup.empty}
+                        disabled={!lineup.empty && lineups.some(l => l.empty)}
+                        onChange={e => { const u = [...lineups]; u[idx] = { player1_id: '', player2_id: '', empty: e.target.checked }; setLineups(u); }} />
+                      공오더 (비움 → 상대 6:0 승)
+                    </label>
+                  )}
+                </div>
+                {lineup.empty ? (
+                  <p className="text-sm text-orange-600 bg-orange-50 rounded-lg px-3 py-2">이 복식은 공오더로 제출됩니다.</p>
+                ) : (
                 <div className="space-y-2">
                   {[0,1].map(pIdx => (
                     <div key={pIdx}>
@@ -389,11 +404,17 @@ export default function LineupPage() {
                         onChange={e => { const u=[...lineups]; if(pIdx===0)u[idx].player1_id=e.target.value;else u[idx].player2_id=e.target.value; setLineups(u); }}
                         className="w-full border rounded-lg px-3 py-2.5 mt-1">
                         <option value="">선수 선택</option>
-                        {members.map(m => <option key={m.id} value={m.id}>{m.name} ({getGenderLabel(m.gender)}) {m.grade?'- '+m.grade:''}</option>)}
+                        {members.map(m => {
+                          // 이미 다른 자리(다른 복식 포함)에 넣은 선수는 선택 불가 — 선수 중복 금지
+                          const cur = pIdx===0?lineup.player1_id:lineup.player2_id;
+                          const taken = m.id !== cur && lineups.some(l => !l.empty && (l.player1_id === m.id || l.player2_id === m.id));
+                          return <option key={m.id} value={m.id} disabled={taken}>{m.name} ({getGenderLabel(m.gender)}) {m.grade?'- '+m.grade:''}{taken ? ' · 배정됨' : ''}</option>;
+                        })}
                       </select>
                     </div>
                   ))}
                 </div>
+                )}
               </div>
             ))}
             {error && <p className="text-red-500 text-sm text-center">{error}</p>}
@@ -415,7 +436,7 @@ export default function LineupPage() {
               {lineups.map((l, idx) => (
                 <div key={idx} className="flex items-center gap-2 py-2 border-b last:border-0">
                   <span className="text-sm text-gray-400 w-16">복식 {idx+1}</span>
-                  <span className="text-sm">{members.find(m=>m.id===l.player1_id)?.name||'-'} / {members.find(m=>m.id===l.player2_id)?.name||'-'}</span>
+                  <span className="text-sm">{l.empty ? <span className="text-orange-600">공오더</span> : <>{members.find(m=>m.id===l.player1_id)?.name||'-'} / {members.find(m=>m.id===l.player2_id)?.name||'-'}</>}</span>
                 </div>
               ))}
             </div>
@@ -457,14 +478,18 @@ export default function LineupPage() {
                   </div>
                   <div className="grid grid-cols-5 items-center gap-2 mb-3">
                     <div className="col-span-2 text-right text-sm">
-                      <div className="font-medium">{getMemberName(la?.player1_id||'')}</div>
-                      <div className="font-medium">{getMemberName(la?.player2_id||'')}</div>
+                      {la && !la.player1_id && !la.player2_id
+                        ? <div className="font-medium text-orange-600">공오더</div>
+                        : <><div className="font-medium">{getMemberName(la?.player1_id||'')}</div>
+                            <div className="font-medium">{getMemberName(la?.player2_id||'')}</div></>}
                       <div className="text-xs text-gray-400 mt-1">{clubA?.name}</div>
                     </div>
                     <div className="text-center font-bold text-gray-400">vs</div>
                     <div className="col-span-2 text-left text-sm">
-                      <div className="font-medium">{getMemberName(lb?.player1_id||'')}</div>
-                      <div className="font-medium">{getMemberName(lb?.player2_id||'')}</div>
+                      {lb && !lb.player1_id && !lb.player2_id
+                        ? <div className="font-medium text-orange-600">공오더</div>
+                        : <><div className="font-medium">{getMemberName(lb?.player1_id||'')}</div>
+                            <div className="font-medium">{getMemberName(lb?.player2_id||'')}</div></>}
                       <div className="text-xs text-gray-400 mt-1">{clubB?.name}</div>
                     </div>
                   </div>
@@ -474,6 +499,7 @@ export default function LineupPage() {
                         {rubber!.set2_a!==null&&' / '+formatSetScore(rubber!.set2_a,rubber!.set2_b)}
                         {rubber!.set3_a!==null&&' / '+formatSetScore(rubber!.set3_a,rubber!.set3_b)}</div>
                       {rubber!.winning_club_id && <div className="text-xs text-blue-600 mt-1">승: {rubber!.winning_club_id===clubA?.id?clubA?.name:clubB?.name}</div>}
+                      {rubber!.is_walkover && <div className="text-xs text-orange-600 mt-1">{rubber!.winning_club_id ? '공오더 — 부전승' : '양 팀 공오더 — 승자 없음'}</div>}
                     </div>
                   )}
                   {!hasScore && !isScoring && !tieCompleted && rubber && myClub && (

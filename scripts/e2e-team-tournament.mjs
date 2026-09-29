@@ -158,7 +158,7 @@ async function createDivision(eventId, name = 'A부') {
   return data;
 }
 
-async function createClubsWithMembers(eventId, divisionId, names, memberCount = 4) {
+async function createClubsWithMembers(eventId, divisionId, names, memberCount = 6) {
   const clubs = [];
   for (let i = 0; i < names.length; i++) {
     const { data: c, error } = await sb.from('clubs').insert({
@@ -188,13 +188,14 @@ async function submitLineupAndScore(tie, clubA, clubB, membersA, membersB, score
   // scores: [{winner: 'a'|'b', s1a, s1b, s2a?, s2b?, s3a?, s3b?}, ...]
   const lineupA = scores.map((_, i) => ({
     rubber_number: i + 1,
-    player1_id: membersA[i % membersA.length].id,
-    player2_id: membersA[(i + 1) % membersA.length].id,
+    // 선수 중복 금지(023): 복식마다 다른 선수 2명
+    player1_id: membersA[(2 * i) % membersA.length].id,
+    player2_id: membersA[(2 * i + 1) % membersA.length].id,
   }));
   const lineupB = scores.map((_, i) => ({
     rubber_number: i + 1,
-    player1_id: membersB[i % membersB.length].id,
-    player2_id: membersB[(i + 1) % membersB.length].id,
+    player1_id: membersB[(2 * i) % membersB.length].id,
+    player2_id: membersB[(2 * i + 1) % membersB.length].id,
   }));
 
   const { data: subA, error: eA } = await sb.rpc('rpc_submit_lineup', {
@@ -260,7 +261,7 @@ async function scenario1() {
   const div = await createDivision(ev.id);
   const { clubs, members } = await createClubsWithMembers(
     ev.id, div.id, ['알파', '브라보', '찰리', '델타']);
-  ok(`이벤트+부서+클럽 4개+멤버 16명`);
+  ok(`이벤트+부서+클럽 4개+멤버 24명`);
 
   const r1 = await sb.rpc('rpc_generate_full_league', { p_event_id: ev.id, p_division_id: div.id });
   if (r1.error) throw new Error(`풀리그: ${r1.error.message}`);
@@ -442,8 +443,8 @@ async function scenario4() {
   });
   const div = await createDivision(ev.id);
   const { clubs, members } = await createClubsWithMembers(
-    ev.id, div.id, ['X1', 'X2', 'X3', 'X4'], 6);
-  ok('4팀 × 6명');
+    ev.id, div.id, ['X1', 'X2', 'X3', 'X4'], 10);
+  ok('4팀 × 10명');
 
   const r = await sb.rpc('rpc_generate_full_league', { p_event_id: ev.id, p_division_id: div.id });
   if (r.error) throw new Error(`풀리그: ${r.error.message}`);

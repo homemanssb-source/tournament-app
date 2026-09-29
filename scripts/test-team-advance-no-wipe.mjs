@@ -61,7 +61,7 @@ async function main() {
   const [A, B, C, D, E] = ['임시A', '임시B', '임시C', '임시D', '임시E'].map(n => clubs.find(c => c.name === n));
   const members = {};
   for (const c of [A, C]) {
-    members[c.id] = must(await sb.from('club_members').insert([1, 2, 3, 4].map(i => ({
+    members[c.id] = must(await sb.from('club_members').insert([1, 2, 3, 4, 5, 6].map(i => ({
       club_id: c.id, name: `${c.name}-P${i}`, member_order: i,
     }))).select(), '멤버');
   }
@@ -92,7 +92,7 @@ async function main() {
   for (const c of [A, C]) {
     const m = members[c.id];
     const res = must(await sb.rpc('rpc_submit_lineup', { p_tie_id: fin.id, p_club_id: c.id, p_captain_pin: c.captain_pin,
-      p_lineups: [1, 2, 3].map(n => ({ rubber_number: n, player1_id: m[(n - 1) % 4].id, player2_id: m[n % 4].id })) }), '라인업');
+      p_lineups: [1, 2, 3].map(n => ({ rubber_number: n, player1_id: m[2 * n - 2].id, player2_id: m[2 * n - 1].id })) }), '라인업');
     ok(res.success, `${c.name} 라인업 제출`);
   }
   await score(finR0[0].id, 6, 3);

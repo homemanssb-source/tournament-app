@@ -20,6 +20,20 @@ import type { Club, ClubMember, EventTeamConfig } from '@/types/team';
 export default function ClubsPage() {
   const eventId = useEventId();
   const { divisions, selected, setSelected, loading: divLoading } = useDivisions(eventId);
+  // 부서별 공오더 허용 (대전당 복식 1개를 비워 제출 → 상대 6:0 승) — 023
+  const [emptyOrder, setEmptyOrder] = useState<Record<string, boolean>>({});
+  const [emptyOrderSaving, setEmptyOrderSaving] = useState(false);
+  useEffect(() => {
+    setEmptyOrder(Object.fromEntries(divisions.map((d: any) => [d.id, !!d.allow_empty_order])));
+  }, [divisions]);
+
+  async function toggleEmptyOrder(divId: string, value: boolean) {
+    setEmptyOrderSaving(true);
+    const { error } = await supabase.from('divisions').update({ allow_empty_order: value }).eq('id', divId);
+    setEmptyOrderSaving(false);
+    if (error) { alert('공오더 설정 저장 실패: ' + error.message); return; }
+    setEmptyOrder(prev => ({ ...prev, [divId]: value }));
+  }
 
   const [clubs, setClubs]               = useState<Club[]>([]);
   const [config, setConfig]             = useState<EventTeamConfig | null>(null);
@@ -217,6 +231,17 @@ export default function ClubsPage() {
         setEditingPin(null);
         setEditingSeed(null);
       }} />
+
+      {selected && (
+        <label className="flex items-center gap-2 text-sm bg-orange-50 border border-orange-200 rounded-lg px-4 py-2.5 w-fit">
+          <input type="checkbox" checked={!!emptyOrder[selected]} disabled={emptyOrderSaving}
+            onChange={e => toggleEmptyOrder(selected, e.target.checked)} />
+          <span className="font-medium text-orange-800">
+            {divisions.find(d => d.id === selected)?.name} 공오더 허용
+          </span>
+          <span className="text-xs text-orange-600">대전당 복식 1개를 비워 제출 가능 → 그 복식은 상대 6:0 승 (양 팀이 같은 복식을 비우면 승자 없음)</span>
+        </label>
+      )}
 
       {loading ? (
         <div className="p-8 text-center text-gray-500">불러오는 중...</div>
