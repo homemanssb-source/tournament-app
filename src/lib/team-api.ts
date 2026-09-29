@@ -389,26 +389,6 @@ export async function correctRubberScore(
   return data;
 }
 
-export async function pinRecordScore(
-  pin: string, rubberId: string,
-  set1a: number, set1b: number,
-  set2a?: number | null, set2b?: number | null,
-  set3a?: number | null, set3b?: number | null,
-): Promise<RpcResult> {
-  const { data, error } = await supabase.rpc('rpc_team_pin_score', {
-    p_pin: pin,
-    p_rubber_id: rubberId,
-    p_set1_a: set1a,
-    p_set1_b: set1b,
-    p_set2_a: set2a ?? null,
-    p_set2_b: set2b ?? null,
-    p_set3_a: set3a ?? null,
-    p_set3_b: set3b ?? null,
-  });
-  if (error) throw error;
-  return data as RpcResult;
-}
-
 export async function setManualRank(
   eventId: string, clubId: string, rank: number, notes?: string,
 ): Promise<RpcResult> {

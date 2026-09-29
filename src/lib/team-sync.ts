@@ -192,6 +192,13 @@ export async function syncTeamEntries(
   const { data: clubsRaw } = await appB.from('clubs')
     .select('id, name, division_id, captain_name, captain_pin').eq('event_id', eventId);
   const clubs = (clubsRaw || []) as { id: string; name: string; division_id: string | null; captain_name: string | null; captain_pin: string | null }[];
+  // 주장 PIN 은 club_pins 에 보관 (022) — clubs.captain_pin 은 비어 있으므로 비교는 club_pins 기준.
+  // 쓰기는 clubs.captain_pin 으로 하면 트리거가 club_pins 로 옮긴다.
+  if (clubs.length) {
+    const { data: pins } = await appB.from('club_pins').select('club_id, captain_pin').in('club_id', clubs.map(c => c.id));
+    const pinMap = new Map((pins || []).map((p: any) => [p.club_id, p.captain_pin]));
+    for (const c of clubs) c.captain_pin = pinMap.get(c.id) ?? c.captain_pin ?? null;
+  }
   const clubById = new Map(clubs.map(c => [c.id, c]));
 
   const { data: logs } = await appB.from('sync_log').select('app_a_record_id, app_b_record_id, created_at')
@@ -235,8 +242,8 @@ export async function syncTeamEntries(
           captain_name: entry.captain_name, captain_pin: entry.captain_pin,
         }).select('id, name, division_id, captain_name, captain_pin').single();
         if (error || !nc) { errors.push(`${entry.club_name}: 클럽 생성 실패 — ${error?.message}`); continue; }
-        club = nc;
-        clubs.push(nc); clubById.set(nc.id, nc);
+        club = { ...nc, captain_pin: entry.captain_pin };
+        clubs.push(club); clubById.set(club.id, club);
       } else {
         const patch: Record<string, any> = {};
         if (club.name !== entry.club_name) patch.name = entry.club_name;
