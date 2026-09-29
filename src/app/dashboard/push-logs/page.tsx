@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useEventId } from '@/components/useDashboard'
 import { supabase } from '@/lib/supabase'
+import { logKind, type LogKind } from '@/lib/push-log-kind'
 
 interface PushLog {
   id: string
@@ -26,24 +27,31 @@ const TRIGGER_LABEL: Record<string, string> = {
   slot_filled:   '대진확정',
 }
 
-function StatusBadge({ log }: { log: PushLog }) {
-  if (log.error_msg) {
-    return <span className="inline-flex items-center text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">❌ 오류</span>
-  }
-  if (log.no_sub) {
-    return <span className="inline-flex items-center text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">📵 구독없음</span>
-  }
-  if (log.failed > 0 && log.sent === 0) {
-    return <span className="inline-flex items-center text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">❌ 전체실패</span>
-  }
-  if (log.failed > 0) {
-    return <span className="inline-flex items-center text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">⚠️ 일부실패</span>
-  }
-  if (log.sent > 0) {
-    return <span className="inline-flex items-center text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">✅ 성공</span>
-  }
-  return <span className="inline-flex items-center text-xs bg-gray-100 text-gray-400 px-2 py-0.5 rounded-full font-medium">—</span>
+const KIND_BADGE: Record<LogKind, { label: string; cls: string }> = {
+  ok:        { label: '✅ 성공',          cls: 'bg-green-100 text-green-700' },
+  cleanup:   { label: '✅ 성공·만료정리', cls: 'bg-green-100 text-green-700' },
+  partial:   { label: '⚠️ 일부실패',      cls: 'bg-amber-100 text-amber-700' },
+  fail:      { label: '❌ 실패',          cls: 'bg-red-100 text-red-700' },
+  no_sub:    { label: '📵 구독없음',      cls: 'bg-gray-100 text-gray-500' },
+  expired:   { label: '📵 구독만료',      cls: 'bg-gray-100 text-gray-500' },
+  no_target: { label: '⏹ 대기경기 없음',  cls: 'bg-gray-100 text-gray-400' },
+  held:      { label: '⏸ 대회 전 보류',   cls: 'bg-blue-50 text-blue-600' },
+  none:      { label: '—',                cls: 'bg-gray-100 text-gray-400' },
 }
+
+function StatusBadge({ log }: { log: PushLog }) {
+  const b = KIND_BADGE[logKind(log)]
+  return <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${b.cls}`}>{b.label}</span>
+}
+
+// 한쪽이 미정(TBD)이던 알림도 이름이 보이게
+function matchLabel(log: PushLog) {
+  if (!log.team_a_name && !log.team_b_name) return null
+  return `${log.team_a_name || '(미정)'} vs ${log.team_b_name || '(미정)'}`
+}
+
+// 실패만 빨갛게 — 보류·만료정리 메모는 회색
+const isRedMsg = (log: PushLog) => ['partial', 'fail'].includes(logKind(log))
 
 interface SubscriberRow {
   kind: 'individual' | 'team'
@@ -72,7 +80,7 @@ export default function PushLogsPage() {
   const [tab, setTab] = useState<'logs' | 'subscribers'>('logs')
   const [logs, setLogs] = useState<PushLog[]>([])
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState<'ALL' | 'fail' | 'no_sub' | 'ok'>('ALL')
+  const [filter, setFilter] = useState<'ALL' | 'fail' | 'no_sub' | 'ok' | 'no_target' | 'held'>('ALL')
   const [limit, setLimit] = useState(50)
 
   // 구독 현황
@@ -132,19 +140,21 @@ export default function PushLogsPage() {
     if (tab === 'subscribers') loadSubscribers()
   }, [tab, loadSubscribers])
 
-  const filtered = logs.filter(l => {
-    if (filter === 'fail')   return (l.failed > 0 || !!l.error_msg) && !l.no_sub
-    if (filter === 'no_sub') return l.no_sub
-    if (filter === 'ok')     return l.sent > 0 && l.failed === 0 && !l.error_msg && !l.no_sub
-    return true
-  })
+  const FILTER_KINDS: Record<string, LogKind[]> = {
+    ok: ['ok', 'cleanup'], fail: ['partial', 'fail'], no_sub: ['no_sub', 'expired'],
+    no_target: ['no_target'], held: ['held'],
+  }
+  const filtered = filter === 'ALL' ? logs : logs.filter(l => FILTER_KINDS[filter].includes(logKind(l)))
 
   // 통계 — ✅ [FIX] !l.failed → l.failed === 0 (number 타입 명시적 비교)
   const total       = logs.length
-  const success     = logs.filter(l => l.sent > 0 && l.failed === 0 && !l.error_msg && !l.no_sub).length
-  const partial     = logs.filter(l => l.failed > 0 && l.sent > 0).length
-  const allFail     = logs.filter(l => (l.failed > 0 && l.sent === 0) || !!l.error_msg).length
-  const noSub       = logs.filter(l => l.no_sub).length
+  const countOf     = (kinds: LogKind[]) => logs.filter(l => kinds.includes(logKind(l))).length
+  const success     = countOf(['ok', 'cleanup'])
+  const partial     = countOf(['partial'])
+  const allFail     = countOf(['fail'])
+  const noSub       = countOf(['no_sub', 'expired'])
+  const noTarget    = countOf(['no_target'])
+  const held        = countOf(['held'])
   const totalSent   = logs.reduce((s, l) => s + (l.sent ?? 0), 0)
   const totalFailed = logs.reduce((s, l) => s + (l.failed ?? 0), 0)
 
@@ -188,13 +198,15 @@ export default function PushLogsPage() {
       {tab === 'logs' && <>
 
       {/* 통계 카드 */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
+      <div className="grid grid-cols-4 sm:grid-cols-8 gap-3">
         {([
           { label: '총 발송시도',  value: total,            color: 'text-gray-700',  bg: 'bg-gray-50' },
           { label: '✅ 성공',      value: success,          color: 'text-green-700', bg: 'bg-green-50' },
           { label: '⚠️ 일부실패', value: partial,          color: 'text-amber-700', bg: 'bg-amber-50' },
           { label: '❌ 전체실패',  value: allFail,          color: 'text-red-700',   bg: 'bg-red-50' },
           { label: '📵 구독없음',  value: noSub,            color: 'text-gray-500',  bg: 'bg-gray-50' },
+          { label: '⏹ 대기경기 없음', value: noTarget,      color: 'text-gray-400',  bg: 'bg-gray-50' },
+          { label: '⏸ 대회 전 보류', value: held,           color: 'text-blue-600',  bg: 'bg-blue-50' },
           { label: '📨 발송건수',  value: `${totalSent}건`, color: 'text-blue-700',  bg: 'bg-blue-50' },
         ] as const).map(({ label, value, color, bg }) => (
           <div key={label} className={`${bg} rounded-xl border p-3 text-center`}>
@@ -211,6 +223,8 @@ export default function PushLogsPage() {
           { key: 'ok',     label: `✅ 성공 (${success})` },
           { key: 'fail',   label: `❌ 실패 (${allFail + partial})` },
           { key: 'no_sub', label: `📵 구독없음 (${noSub})` },
+          { key: 'no_target', label: `⏹ 대기경기 없음 (${noTarget})` },
+          { key: 'held',   label: `⏸ 대회 전 보류 (${held})` },
         ] as const).map(({ key, label }) => (
           <button key={key} onClick={() => setFilter(key)}
             className={`text-sm px-3 py-1.5 rounded-full border transition-all ${
@@ -239,7 +253,7 @@ export default function PushLogsPage() {
         ) : (
           <>
             {/* 테이블 헤더 (데스크탑) */}
-            <div className="hidden sm:grid grid-cols-[130px_1fr_80px_110px_80px] gap-3 px-4 py-2 bg-gray-50 border-b text-xs text-gray-400 font-medium">
+            <div className="hidden sm:grid grid-cols-[130px_1fr_80px_130px_80px] gap-3 px-4 py-2 bg-gray-50 border-b text-xs text-gray-400 font-medium">
               <span>시각</span>
               <span>대상 경기</span>
               <span>코트</span>
@@ -258,10 +272,7 @@ export default function PushLogsPage() {
                       <StatusBadge log={log} />
                     </div>
                     <div className="text-sm font-medium text-gray-800">
-                      {log.team_a_name && log.team_b_name
-                        ? `${log.team_a_name} vs ${log.team_b_name}`
-                        : <span className="text-gray-400 text-xs">팀 정보 없음</span>
-                      }
+                      {matchLabel(log) ?? <span className="text-gray-400 text-xs">팀 정보 없음</span>}
                     </div>
                     <div className="flex items-center flex-wrap gap-2 text-xs text-gray-500">
                       {log.court && <span>📍 {log.court}</span>}
@@ -274,7 +285,7 @@ export default function PushLogsPage() {
                       <span className="ml-auto font-mono">✅{log.sent} ❌{log.failed}</span>
                     </div>
                     {log.error_msg && (
-                      <div className="text-xs text-red-500 bg-red-50 px-2 py-1 rounded break-all">
+                      <div className={`text-xs px-2 py-1 rounded break-all ${isRedMsg(log) ? 'text-red-500 bg-red-50' : 'text-gray-500 bg-gray-50'}`}>
                         {log.error_msg}
                       </div>
                     )}
@@ -285,10 +296,7 @@ export default function PushLogsPage() {
                     <span className="text-xs text-gray-400">{fmt(log.created_at)}</span>
                     <div className="min-w-0">
                       <div className="text-sm font-medium text-gray-800 truncate">
-                        {log.team_a_name && log.team_b_name
-                          ? `${log.team_a_name} vs ${log.team_b_name}`
-                          : <span className="text-gray-400 text-xs">팀 정보 없음</span>
-                        }
+                        {matchLabel(log) ?? <span className="text-gray-400 text-xs">팀 정보 없음</span>}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                         {log.division_name && (
@@ -300,8 +308,8 @@ export default function PushLogsPage() {
                           </span>
                         )}
                         {log.error_msg && (
-                          <span className="text-xs text-red-500 truncate max-w-[200px]" title={log.error_msg}>
-                            ⚠️ {log.error_msg}
+                          <span className={`text-xs truncate max-w-[200px] ${isRedMsg(log) ? 'text-red-500' : 'text-gray-400'}`} title={log.error_msg}>
+                            {isRedMsg(log) ? '⚠️ ' : ''}{log.error_msg}
                           </span>
                         )}
                       </div>
