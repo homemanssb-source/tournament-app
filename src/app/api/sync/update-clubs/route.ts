@@ -2,6 +2,7 @@
 // 기존에 sync된 팀들의 p1_club, p2_club, team_name을 앱A에서 가져와 업데이트
 
 import { NextRequest, NextResponse } from 'next/server';
+import { operatorOrCron } from '@/lib/api-auth';
 import { createClient } from '@supabase/supabase-js';
 
 function getAppAClient() {
@@ -30,6 +31,10 @@ function buildTeamName(p1Name: string, p1Club: string | null, p2Name: string, p2
 
 export async function POST(request: NextRequest) {
   try {
+    // 운영자 로그인 또는 Vercel Cron 만 (그동안 인증 없이 누구나 동기화를 실행할 수 있었음)
+    if (!(await operatorOrCron(request))) {
+      return NextResponse.json({ success: false, error: '로그인이 필요합니다.' }, { status: 401 });
+    }
     const { event_id, app_a_event_id } = await request.json();
     if (!event_id || !app_a_event_id) {
       return NextResponse.json({ success: false, error: 'event_id와 app_a_event_id 필요' }, { status: 400 });

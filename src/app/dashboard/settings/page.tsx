@@ -2,6 +2,7 @@
 import React from 'react'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { withVenuePins } from '@/lib/pins'
 import { authHeaders } from '@/lib/auth-headers';
 
 interface Venue {
@@ -229,7 +230,7 @@ export default function SettingsPage() {
   async function loadVenues(eid: string) {
     setVenueLoading(true)
     const { data } = await supabase.from('venues').select('*').eq('event_id', eid).order('created_at')
-    setVenues(data || [])
+    setVenues(await withVenuePins(data || []))   // PIN 은 venue_pins 에 보관 (025)
     // ✅ 경기장별 시작시간 맵
     const vtMap: Record<string, string> = {}
     ;(data || []).forEach((v: Venue) => { if (v.start_time) vtMap[v.id] = v.start_time.slice(0, 5) })

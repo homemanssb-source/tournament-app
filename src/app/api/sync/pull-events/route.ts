@@ -8,10 +8,10 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server';
+import { operatorOrCron } from '@/lib/api-auth';
 import { createClient } from '@supabase/supabase-js';
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
@@ -49,6 +49,10 @@ function getRubberCount(teamMatchType: string | null): number {
 
 export async function POST(request: NextRequest) {
   try {
+    // 운영자 로그인 또는 Vercel Cron 만 (그동안 인증 없이 누구나 동기화를 실행할 수 있었음)
+    if (!(await operatorOrCron(request))) {
+      return NextResponse.json({ success: false, error: '로그인이 필요합니다.' }, { status: 401 });
+    }
     const appA = getAppAClient();
     const appB = getAppBServiceClient();
 

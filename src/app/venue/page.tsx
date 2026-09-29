@@ -26,6 +26,8 @@ export default function VenueLoginPage() {
     })
     setLoading(false)
     if (err) { setError(err.message || '경기장 PIN이 올바르지 않습니다.'); return }
+    // 연속 실패 잠금 버전(025b)은 실패를 결과로 돌려준다
+    if (!data?.token) { setError(data?.error || '경기장 PIN이 올바르지 않습니다.'); return }
 
     sessionStorage.setItem('venue_session', JSON.stringify(data))
     router.push('/venue/manage')

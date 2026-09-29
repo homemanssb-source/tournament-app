@@ -4,6 +4,7 @@
 // app_a_connected=true 활성 이벤트 모두 pull-individual + pull-team 호출
 // ============================================================
 import { NextRequest, NextResponse } from 'next/server'
+import { isCronRequest } from '@/lib/api-auth'
 import { createClient } from '@supabase/supabase-js'
 
 function getAppBServiceClient() {
@@ -14,10 +15,9 @@ function getAppBServiceClient() {
 }
 
 export async function GET(request: NextRequest) {
-  // Vercel Cron 인증 (CRON_SECRET 설정 시)
-  const authHeader = request.headers.get('authorization')
+  // Vercel Cron 인증 — CRON_SECRET 이 없으면 항상 거부 (예전엔 없으면 누구나 실행 가능)
   const cronSecret = process.env.CRON_SECRET
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  if (!isCronRequest(request)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   }
 
@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
       try {
         const r = await fetch(origin + path, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cronSecret}` },
           body: JSON.stringify({ event_id: ev.id, app_a_event_id: ev.app_a_event_id }),
         })
         const data = await r.json()

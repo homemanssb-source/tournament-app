@@ -75,6 +75,8 @@ export default function PinPage() {
     })
     setLoading(false)
     if (err) { setError(err.message || 'PIN이 올바르지 않습니다.'); return }
+    // 연속 실패 잠금 버전(025b)은 실패를 결과로 돌려준다
+    if (!data?.success || !data?.token) { setError(data?.error || 'PIN이 올바르지 않습니다.'); return }
 
     const sessionData = { ...data, _savedAt: Date.now() }
     sessionStorage.setItem('pin_session', JSON.stringify(sessionData))
@@ -89,10 +91,8 @@ export default function PinPage() {
     // ✅ PIN 로그인 성공 = 출전 신고 (즉시 check-in)
     //    알림 옵션(허용/건너뛰기/이미한 PIN)과 무관하게 운영자 대시보드에 즉시 반영
     //    fire-and-forget: UX 막지 않음. 단, 실패는 조용히 넘기지 말고 로그로 남긴다.
-    supabase.from('teams').update({
-      checked_in: true,
-      checked_in_at: new Date().toISOString(),
-    }).eq('pin_plain', pin).eq('event_id', selectedEvent).then(({ error }) => {
+    //    (PIN 은 외부에서 조회 불가 — 서버가 세션 토큰으로 같은 PIN 팀 전체를 체크인)
+    supabase.rpc('rpc_pin_check_in', { p_token: data.token }).then(({ error }) => {
       if (error) console.warn('[체크인] 실패:', error.message)
     })
 
@@ -113,11 +113,8 @@ export default function PinPage() {
     let subscribeOk = false
     try {
       subscribeOk = await subscribeWithPin(loginPin, { mode: 'individual', eventId: selectedEvent })
-      const { error: checkinErr } = await supabase
-        .from('teams')
-        .update({ checked_in: true, checked_in_at: new Date().toISOString() })
-        .eq('pin_plain', loginPin)
-        .eq('event_id', selectedEvent)
+      const pinTok = (() => { try { return JSON.parse(sessionStorage.getItem('pin_session') || '{}').token } catch { return null } })()
+      const { error: checkinErr } = await supabase.rpc('rpc_pin_check_in', { p_token: pinTok })
       if (checkinErr) console.warn('[체크인] 실패:', checkinErr.message)
       // ✅ 구독이 실제로 성공했을 때만 '완료' 마킹
       //    (실패해도 마킹하면 다음 로그인부터 알림 프롬프트가 영영 안 떠서 재시도 기회가 사라짐)

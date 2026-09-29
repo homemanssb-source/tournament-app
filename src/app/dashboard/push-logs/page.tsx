@@ -85,7 +85,10 @@ export default function PushLogsPage() {
     if (!eventId) return
     setLoading(true)
     try {
-      const res = await fetch(`/api/push/logs?event_id=${eventId}&limit=200`)
+      const { data: ls } = await supabase.auth.getSession()
+      const res = await fetch(`/api/push/logs?event_id=${eventId}&limit=200`, {
+        headers: { Authorization: `Bearer ${ls.session?.access_token || ''}` },
+      })
       if (!res.ok) throw new Error('조회 실패')
       const data = await res.json()
       setLogs(data.logs || [])

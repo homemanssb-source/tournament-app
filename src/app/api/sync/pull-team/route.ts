@@ -8,11 +8,11 @@
 // ============================================================
 
 import { NextRequest, NextResponse } from 'next/server';
+import { operatorOrCron } from '@/lib/api-auth';
 import { createClient } from '@supabase/supabase-js';
 import { syncTeamEntries, appATeamSource } from '@/lib/team-sync';
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
 };
@@ -37,6 +37,10 @@ function getAppBServiceClient() {
 
 export async function POST(request: NextRequest) {
   try {
+    // 운영자 로그인 또는 Vercel Cron 만 (그동안 인증 없이 누구나 동기화를 실행할 수 있었음)
+    if (!(await operatorOrCron(request))) {
+      return NextResponse.json({ success: false, error: '로그인이 필요합니다.' }, { status: 401 });
+    }
     const { event_id, app_a_event_id, auto_create_divisions = true } = await request.json();
     if (!event_id || !app_a_event_id) {
       return NextResponse.json({ success: false, error: 'event_id와 app_a_event_id가 필요합니다.' }, { status: 400, headers: corsHeaders });
