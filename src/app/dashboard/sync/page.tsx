@@ -19,6 +19,9 @@ function SyncDashboardInner() {
   const [appAEventId, setAppAEventId] = useState('');
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<any>(null);
+  // 앱A에서 삭제됐지만 앱B에 남아 있는 대회 (대회 목록 가져오기 결과로 채워짐)
+  const [orphans, setOrphans] = useState<{ id: string; name: string }[]>([]);
+  const orphanIds = new Set(orphans.map(o => o.id));
 
   useEffect(() => {
     (async () => {
@@ -102,7 +105,9 @@ function SyncDashboardInner() {
       const res = await fetch('/api/sync/pull-events', {
         method: 'POST', headers: await authHeaders(),
       });
-      setSyncResult({ type: 'pull-events', ...(await res.json()) });
+      const json = await res.json();
+      setSyncResult({ type: 'pull-events', ...json });
+      if (json.success) setOrphans(json.orphans || []);
       const { data } = await supabase.from('events')
         .select('id, name, event_type, app_a_event_id, app_a_connected')
         .order('created_at', { ascending: false });
@@ -130,6 +135,13 @@ function SyncDashboardInner() {
           className="w-full bg-indigo-600 text-white py-3 rounded-lg hover:bg-indigo-700 disabled:opacity-50">
           {syncing ? '가져오는 중...' : '앱A 대회 목록 가져오기'}
         </button>
+        {orphans.length > 0 && (
+          <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-sm text-orange-800 space-y-1">
+            <p className="font-semibold">⚠️ 앱A에서 삭제된 대회가 앱B에 남아 있습니다 ({orphans.length}개)</p>
+            {orphans.map(o => <p key={o.id} className="text-xs">· {o.name}</p>)}
+            <p className="text-xs text-orange-700">회원 화면(홈·대회 목록)에도 계속 보이니, 필요 없으면 관리자에게 삭제를 요청하세요.</p>
+          </div>
+        )}
       </div>
 
       <div className="bg-white rounded-lg border p-4">
@@ -139,7 +151,7 @@ function SyncDashboardInner() {
           <option value="">-- 대회 선택 --</option>
           {events.map(ev => (
             <option key={ev.id} value={ev.id}>
-              {ev.name} {ev.app_a_connected ? '(연결됨)' : ''}
+              {ev.name} {orphanIds.has(ev.id) ? '(앱A 삭제됨)' : ev.app_a_connected ? '(연결됨)' : ''}
             </option>
           ))}
         </select>
@@ -149,7 +161,13 @@ function SyncDashboardInner() {
         <>
           <div className="bg-white rounded-lg border p-6 space-y-4">
             <h2 className="font-semibold">앱A 대회 연결</h2>
-            {event?.app_a_connected ? (
+            {orphanIds.has(selectedEventId) ? (
+              <div className="bg-orange-50 rounded-lg p-4">
+                <p className="text-orange-800 text-sm">
+                  ⚠️ 앱A에서 삭제된 대회입니다 - 앱A ID: <code className="bg-orange-100 px-2 py-0.5 rounded">{event?.app_a_event_id}</code>
+                </p>
+              </div>
+            ) : event?.app_a_connected ? (
               <div className="bg-green-50 rounded-lg p-4">
                 <p className="text-green-800 text-sm">
                   연결됨 - 앱A ID: <code className="bg-green-100 px-2 py-0.5 rounded">{event.app_a_event_id}</code>

@@ -194,8 +194,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // 4. 앱A에서 삭제된 대회 — 앱B에는 남아 있으므로 운영자에게 알림만 (자동 삭제하지 않음)
+    const appAIds = new Set(appAEvents.map(ae => ae.event_id));
+    const orphans = (existingEvents || [])
+      .filter(e => e.app_a_event_id && !appAIds.has(e.app_a_event_id))
+      .map(e => ({ id: e.id, name: e.name }));
+
     return NextResponse.json({
       success: true,
+      orphans,
       synced: syncedCount,
       updated: updatedCount,
       skipped: skippedCount,
