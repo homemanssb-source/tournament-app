@@ -22,17 +22,48 @@ function SyncDashboardInner() {
   // 앱A에서 삭제됐지만 앱B에 남아 있는 대회 (대회 목록 가져오기 결과로 채워짐)
   const [orphans, setOrphans] = useState<{ id: string; name: string }[]>([]);
   const orphanIds = new Set(orphans.map(o => o.id));
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [deletingId, setDeletingId] = useState('');
+
+  async function reloadEvents() {
+    const { data } = await supabase
+      .from('events')
+      .select('id, name, event_type, app_a_event_id, app_a_connected')
+      .order('created_at', { ascending: false });
+    setEvents(data || []);
+  }
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase
-        .from('events')
-        .select('id, name, event_type, app_a_event_id, app_a_connected')
-        .order('created_at', { ascending: false });
-      setEvents(data || []);
+      await reloadEvents();
       setLoading(false);
+      // 삭제 버튼은 메인 관리자에게만 (서버에서도 다시 확인)
+      const { data: access } = await supabase.rpc('rpc_my_access');
+      setIsAdmin((access as any)?.role === 'admin');
     })();
   }, []);
+
+  async function handleDeleteOrphan(o: { id: string; name: string }) {
+    const typed = prompt(`앱A에서 삭제된 대회를 앱B에서도 삭제합니다. 되돌릴 수 없습니다.\n팀·경기 등 기록이 있으면 삭제되지 않습니다.\n\n확인을 위해 대회 이름을 그대로 입력하세요:\n${o.name}`);
+    if (typed === null) return;
+    if (typed !== o.name) return alert('대회 이름이 일치하지 않아 취소했습니다.');
+    setDeletingId(o.id);
+    try {
+      const res = await fetch('/api/admin/delete-orphan-event', {
+        method: 'POST', headers: await authHeaders(),
+        body: JSON.stringify({ event_id: o.id, confirm_name: typed }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) return alert('삭제 실패: ' + (json.error || res.status));
+      alert(`삭제했습니다: ${json.name} (부서 ${json.divisions}개)`);
+      setOrphans(prev => prev.filter(x => x.id !== o.id));
+      if (selectedEventId === o.id) setSelectedEventId('');
+      await reloadEvents();
+      window.dispatchEvent(new Event('dashboard_events_changed'));
+    } catch (err: any) {
+      alert('삭제 실패: ' + err.message);
+    } finally { setDeletingId(''); }
+  }
 
   const loadEventData = useCallback(async () => {
     if (!selectedEventId) return;
@@ -108,10 +139,7 @@ function SyncDashboardInner() {
       const json = await res.json();
       setSyncResult({ type: 'pull-events', ...json });
       if (json.success) setOrphans(json.orphans || []);
-      const { data } = await supabase.from('events')
-        .select('id, name, event_type, app_a_event_id, app_a_connected')
-        .order('created_at', { ascending: false });
-      setEvents(data || []);
+      await reloadEvents();
       // ✅ 상단 대회선택 드롭다운(레이아웃)도 갱신되도록 알림
       window.dispatchEvent(new Event('dashboard_events_changed'));
     } catch (err: any) { setSyncResult({ type: 'pull-events', success: false, error: err.message }); }
@@ -138,8 +166,21 @@ function SyncDashboardInner() {
         {orphans.length > 0 && (
           <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-sm text-orange-800 space-y-1">
             <p className="font-semibold">⚠️ 앱A에서 삭제된 대회가 앱B에 남아 있습니다 ({orphans.length}개)</p>
-            {orphans.map(o => <p key={o.id} className="text-xs">· {o.name}</p>)}
-            <p className="text-xs text-orange-700">회원 화면(홈·대회 목록)에도 계속 보이니, 필요 없으면 관리자에게 삭제를 요청하세요.</p>
+            {orphans.map(o => (
+              <div key={o.id} className="flex items-center justify-between gap-2 text-xs">
+                <span>· {o.name}</span>
+                {isAdmin && (
+                  <button onClick={() => handleDeleteOrphan(o)} disabled={!!deletingId}
+                    className="shrink-0 bg-red-600 text-white px-2 py-1 rounded hover:bg-red-700 disabled:opacity-50">
+                    {deletingId === o.id ? '삭제중...' : '삭제'}
+                  </button>
+                )}
+              </div>
+            ))}
+            <p className="text-xs text-orange-700">
+              회원 화면(홈·대회 목록)에도 계속 보입니다.{' '}
+              {isAdmin ? '팀·경기 기록이 없는 대회만 삭제할 수 있습니다.' : '필요 없으면 메인 관리자에게 삭제를 요청하세요.'}
+            </p>
           </div>
         )}
       </div>
