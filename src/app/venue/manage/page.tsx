@@ -19,6 +19,14 @@ interface VenueMatch {
   is_team_tie?: boolean
 }
 
+// 자동 배정 미리보기: 묶음(조 하나 또는 본선 경기 하나) 단위로 코트를 정하고, 확정할 때 저장
+interface VenuePlanBundle { key: string; title: string; court: string; note?: string; items: VenueMatch[] }
+interface VenuePlan {
+  bundles: VenuePlanBundle[]
+  before: Record<string, number>   // 코트별 기존 대기 수
+  hasFinals: boolean; usedHome: boolean
+}
+
 // 정렬된 조 경기에서, 같은 팀이 연달아 나오지 않게 다음 경기를 고름 (대시보드 sortGroupMatches 와 동일)
 function sortGroupMatches(list: VenueMatch[]): VenueMatch[] {
   const rem = [...list], sorted: VenueMatch[] = []
@@ -66,6 +74,8 @@ export default function VenueManagePage() {
   const [allVenueCourtNames, setAllVenueCourtNames] = useState<string[]>([])
   const [assigning, setAssigning] = useState(false)
   const [assignMsg, setAssignMsg] = useState('')
+  const [plan, setPlan]           = useState<VenuePlan | null>(null)
+  const [preferHome, setPreferHome] = useState(true)   // 본선: 그 부서 예선 코트 우선
   const [filterRound, setFilterRound] = useState<string>('ALL')
 
   // ── 날짜 필터 (division.match_date 기반) ──
@@ -180,6 +190,15 @@ export default function VenueManagePage() {
   }, [session, router, groupLabels])
 
   useEffect(() => { loadData() }, [loadData])
+  // 필터가 바뀌면 이전 미리보기는 버림
+  useEffect(() => { setPlan(null) }, [filterDiv, filterRound, dateFilter])
+  // 미리보기 시트가 열려 있는 동안 뒤 화면 스크롤 막기 (모바일)
+  useEffect(() => {
+    if (!plan) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [!!plan])
   useEffect(() => {
     if (!session) return
     const interval = setInterval(loadData, 15000)
@@ -415,55 +434,112 @@ export default function VenueManagePage() {
     await loadData()
   }
 
-  // 자동 배정: 미배정 경기를 부하 적은 코트에 분배
-  async function autoAssign() {
-    if (sessionCourts.length === 0) { setAssignMsg('❌ 이 경기장에 코트가 없습니다.'); return }
+  // ── 자동 배정: ① 미리보기(계획)만 만들고 → ② 확인 후 [이대로 저장] ─────────────
+  //    계획 단계에서는 DB를 건드리지 않음. 조/경기 묶음별로 코트를 바꿔 본 뒤 저장. (대시보드와 같은 방식)
+  function buildPlan(useHome: boolean): VenuePlan | string {
+    if (sessionCourts.length === 0) return '❌ 이 경기장에 코트가 없습니다.'
     const targets = filteredUnassigned
-    if (targets.length === 0) { setAssignMsg('배정할 미배정 경기가 없습니다.'); return }
+    if (targets.length === 0) return '배정할 미배정 경기가 없습니다.'
 
-    setAssigning(true)
+    // 각 코트의 현재 로드 (완료 제외, 날짜 필터 기준)
+    const loadMap: Record<string, number> = {}
+    for (const c of sessionCourts) loadMap[c] = 0
+    for (const m of dateFilteredMatches) {
+      if (m.court && sessionCourts.includes(m.court) && m.status !== 'FINISHED') {
+        loadMap[m.court] = (loadMap[m.court] || 0) + 1
+      }
+    }
+    const before = { ...loadMap }
+
+    // 같은 조는 한 코트에 묶어서 (예선), 조 안에서는 경기번호(=생성) 순, 연속 출전은 피함.
+    // 묶음 순서는 첫 경기 번호 순 = 부서·조 생성 순서(1조→2조…). 본선 등 조 없는 경기는 한 경기씩.
+    const byNum = (a: VenueMatch, b: VenueMatch) =>
+      (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
+    const groups = new Map<string, VenueMatch[]>()
+    for (const m of targets) {
+      const key = m.group_id ? `g:${m.division_id}:${m.group_id}` : `m:${m.id}`
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key)!.push(m)
+    }
+    const ordered = [...groups.entries()]
+      .map(([k, list]) => [k, sortGroupMatches(list.sort(byNum))] as const)
+      .sort((a, b) => byNum(a[1][0], b[1][0]))
+
+    const leastLoaded = (pool: string[]) => pool.reduce((min, c) => loadMap[c] < loadMap[min] ? c : min, pool[0])
+    const bundles: VenuePlanBundle[] = []
+    let usedHome = false
+    for (const [key, list] of ordered) {
+      const first = list[0]
+      let court: string
+      let note: string | undefined
+      if (first.group_id) {
+        // 홈 코트: 같은 조 경기 중 이미 이 경기장 코트에 놓인 게 있으면 그 코트로 (조가 쪼개지지 않게)
+        const placed = dateFilteredMatches.filter(m => m.group_id === first.group_id && m.court && sessionCourts.includes(m.court))
+        const cnt: Record<string, number> = {}
+        for (const m of placed) cnt[m.court!] = (cnt[m.court!] || 0) + 1
+        const home = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0]
+        court = home || leastLoaded(sessionCourts)
+        if (home) note = '홈 코트'
+      } else {
+        // 본선: 그 부서 예선을 치른 (이 경기장) 코트 우선
+        const homeSet = new Set(dateFilteredMatches
+          .filter(m => m.division_id === first.division_id && m.group_id && m.court && sessionCourts.includes(m.court))
+          .map(m => m.court!))
+        const pool = useHome ? sessionCourts.filter(c => homeSet.has(c)) : []
+        if (pool.length > 0) usedHome = true
+        court = leastLoaded(pool.length > 0 ? pool : sessionCourts)
+      }
+      loadMap[court] += list.length
+      const gl = first.group_label || (first.group_id ? groupLabels[first.group_id] : '') || ''
+      const title = first.group_id
+        ? `${first.division_name ? first.division_name + ' ' : ''}${gl || '조'}`
+        : `${first.division_name ? first.division_name + ' ' : ''}${roundLabelKR(first.round)} ${first.match_num || ''}`.trim()
+      bundles.push({ key, title, court, note, items: list })
+    }
+    const hasFinals = bundles.some(b => !b.items[0].group_id)
+    return { bundles, before, hasFinals, usedHome }
+  }
+
+  function autoAssign() {
+    const r = buildPlan(preferHome)
+    if (typeof r === 'string') { setAssignMsg(r); return }
     setAssignMsg('')
+    setPlan(r)
+  }
+
+  // 본선 홈 코트 우선 켜고 끄기 → 미리보기 다시 계산 (사용자가 옮긴 코트는 초기화)
+  function togglePreferHome(v: boolean) {
+    setPreferHome(v)
+    const r = buildPlan(v)
+    setPlan(typeof r === 'string' ? null : r)
+  }
+
+  function movePlanBundle(key: string, court: string) {
+    setPlan(p => p ? { ...p, bundles: p.bundles.map(b => b.key === key ? { ...b, court, note: undefined } : b) } : p)
+  }
+
+  // 미리보기 확정: 묶음 순서대로 각 코트 대기열 맨 뒤에 붙임
+  async function applyPlan() {
+    if (!plan) return
+    setAssigning(true)
     try {
-      // 각 코트의 현재 로드 (완료 제외, 날짜 필터 기준)
-      const loadMap: Record<string, number> = {}
-      for (const c of sessionCourts) loadMap[c] = 0
-      for (const m of dateFilteredMatches) {
-        if (m.court && sessionCourts.includes(m.court) && m.status !== 'FINISHED') {
-          loadMap[m.court] = (loadMap[m.court] || 0) + 1
-        }
-      }
-
-      // ✅ 같은 조는 한 코트에 묶어서 (예선), 조 안에서는 경기번호(=생성) 순, 연속 출전은 피함 (대시보드와 동일).
-      //    묶음 순서는 첫 경기 번호 순 = 부서·조 생성 순서(1조→2조…). 본선 등 조 없는 경기는 한 경기씩.
-      const byNum = (a: VenueMatch, b: VenueMatch) =>
-        (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
-      const bundles = new Map<string, VenueMatch[]>()
-      for (const m of targets) {
-        const key = m.group_id ? `g:${m.division_id}:${m.group_id}` : `m:${m.id}`
-        if (!bundles.has(key)) bundles.set(key, [])
-        bundles.get(key)!.push(m)
-      }
-      const ordered = [...bundles.values()]
-        .map(list => sortGroupMatches(list.sort(byNum)))
-        .sort((a, b) => byNum(a[0], b[0]))
-
-      let successCount = 0
+      const cur = new Map(matches.map(m => [m.id, m]))
+      let successCount = 0, skipped = 0, failed = 0
       const touchedCourts = new Set<string>()
-      for (const bundle of ordered) {
-        // 남은 경기 가장 적은 코트 (같으면 앞 번호 코트)
-        const court = sessionCourts.reduce((min, c) =>
-          loadMap[c] < loadMap[min] ? c : min, sessionCourts[0])
-        for (const item of bundle) {
-          const err = await assignItem(item, court)
-          if (!err) {
-            loadMap[court]++
-            successCount++
-            touchedCourts.add(court)
-          }
+      for (const b of plan.bundles) {
+        for (const item of b.items) {
+          // 미리보기 보는 사이에 다른 곳에서 이미 배정됐으면 건너뜀
+          if (cur.get(item.id)?.court) { skipped++; continue }
+          const err = await assignItem(item, b.court)
+          if (err) { failed++; continue }
+          successCount++
+          touchedCourts.add(b.court)
         }
       }
-      setAssignMsg(`✅ ${successCount}/${targets.length}경기 자동 배정 완료`)
+      const extra = [skipped ? `이미 배정돼 건너뜀 ${skipped}` : '', failed ? `실패 ${failed}` : ''].filter(Boolean).join(', ')
+      setAssignMsg(`${failed ? '❌' : '✅'} ${successCount}경기 자동 배정 완료${extra ? ` (${extra})` : ''}`)
       setTimeout(() => setAssignMsg(''), 4000)
+      setPlan(null)
       // 새로 배정된 코트들에 일괄 알림 발송
       for (const c of touchedCourts) notifyCourt(c, 'court_changed')
       await loadData()
@@ -635,7 +711,7 @@ export default function VenueManagePage() {
                   </div>
                   <button onClick={autoAssign} disabled={assigning || sessionCourts.length === 0}
                     className="text-xs bg-amber-600 hover:bg-amber-700 disabled:opacity-40 text-white px-3 py-2 rounded-lg font-bold whitespace-nowrap">
-                    {assigning ? '배정중...' : '🎯 자동 배정'}
+                    {assigning ? '배정중...' : '🎯 자동 배정 미리보기'}
                   </button>
                 </div>
 
@@ -808,6 +884,94 @@ export default function VenueManagePage() {
           </div>
         )}
       </main>
+
+      {/* 자동 배정 미리보기 — 모바일: 아래에서 올라오는 시트 / PC: 가운데 창 */}
+      {plan && (() => {
+        const total = plan.bundles.reduce((n, b) => n + b.items.length, 0)
+        const usedCourts = sessionCourts.filter(c => plan.bundles.some(b => b.court === c))
+        const emptyCourts = sessionCourts.filter(c => !usedCourts.includes(c))
+        return (
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40"
+            onClick={() => { if (!assigning) setPlan(null) }}>
+            <div className="bg-white w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl max-h-[88vh] flex flex-col shadow-xl"
+              onClick={e => e.stopPropagation()}>
+              {/* 헤더 */}
+              <div className="px-4 pt-2 pb-3 border-b">
+                <div className="mx-auto w-10 h-1 rounded-full bg-stone-300 mb-2 sm:hidden" />
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-base">👀 자동 배정 미리보기 <span className="text-amber-600">{total}경기</span></h3>
+                  <button aria-label="닫기" disabled={assigning} onClick={() => setPlan(null)}
+                    className="w-10 h-10 -mr-2 flex items-center justify-center text-stone-400 text-xl">✕</button>
+                </div>
+                <p className="text-xs text-amber-700">아직 저장 안 됨 · 코트를 바꾸려면 오른쪽 칸을 누르세요</p>
+                {plan.hasFinals && (
+                  <label className="mt-2 flex items-center gap-2 text-sm text-stone-600">
+                    <input type="checkbox" className="w-5 h-5 accent-amber-600" checked={preferHome}
+                      onChange={e => togglePreferHome(e.target.checked)} disabled={assigning} />
+                    본선은 그 부서 예선 코트 우선
+                  </label>
+                )}
+              </div>
+
+              {/* 코트별 목록 */}
+              <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-3 space-y-3">
+                {usedCourts.map(c => {
+                  const bs = plan.bundles.filter(b => b.court === c)
+                  const added = bs.reduce((n, b) => n + b.items.length, 0)
+                  return (
+                    <section key={c} className="rounded-xl border border-stone-200 overflow-hidden">
+                      <div className="flex items-center justify-between px-3 py-2 bg-[#2d5016] text-white">
+                        <span className="font-bold">{c}</span>
+                        <span className="text-xs text-white/70">기존 {plan.before[c] || 0} + 새 {added}</span>
+                      </div>
+                      <div className="divide-y divide-stone-100">
+                        {bs.map(b => (
+                          <div key={b.key} className="px-3 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-semibold truncate">
+                                  {b.title}
+                                  {b.note && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-green-50 text-green-700 border border-green-200 align-middle">{b.note}</span>}
+                                </p>
+                                <p className="text-[11px] text-stone-400">{b.items.length}경기</p>
+                              </div>
+                              {/* 16px 이상 — iOS에서 누를 때 화면 확대 방지 */}
+                              <select value={b.court} onChange={e => movePlanBundle(b.key, e.target.value)} disabled={assigning}
+                                className="h-11 min-w-[6.5rem] border border-stone-300 rounded-lg px-2 text-base bg-white flex-shrink-0">
+                                {sessionCourts.map(x => <option key={x} value={x}>{x}</option>)}
+                              </select>
+                            </div>
+                            <ul className="mt-1.5 space-y-0.5">
+                              {b.items.map(it => (
+                                <li key={it.id} className="text-xs text-stone-500 truncate">· {it.team_a_name || 'TBD'} vs {it.team_b_name || 'TBD'}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  )
+                })}
+                {emptyCourts.length > 0 && (
+                  <p className="text-xs text-stone-400 px-1">
+                    새 배정 없음: {emptyCourts.map(c => `${c}(대기 ${plan.before[c] || 0})`).join(', ')}
+                  </p>
+                )}
+              </div>
+
+              {/* 하단 버튼 — 아이폰 홈 바 영역 피함 */}
+              <div className="border-t px-3 pt-3 flex gap-2" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
+                <button onClick={() => setPlan(null)} disabled={assigning}
+                  className="flex-1 h-12 rounded-xl border border-stone-300 text-stone-600 font-medium">취소</button>
+                <button onClick={applyPlan} disabled={assigning}
+                  className="flex-[2] h-12 rounded-xl bg-amber-600 active:bg-amber-700 disabled:opacity-50 text-white font-bold">
+                  {assigning ? '저장 중...' : `✅ 이대로 저장 (${total}경기)`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── 점수 입력 모달 */}
       {editMatch && (
