@@ -34,6 +34,13 @@ interface Venue {
   court_count: number; courts: string[]; pin_plain: string
 }
 type CourtZones = Record<string, { group: string[]; finals: string[] }>
+// 자동 배정 미리보기: 묶음(조 하나 또는 경기 하나) 단위로 코트를 정하고, 확정할 때 저장
+interface PlanBundle {
+  key: string; kind: 'match' | 'tie'; title: string; court: string
+  note?: string                              // '홈 코트' 등
+  items: { id: string; text: string }[]      // 코트 안에서 이 순서대로 붙음
+}
+interface AutoPlan { title: string; bundles: PlanBundle[]; note?: string }
 type StageKey = 'GROUP' | 'R32' | 'R16' | 'QF' | 'SF' | 'F' | 'ALL_FINALS' | '128강' | '64강' | '32강' | '16강' | '8강' | '4강' | '결승'
 
 const STAGE_TABS: { key: StageKey; label: string }[] = [
@@ -180,7 +187,11 @@ export default function CourtsPage() {
   const [autoStage, setAutoStage]   = useState<StageKey | string>('GROUP')
   const [autoCourts, setAutoCourts] = useState<string[]>([])
   const [assigning, setAssigning]   = useState(false)
+  const [plan, setPlan]             = useState<AutoPlan | null>(null)
+  const [preferHome, setPreferHome] = useState(true)   // 본선: 그 부서 예선 코트 우선
   useEffect(() => { setAutoCourts([]) }, [selectedVenue])
+  // 조건이 바뀌면 이전 미리보기는 버림 (다시 만들어야 함)
+  useEffect(() => { setPlan(null) }, [autoDiv, autoStage, autoCourts, preferHome, eventId])
 
   const [courtZones, setCourtZones] = useState<CourtZones>({})
   const [zoneTab, setZoneTab]       = useState<'group' | 'finals'>('group')
@@ -485,142 +496,177 @@ export default function CourtsPage() {
     , pool[0])
   }
 
-  async function autoAssignByDivision() {
-    if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
-    if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
-    const _isTeamDiv = ties.some(t => t.division_id === autoDiv && !t.is_bye)
-    console.log('[배정] autoDiv:', autoDiv, 'autoStage:', autoStage, 'ties:', ties.length, '_isTeamDiv:', _isTeamDiv, 'autoCourts:', autoCourts)
-    console.log('[배정] ties sample:', ties.slice(0,3).map(t => ({ id:t.id, div:t.division_id, round:t.round, is_bye:t.is_bye, court:(t as any).court_number })))
-    if (autoDiv === 'TEAM' || _isTeamDiv) {
-      const selectedRound = TEAM_STAGE_TABS.find(t => t.key === autoStage)?.round || 'group'
-      console.log('[배정] selectedRound:', selectedRound)
-      const divTies = ties.filter(t =>
-        !t.is_bye && !(t as any).court_number && t.status !== 'completed' &&
-        (autoDiv === 'TEAM' ? true : t.division_id === autoDiv) &&
-        t.round === selectedRound
-      )
-      console.log('[배정] divTies:', divTies.length)
-      if (divTies.length === 0) { setMsg('배정할 경기가 없습니다.'); return }
-      setAssigning(true)
-      try {
-        // 조별로 묶어서 같은 코트에 배정
-        const byGroup = new Map<string, TieWithClubs[]>()
-        for (const t of divTies) {
-          const key = (t as any)._group_label || (t as any).group_id || 'none'
-          if (!byGroup.has(key)) byGroup.set(key, [])
-          byGroup.get(key)!.push(t)
-        }
-        // ✅ 조 이름 순(1조→2조…)으로, 남은 경기 가장 적은 코트에 조째로
-        const groups = [...byGroup.entries()].sort((a, b) => compareGroupKey(a[0], b[0]))
-        const pool = sortByCourtList(autoCourts)
-        const load = getPendingLoad(pool, autoDiv)
-        const updates: { id:string; courtNum:number; courtName:string; order:number }[] = []
-        for (const [, groupTies] of groups) {
-          const court = getLeastLoaded(pool, load)
-          load[court] += groupTies.length
-          const courtNum = getGlobalCourtNumber(court, allCourtNames)
-          for (const t of [...groupTies].sort((a, b) => ((a as any).tie_order ?? 0) - ((b as any).tie_order ?? 0))) {
-            const nextOrder = (courtOrderRef.current[court] || 0) + 1
-            courtOrderRef.current[court] = nextOrder
-            updates.push({ id:t.id, courtNum, courtName:court, order:nextOrder })
-          }
-        }
-        for (const u of updates) {
-          await supabase.from('ties').update({ court_number:u.courtNum, court_order:u.order }).eq('id', u.id)
-        }
-        const divName = divisions.find(d => d.id === autoDiv)?.name || '단체전'
-        const summary = autoCourts.map(c => { const cnt = updates.filter(u => u.courtName===c).length; return cnt>0?`${c}:${cnt}경기`:'' }).filter(Boolean).join(' | ')
-        setMsg(`✅ [${divName}] ${TEAM_STAGE_LABEL[selectedRound]} ${updates.length}경기 배정 완료 — ${summary}`)
-        sendBulkNotify(updates.map(u => u.courtName))
-        loadTies()
-      } finally { setAssigning(false) }
-      return
+  // ── 자동 배정: ① 계획(미리보기)만 만들고 → ② 확인 후 [이대로 저장] ─────────────
+  //    계획 단계에서는 DB를 건드리지 않음. 조/경기 묶음별로 코트를 바꿔 본 뒤 저장.
+
+  // 가장 많이 나온 코트 (홈 코트 판정용)
+  function mostCommonCourt(courts: string[]): string | null {
+    const cnt: Record<string, number> = {}
+    for (const c of courts) cnt[c] = (cnt[c] || 0) + 1
+    let best: string | null = null
+    for (const c of Object.keys(cnt)) if (!best || cnt[c] > cnt[best]) best = c
+    return best
+  }
+  // ② 홈 코트: 따로 저장하지 않고 배정 데이터에서 계산 — 그 부서 예선이 놓인 코트들
+  function divisionHomeCourts(divId: string): Set<string> {
+    const s = new Set<string>()
+    for (const m of matchesRef.current) if (m.division_id === divId && m.stage === 'GROUP' && m.court) s.add(m.court)
+    const allCN = venuesRef.current.flatMap(v => venueCourts(v))
+    for (const t of tiesRef.current) {
+      const cn = (t as any).court_number
+      if (t.division_id === divId && t.round === 'group' && cn) s.add(globalCourtNumToName(cn, allCN, venuesRef.current))
     }
-    setAssigning(true); setMsg('')
-    try {
-      if      (autoStage === 'GROUP')       await assignGroup()
-      else if (autoStage === 'ALL_FINALS')  await assignAllFinals()
-      else                                  await assignFinals(autoStage)
-    } finally { setAssigning(false) }
+    return s
+  }
+  // 본선 코트 풀: 구역이 지정돼 있으면 구역 그대로, 아니면 (선택 코트 중) 그 부서 예선 코트 우선
+  function finalsPool(divId: string, round: string, pool: string[]): { pool: string[]; home: boolean } {
+    const zoneKey = ZONE_FINALS.has(round) ? 'finals' : 'group'
+    if (!preferHome || (courtZones[divId]?.[zoneKey] || []).length > 0) return { pool, home: false }
+    const home = divisionHomeCourts(divId)
+    const homePool = pool.filter(c => home.has(c))
+    return homePool.length > 0 ? { pool: homePool, home: true } : { pool, home: false }
+  }
+  function matchText(m: MatchSlim): string {
+    return `${m.team_a_name || 'TBD'} vs ${m.team_b_name || 'TBD'}`
   }
 
-  async function assignGroup() {
+  function buildGroupPlan(divName: string): AutoPlan | string {
     const targets = matches.filter(m => m.division_id === autoDiv && m.stage === 'GROUP' && !m.court && m.status !== 'FINISHED')
-    if (targets.length === 0) { setMsg('배정할 예선 경기가 없습니다.'); return }
+    if (targets.length === 0) return '배정할 예선 경기가 없습니다.'
     const pool = getCourtPool(autoDiv, 'group')
     const byGroup = new Map<string, MatchSlim[]>()
     for (const m of targets) { const k = m.group_label || 'none'; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k)!.push(m) }
-    // ✅ 조 이름 순(1조→2조…)으로, 같은 날 남은 경기가 가장 적은 코트에 조째로 배정
-    const groups = [...byGroup.entries()].sort((a, b) => compareGroupKey(a[0], b[0]))
+    // 조 이름 순(1조→2조…)으로, 같은 날 남은 경기가 가장 적은 코트에 조째로
     const load = getPendingLoad(pool, autoDiv)
-    const updates: { id: string; court: string; court_order: number }[] = []
-    for (const [, groupMatches] of groups) {
-      const court = getLeastLoaded(pool, load)
-      load[court] += groupMatches.length
-      for (const m of sortGroupMatches(groupMatches)) {
-        const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
-        updates.push({ id:m.id, court, court_order:nextOrder })
-      }
+    const bundles: PlanBundle[] = []
+    for (const [label, list] of [...byGroup.entries()].sort((a, b) => compareGroupKey(a[0], b[0]))) {
+      // ② 이 조 경기 중 이미 코트에 놓인 게 있으면 그 코트로 (남은 경기만 다시 배정해도 조가 안 쪼개짐)
+      const home = label === 'none' ? null : mostCommonCourt(matchesRef.current
+        .filter(m => m.division_id === autoDiv && m.stage === 'GROUP' && m.group_label === label && m.court).map(m => m.court!))
+      const court = home || getLeastLoaded(pool, load)
+      load[court] = (load[court] || 0) + list.length
+      bundles.push({ key:`g:${label}`, kind:'match', title: label === 'none' ? '조 없음' : label, court,
+        note: home ? '홈 코트' : undefined, items: sortGroupMatches(list).map(m => ({ id:m.id, text:matchText(m) })) })
     }
-    for (const u of updates) await supabase.from('matches').update({ court:u.court, court_order:u.court_order }).eq('id', u.id)
-    const divName = divisions.find(d => d.id === autoDiv)?.name || ''
-    const summary = pool.map(c => { const cnt = updates.filter(u => u.court === c).length; return cnt > 0 ? `${c}:${cnt}경기` : '' }).filter(Boolean).join(' | ')
-    setMsg(`✅ [${divName}] 예선 ${updates.length}경기 배정 완료 — ${summary}`)
-    sendBulkNotify(updates.map(u => u.court))
-    loadMatches()
+    return { title:`[${divName}] 예선`, bundles }
   }
 
-  async function assignFinals(round: string) {
-    const stageVal = ROUND_TO_STAGE[round] || 'FINALS'
-    const raw = matches.filter(m => m.division_id === autoDiv && m.stage === stageVal && m.round === round && !m.court && m.status !== 'FINISHED')
-    if (raw.length === 0) { setMsg(`배정할 ${STAGE_LABEL[round] || round} 경기가 없습니다.`); return }
-    // ✅ 양쪽 확정 경기 먼저, TBD 나중에
-    const targets = [
-      ...raw.filter(m => m.team_a_id && m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
-      ...raw.filter(m => !m.team_a_id || !m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
-    ]
-    const pool = getCourtPool(autoDiv, round)
+  function buildFinalsPlan(divName: string, rounds: string[]): AutoPlan | string {
     const currentMatches = [...matchesRef.current]
-    const updates: { id: string; court: string; court_order: number }[] = []
-    for (const m of targets) {
-      const court = getSmartCourt(pool, currentMatches)
-      const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
-      updates.push({ id:m.id, court, court_order:nextOrder })
-      // 스냅샷에 반영해서 다음 경기 배정 시 코트 상태 반영
-      currentMatches.push({ ...m, court, court_order:nextOrder, status:'PENDING' })
-    }
-    for (const u of updates) await supabase.from('matches').update({ court:u.court, court_order:u.court_order }).eq('id', u.id)
-    const divName = divisions.find(d => d.id === autoDiv)?.name || ''
-    setMsg(`✅ [${divName}] ${STAGE_LABEL[round] || round} ${updates.length}경기 배정 완료`)
-    sendBulkNotify(updates.map(u => u.court))
-    loadMatches()
-  }
-
-  async function assignAllFinals() {
-    const divName = divisions.find(d => d.id === autoDiv)?.name || ''; let total = 0
-    const currentMatches = [...matchesRef.current]
-    for (const round of ['128강','64강','32강','16강','8강','4강','결승']) {
-      const pool = getCourtPool(autoDiv, round)
-      const raw  = matches.filter(m => m.division_id === autoDiv && m.stage === (ROUND_TO_STAGE[round]||'FINALS') && m.round === round && !m.court && m.status !== 'FINISHED')
+    const bundles: PlanBundle[] = []
+    let usedHome = false
+    const byNum = (a: MatchSlim, b: MatchSlim) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
+    for (const round of rounds) {
+      const raw = matches.filter(m => m.division_id === autoDiv && m.stage === (ROUND_TO_STAGE[round] || 'FINALS') && m.round === round && !m.court && m.status !== 'FINISHED')
       if (raw.length === 0) continue
-      // ✅ 양쪽 확정 경기 먼저, TBD 나중에
+      // 양쪽 확정 경기 먼저, TBD 나중에 (각각 경기번호 순)
       const targets = [
-        ...raw.filter(m => m.team_a_id && m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
-        ...raw.filter(m => !m.team_a_id || !m.team_b_id).sort((a, b) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })),
+        ...raw.filter(m => m.team_a_id && m.team_b_id).sort(byNum),
+        ...raw.filter(m => !m.team_a_id || !m.team_b_id).sort(byNum),
       ]
+      const { pool, home } = finalsPool(autoDiv, round, getCourtPool(autoDiv, round))
+      usedHome = usedHome || home
       for (const m of targets) {
         const court = getSmartCourt(pool, currentMatches)
-        const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
-        await supabase.from('matches').update({ court, court_order:nextOrder }).eq('id', m.id)
         // 스냅샷에 반영해서 다음 경기 배정 시 코트 상태 반영
-        currentMatches.push({ ...m, court, court_order:nextOrder, status:'PENDING' })
-        total++
+        currentMatches.push({ ...m, court, status:'PENDING' })
+        bundles.push({ key:`m:${m.id}`, kind:'match', title:`${STAGE_LABEL[round] || round} ${m.match_num}`, court, items:[{ id:m.id, text:matchText(m) }] })
       }
     }
-    if (total === 0) { setMsg(`[${divName}] 배정할 본선 경기가 없습니다.`); return }
-    setMsg(`✅ [${divName}] 전체 본선 ${total}경기 미리배정 완료`)
-    sendBulkNotify([...new Set(currentMatches.filter(m => m.court).map(m => m.court!))])
-    loadMatches()
+    if (bundles.length === 0) return rounds.length > 1 ? '배정할 본선 경기가 없습니다.' : `배정할 ${STAGE_LABEL[rounds[0]] || rounds[0]} 경기가 없습니다.`
+    const label = rounds.length > 1 ? '전체 본선' : (STAGE_LABEL[rounds[0]] || rounds[0])
+    return { title:`[${divName}] ${label}`, bundles, note: usedHome ? '예선 치른 코트 우선' : undefined }
+  }
+
+  function buildTiePlan(divName: string): AutoPlan | string {
+    const selectedRound = TEAM_STAGE_TABS.find(t => t.key === autoStage)?.round || 'group'
+    const divTies = ties.filter(t =>
+      !t.is_bye && !(t as any).court_number && t.status !== 'completed' &&
+      (autoDiv === 'TEAM' ? true : t.division_id === autoDiv) &&
+      t.round === selectedRound
+    ).sort((a, b) => ((a as any).tie_order ?? 0) - ((b as any).tie_order ?? 0))
+    if (divTies.length === 0) return '배정할 경기가 없습니다.'
+    const allCN = venuesRef.current.flatMap(v => venueCourts(v))
+    const tieText = (t: TieWithClubs) => `${t.club_a?.name || 'TBD'} vs ${t.club_b?.name || 'TBD'}`
+    const groupKey = (t: TieWithClubs): string => (t as any)._group_label || (t as any).group_id || 'none'
+    // 본선은 그 부서 예선 코트 우선 (단체전은 구역 설정 미적용 — 기존과 동일)
+    const { pool, home: usedHome } = selectedRound === 'group'
+      ? { pool: sortByCourtList(autoCourts), home: false }
+      : finalsPool(autoDiv, 'finals', sortByCourtList(autoCourts))
+    const load = getPendingLoad(pool, autoDiv)
+    const byGroup = new Map<string, TieWithClubs[]>()
+    for (const t of divTies) {
+      // 조 없는 경기(본선)는 한 경기씩 따로 — 예전처럼 전부 한 코트에 몰리지 않게
+      const k = groupKey(t) === 'none' ? `tie:${t.id}` : groupKey(t)
+      if (!byGroup.has(k)) byGroup.set(k, [])
+      byGroup.get(k)!.push(t)
+    }
+    const entries = [...byGroup.entries()]
+    if (selectedRound === 'group') entries.sort((a, b) => compareGroupKey(a[0], b[0]))
+    const bundles: PlanBundle[] = []
+    for (const [k, list] of entries) {
+      const single = k.startsWith('tie:')
+      // ② 같은 조 경기 중 이미 코트가 있는 게 있으면 그 코트로
+      const home = single ? null : mostCommonCourt(tiesRef.current
+        .filter(t => groupKey(t) === k && (t as any).court_number && (autoDiv === 'TEAM' || t.division_id === autoDiv))
+        .map(t => globalCourtNumToName((t as any).court_number, allCN, venuesRef.current)))
+      const court = home || getLeastLoaded(pool, load)
+      load[court] = (load[court] || 0) + list.length
+      bundles.push({ key:`t:${k}`, kind:'tie', court, note: home ? '홈 코트' : undefined,
+        title: single ? `${TEAM_STAGE_LABEL[selectedRound] || selectedRound} ${(list[0] as any).tie_order ?? ''}`.trim() : k,
+        items: list.map(t => ({ id:t.id, text:tieText(t) })) })
+    }
+    return { title:`[${divName}] ${TEAM_STAGE_LABEL[selectedRound] || selectedRound}`, bundles, note: usedHome ? '예선 치른 코트 우선' : undefined }
+  }
+
+  function autoAssignByDivision() {
+    if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
+    if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
+    const isTeam = autoDiv === 'TEAM' || ties.some(t => t.division_id === autoDiv && !t.is_bye)
+    const divName = divisions.find(d => d.id === autoDiv)?.name || (isTeam ? '단체전' : '')
+    const r = isTeam                ? buildTiePlan(divName)
+      : autoStage === 'GROUP'       ? buildGroupPlan(divName)
+      : autoStage === 'ALL_FINALS'  ? buildFinalsPlan(divName, ['128강','64강','32강','16강','8강','4강','결승'])
+      :                               buildFinalsPlan(divName, [autoStage])
+    if (typeof r === 'string') { setMsg(r); setPlan(null); return }
+    setMsg(''); setPlan(r)
+  }
+
+  function movePlanBundle(key: string, court: string) {
+    setPlan(p => p ? { ...p, bundles: p.bundles.map(b => b.key === key ? { ...b, court, note: undefined } : b) } : p)
+  }
+
+  // ③ 미리보기 확정: 묶음 순서대로 각 코트 대기열 맨 뒤에 붙임
+  async function applyPlan() {
+    if (!plan) return
+    setAssigning(true)
+    try {
+      const curM = new Map(matchesRef.current.map(m => [m.id, m]))
+      const curT = new Map(tiesRef.current.map(t => [t.id, t]))
+      const perCourt: Record<string, number> = {}
+      let saved = 0, skipped = 0, failed = 0
+      for (const b of plan.bundles) {
+        for (const it of b.items) {
+          // 미리보기 보는 사이에 다른 곳에서 이미 배정됐으면 건너뜀
+          const already = b.kind === 'tie' ? (curT.get(it.id) as any)?.court_number : curM.get(it.id)?.court
+          if (already) { skipped++; continue }
+          const nextOrder = (courtOrderRef.current[b.court] || 0) + 1
+          const { error } = b.kind === 'tie'
+            ? await supabase.from('ties').update({ court_number:getGlobalCourtNumber(b.court, allCourtNames), court_order:nextOrder }).eq('id', it.id)
+            : await supabase.from('matches').update({ court:b.court, court_order:nextOrder }).eq('id', it.id)
+          if (error) { failed++; continue }
+          courtOrderRef.current[b.court] = nextOrder
+          perCourt[b.court] = (perCourt[b.court] || 0) + 1
+          saved++
+        }
+      }
+      const summary = sortByCourtList(Object.keys(perCourt)).map(c => `${c}:${perCourt[c]}경기`).join(' | ')
+      const extra = [skipped ? `이미 배정돼 건너뜀 ${skipped}` : '', failed ? `실패 ${failed}` : ''].filter(Boolean).join(', ')
+      setMsg(`${failed ? '⚠️' : '✅'} ${plan.title} ${saved}경기 배정 완료${summary ? ' — ' + summary : ''}${extra ? ` (${extra})` : ''}`)
+      sendBulkNotify(Object.keys(perCourt))
+      setPlan(null)
+      loadMatches(); loadTies()
+    } finally { setAssigning(false) }
   }
 
   async function assignItemToCourt(itemId: string, court: string) {
@@ -1002,9 +1048,66 @@ export default function CourtsPage() {
         <div className="flex items-center gap-3 flex-wrap">
           <button onClick={autoAssignByDivision} disabled={!autoDiv || autoCourts.length===0 || assigning}
             className="bg-tennis-600 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-tennis-700 disabled:opacity-50 flex items-center gap-2">
-            {assigning ? <><span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />배정 중...</> : `🎯 ${autoDiv ? (teamDivIds.has(autoDiv) ? TEAM_STAGE_LABEL[autoStage]||'' : STAGE_LABEL[autoStage]||'') : ''} 자동 배정`}
+            {`🎯 ${autoDiv ? (teamDivIds.has(autoDiv) ? TEAM_STAGE_LABEL[autoStage]||'' : STAGE_LABEL[autoStage]||'') : ''} 자동 배정 미리보기`}
           </button>
+          <label className="flex items-center gap-1.5 text-xs text-stone-600 cursor-pointer">
+            <input type="checkbox" checked={preferHome} onChange={e => setPreferHome(e.target.checked)} />
+            본선은 그 부서 예선 코트 우선 <span className="text-stone-400">(본선 구역 미지정 시)</span>
+          </label>
         </div>
+
+        {/* ③ 미리보기 — 저장 전 코트별 배정 확인, 조/경기 단위로 코트 변경 가능 */}
+        {plan && (() => {
+          const planCourts = sortByCourtList([...new Set([...autoCourts, ...plan.bundles.map(b => b.court)])])
+          const before = getPendingLoad(planCourts, autoDiv)
+          const total = plan.bundles.reduce((n, b) => n + b.items.length, 0)
+          return (
+            <div className="border-2 border-amber-300 bg-amber-50 rounded-xl p-3 space-y-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-bold">👀 미리보기 — {plan.title} {total}경기</span>
+                {plan.note && <span className="text-xs px-2 py-0.5 rounded bg-white border text-stone-600">{plan.note}</span>}
+                <span className="text-xs text-amber-700">아직 저장 안 됨 · 코트를 바꾸려면 각 조/경기 옆 선택칸에서 변경</span>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {planCourts.map(c => {
+                  const bs = plan.bundles.filter(b => b.court === c)
+                  const added = bs.reduce((n, b) => n + b.items.length, 0)
+                  return (
+                    <div key={c} className={`bg-white rounded-lg border p-2 ${added === 0 ? 'opacity-60' : ''}`}>
+                      <div className="flex justify-between items-baseline text-xs font-bold mb-1">
+                        <span>{c}</span>
+                        <span className="text-stone-400 font-normal">기존 {before[c] || 0} + 새 {added}</span>
+                      </div>
+                      {bs.length === 0 ? <p className="text-xs text-stone-300">—</p> : bs.map(b => (
+                        <div key={b.key} className="border-t first:border-t-0 py-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-semibold">{b.title}</span>
+                            {b.note && <span className="text-[10px] px-1 rounded bg-green-50 text-green-700 border border-green-200">{b.note}</span>}
+                            <select value={b.court} onChange={e => movePlanBundle(b.key, e.target.value)}
+                              className="ml-auto border rounded px-1 py-0.5 text-xs bg-white">
+                              {[...new Set([...filteredCourtNames, b.court])].map(x => <option key={x} value={x}>{x}</option>)}
+                            </select>
+                          </div>
+                          <ul className="text-[11px] text-stone-500 mt-0.5 space-y-0.5">
+                            {b.items.map(it => <li key={it.id} className="truncate">· {it.text}</li>)}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={applyPlan} disabled={assigning}
+                  className="bg-tennis-600 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-tennis-700 disabled:opacity-50 flex items-center gap-2">
+                  {assigning ? <><span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />저장 중...</> : '✅ 이대로 저장'}
+                </button>
+                <button onClick={() => setPlan(null)} disabled={assigning}
+                  className="px-4 py-2 rounded-lg text-sm border border-stone-300 text-stone-600 hover:bg-stone-50">취소</button>
+              </div>
+            </div>
+          )
+        })()}
 
         {/* 코트 구역 설정 (접기) */}
         <div className="border-t pt-3">
