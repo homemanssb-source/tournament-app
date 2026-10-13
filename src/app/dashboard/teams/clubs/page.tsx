@@ -216,11 +216,20 @@ export default function ClubsPage() {
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">🏅 단체팀 등록/관리</h1>
+        <h1 className="text-2xl font-bold">🏅 클럽·시드 관리</h1>
         <span className="text-sm text-gray-500">
           {clubs.length}팀 등록
           {config?.team_member_limit ? ` · 선수 제한: ${config.team_member_limit}명` : ''}
         </span>
+      </div>
+
+      {/* 앱A 연동과의 관계 안내 — 클럽·선수 등록은 보통 연동으로 */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800 space-y-1">
+        <p>💡 클럽·선수 등록은 보통 <a href="/dashboard/sync" className="underline font-medium">앱A 연동</a>으로 가져옵니다.
+          <b> 시드</b>와 <b>빈 오더 허용</b>은 여기서만 정할 수 있습니다.</p>
+        <p className="text-xs text-blue-700">
+          다시 연동하면 클럽 이름·주장·주장 PIN·선수 명단이 앱A 기준으로 맞춰집니다 — 여기서 고친 PIN이나 앱A에 없는 선수는 되돌아가거나 빠질 수 있어요(이미 경기에 나온 선수는 유지). 여기서 직접 추가한 클럽은 지워지지 않습니다.
+        </p>
       </div>
 
       {/* 부서 탭 */}

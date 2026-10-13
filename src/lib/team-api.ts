@@ -59,28 +59,6 @@ export async function fetchClubMembers(clubId: string): Promise<ClubMember[]> {
   return data || [];
 }
 
-export async function createClub(
-  eventId: string,
-  name: string,
-  captainName?: string,
-  captainPin?: string,
-  seedNumber?: number | null,
-): Promise<Club> {
-  const { data, error } = await supabase
-    .from('clubs')
-    .insert({
-      event_id: eventId,
-      name,
-      captain_name: captainName || null,
-      captain_pin: captainPin || null,
-      seed_number: seedNumber ?? null,
-    })
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
-
 export async function updateClub(
   clubId: string,
   updates: Partial<Pick<Club, 'name' | 'captain_name' | 'captain_pin' | 'seed_number'>>,
@@ -397,29 +375,6 @@ export async function setManualRank(
     p_club_id: clubId,
     p_rank: rank,
     p_notes: notes || null,
-  });
-  if (error) throw error;
-  return data as RpcResult;
-}
-
-// ✅ divisionId 추가
-export async function generateTeamTournament(
-  eventId: string,
-  seededClubs?: { club_id: string; seed_number: number }[],
-  divisionId?: string,
-): Promise<RpcResult> {
-  const { data, error } = await supabase.rpc('rpc_generate_team_tournament', {
-    p_event_id: eventId,
-    p_division_id: divisionId || null,
-    p_seeded_clubs: seededClubs || [],
-  });
-  if (error) throw error;
-  return data as RpcResult;
-}
-
-export async function advanceTournamentWinner(tieId: string): Promise<RpcResult> {
-  const { data, error } = await supabase.rpc('rpc_advance_tournament_winner', {
-    p_tie_id: tieId,
   });
   if (error) throw error;
   return data as RpcResult;
