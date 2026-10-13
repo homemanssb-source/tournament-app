@@ -55,7 +55,9 @@ const STAGE_TABS: { key: StageKey; label: string }[] = [
   { key: 'ALL_FINALS', label: '전체본선' },
 ]
 const ROUND_TO_STAGE: Record<string, string> = { R32:'FINALS', R16:'FINALS', QF:'FINALS', SF:'FINALS', F:'FINALS', '128강':'FINALS', '64강':'FINALS', '32강':'FINALS', '16강':'FINALS', '8강':'FINALS', '4강':'FINALS', '결승':'FINALS' }
-const ZONE_FINALS = new Set(['R16','QF','SF','F','16강','8강','4강','결승','128강','64강','32강'])
+// 코트 구역: 예선이 아니면 전부 '본선용' (128강·64강·32강… 어떤 라운드든)
+const zoneKeyOf = (round: string): 'group' | 'finals' => (round === 'group' || round === 'GROUP' || round === '조별') ? 'group' : 'finals'
+const FINALS_ROUND_ORDER = ['128강','R128','64강','R64','32강','R32','16강','R16','8강','QF','4강','SF','결승','F']
 const STAGE_LABEL: Record<string, string> = { GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', ALL_FINALS:'전체본선', '128강':'128강', '64강':'64강', '32강':'32강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
 const TEAM_STAGE_TABS = [
   { key:'group',       round:'group',       label:'예선' },
@@ -445,7 +447,7 @@ export default function CourtsPage() {
   }
 
   function getCourtPool(divId: string, round: string): string[] {
-    const zoneKey    = ZONE_FINALS.has(round) ? 'finals' : 'group'
+    const zoneKey    = zoneKeyOf(round)
     const zoneCourts = courtZones[divId]?.[zoneKey] || []
     const pool = zoneCourts.length > 0 ? autoCourts.filter(c => zoneCourts.includes(c)) : autoCourts
     return sortByCourtList(pool.length > 0 ? pool : autoCourts)
@@ -536,7 +538,7 @@ export default function CourtsPage() {
   }
   // 본선 코트 풀: 구역이 지정돼 있으면 구역 그대로, 아니면 (선택 코트 중) 그 부서 예선 코트 우선
   function finalsPool(divId: string, round: string, pool: string[]): { pool: string[]; home: boolean } {
-    const zoneKey = ZONE_FINALS.has(round) ? 'finals' : 'group'
+    const zoneKey = zoneKeyOf(round)
     if (!preferHome || (courtZones[divId]?.[zoneKey] || []).length > 0) return { pool, home: false }
     const home = divisionHomeCourts(divId)
     const homePool = pool.filter(c => home.has(c))
@@ -1158,24 +1160,35 @@ export default function CourtsPage() {
         {/* 코트 구역 설정 (접기) */}
         <div className="border-t pt-3">
           <button onClick={() => setZoneOpen(!zoneOpen)} className="flex items-center gap-2 text-xs font-medium text-stone-600 hover:text-stone-800 transition-all">
-            <span>{zoneOpen ? '▾' : '▸'}</span><span>부서별 코트 구역 설정</span><span className="text-stone-400 font-normal">(예선용 / 본선 16강~)</span>
+            <span>{zoneOpen ? '▾' : '▸'}</span><span>부서별 코트 구역 설정</span><span className="text-stone-400 font-normal">(예선용 / 본선용)</span>
           </button>
           {zoneOpen && (
             <div className="mt-3 space-y-3">
               <div className="flex gap-1">
                 {(['group','finals'] as const).map(t => (
                   <button key={t} onClick={() => setZoneTab(t)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${zoneTab===t ? 'bg-stone-700 text-white border-stone-700' : 'border-stone-300 text-stone-500 hover:border-stone-500'}`}>
-                    {t==='group' ? '예선용 구역' : '본선용 구역 (16강~)'}
+                    {t==='group' ? '예선용 구역' : '본선용 구역 (본선 전체)'}
                   </button>
                 ))}
               </div>
+              {zoneTab === 'finals' && (
+                <p className="text-xs text-stone-400">본선 첫 라운드(128강·64강·32강·16강 …)부터 결승까지 모두 이 구역에 배정됩니다.</p>
+              )}
               {filteredDivisions.map(div => {
                 const selected = courtZones[div.id]?.[zoneTab] || []
+                // 본선 탭: 이 부서 본선이 실제로 몇 강부터인지 표시 (대진표 만들기 전이면 생략)
+                const divRounds = new Set(matches.filter(m => m.division_id === div.id && m.stage === 'FINALS').map(m => m.round))
+                const firstRound = FINALS_ROUND_ORDER.find(r => divRounds.has(r))
                 return (
                   <div key={div.id} className="flex items-start gap-3">
-                    <div className="flex items-center gap-1.5 w-24 flex-shrink-0 pt-1">
-                      <span style={{ width:8, height:8, borderRadius:'50%', background:divColors[div.id], display:'inline-block', flexShrink:0 }} />
-                      <span className="text-xs font-medium text-stone-700 truncate">{div.name}</span>
+                    <div className="w-24 flex-shrink-0 pt-1">
+                      <div className="flex items-center gap-1.5">
+                        <span style={{ width:8, height:8, borderRadius:'50%', background:divColors[div.id], display:'inline-block', flexShrink:0 }} />
+                        <span className="text-xs font-medium text-stone-700 truncate">{div.name}</span>
+                      </div>
+                      {zoneTab === 'finals' && firstRound && (
+                        <span className="text-[10px] text-stone-400 ml-3.5">{STAGE_LABEL[firstRound] || firstRound}~결승</span>
+                      )}
                     </div>
                     <div className="flex flex-wrap gap-1">
                       {filteredCourtNames.map(c => {
