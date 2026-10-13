@@ -5,8 +5,10 @@ import { supabase } from '@/lib/supabase'
 import { fetchTies, fetchClubMembers } from '@/lib/team-api'
 import { getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority } from '@/lib/team-utils'
 import type { TieWithClubs, TeamLineup, ClubMember } from '@/types/team'
+import AdminBracketView from '@/components/AdminBracketView'
+import CourtBoard from '@/components/CourtBoard'
 
-type Tab = 'individual' | 'team' | 'pins' | 'locks'
+type Tab = 'individual' | 'team' | 'bracket' | 'courts' | 'pins' | 'locks'
 
 interface PinTeam { id: string; team_num: string; team_name: string; division_name: string; pin_plain: string }
 interface PinClub { id: string; name: string; division_name: string; captain_name: string | null; captain_pin: string | null }
@@ -528,7 +530,7 @@ export default function AdminPinManagePage() {
       </header>
 
       <div className="max-w-2xl mx-auto px-4 pt-4">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-4">
+        <div className="grid grid-cols-3 gap-2 mb-4">
           <button onClick={() => { setTab('individual'); setSelectedMatch(null); setMsg('') }}
             className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='individual'?'bg-red-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
             🎾 개인전
@@ -536,6 +538,14 @@ export default function AdminPinManagePage() {
           <button onClick={() => { setTab('team'); setSelectedTie(null); setScoringRubber(null); setTieMsg('') }}
             className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='team'?'bg-blue-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
             📋 단체전
+          </button>
+          <button onClick={() => setTab('bracket')}
+            className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='bracket'?'bg-emerald-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            🏆 대진표
+          </button>
+          <button onClick={() => setTab('courts')}
+            className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='courts'?'bg-teal-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            🏟 코트
           </button>
           <button onClick={() => { setTab('pins'); setRevealedPins(new Set()); setPinSearchQuery('') }}
             className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='pins'?'bg-purple-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
@@ -552,6 +562,12 @@ export default function AdminPinManagePage() {
       </div>
 
       <main className="max-w-2xl mx-auto px-4 pb-8 space-y-3">
+
+        {/* ══════ 대진표 (보기 전용) ══════ */}
+        {tab === 'bracket' && <AdminBracketView eventId={session.event_id} />}
+
+        {/* ══════ 코트 현황 (보기 전용, 공개 화면과 동일) ══════ */}
+        {tab === 'courts' && <CourtBoard eventId={session.event_id} />}
 
         {/* ══════ 개인전 ══════ */}
         {tab === 'individual' && (
