@@ -117,12 +117,71 @@ async function notifyFilledSlots(
   }
 }
 
+// ✅ ④ 빈 코트 자동 이어 배정(DB 트리거 026)으로 막 시작된 경기의 두 팀에게 1회 알림
+//    matches.auto_notified_at 을 먼저 찍어(선점) 동시에 들어온 요청이 두 번 보내지 않게 함.
+//    026 이전 DB(컬럼 없음)면 조회 오류 → 조용히 건너뜀
+async function notifyAutoAssigned(
+  supabaseAdmin: ReturnType<typeof getServiceClient>,
+  webpush: any,
+  eventId: string
+) {
+  const since = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+  const { data: claimed, error } = await supabaseAdmin
+    .from('matches')
+    .update({ auto_notified_at: new Date().toISOString() })
+    .eq('event_id', eventId).eq('status', 'IN_PROGRESS')
+    .not('auto_assigned_at', 'is', null).gte('auto_assigned_at', since)
+    .is('auto_notified_at', null)
+    .select('id')
+  if (error || !claimed?.length) return
+
+  const { data: rows } = await supabaseAdmin
+    .from('v_matches_with_teams')
+    .select('id, court, team_a_id, team_b_id, team_a_name, team_b_name, division_name')
+    .in('id', (claimed as any[]).map(r => r.id))
+
+  for (const m of (rows || []) as any[]) {
+    const teamIds = [m.team_a_id, m.team_b_id].filter(Boolean)
+    const logRow = {
+      event_id: eventId, court: m.court, trigger: 'court_changed',
+      team_a_name: m.team_a_name, team_b_name: m.team_b_name, division_name: m.division_name,
+    }
+    const { data: subs } = teamIds.length
+      ? await supabaseAdmin.from('push_subscriptions').select('endpoint, p256dh, auth, team_id').in('team_id', teamIds)
+      : { data: [] as SubRow[] }
+    if (!subs?.length) { savePushLog(supabaseAdmin, { ...logRow, sent: 0, failed: 0, no_sub: true }); continue }
+    const payload = JSON.stringify({
+      title: `🎾 ${m.court} - 지금 바로 경기하세요!`,
+      body: `${m.team_a_name} vs ${m.team_b_name} (${m.division_name || ''}) · 빈 코트 자동 배정`,
+      icon: '/icon-192x192.png',
+      tag: `auto-${m.id}-${Date.now()}`,
+      url: '/pin/matches',
+      data: { court: m.court, match_id: m.id },
+    })
+    let sent = 0, failed = 0
+    const expired: string[] = []
+    const reasons: string[] = []
+    await Promise.all((subs as SubRow[]).map(async (sub) => {
+      const r = await sendOne(webpush, sub, payload, { urgency: 'high' as const, TTL: 300 })
+      if (r.kind === 'ok') sent++
+      else { failed++; reasons.push(r.kind + ': ' + r.reason); if (r.kind === 'expired') expired.push(sub.endpoint) }
+    }))
+    if (expired.length) await supabaseAdmin.from('push_subscriptions').delete().in('endpoint', expired)
+    savePushLog(supabaseAdmin, {
+      ...logRow, sent, failed, no_sub: false,
+      error_msg: ['auto_assigned', ...reasons.slice(0, 5)].join(' | ').slice(0, 500),
+    })
+  }
+}
+
 export async function POST(req: NextRequest) {
   const after: { eventId?: string; webpush?: any } = {}
   const res = await handleCourtNotify(req, after)
   if (after.eventId && after.webpush) {
     try { await notifyFilledSlots(getServiceClient(), after.webpush, after.eventId) }
     catch (e) { console.error('[notify/court] slot_filled', e) }
+    try { await notifyAutoAssigned(getServiceClient(), after.webpush, after.eventId) }
+    catch (e) { console.error('[notify/court] auto_assigned', e) }
   }
   return res
 }
