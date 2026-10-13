@@ -38,13 +38,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const isLoginPage = pathname === '/dashboard/login'
 
-  // 개인전/단체전 하위 경로면 자동 펼침
+  // 개인전/단체전 하위 경로 (단체전 경로가 /dashboard/teams/… 라 단체전 먼저 판단)
+  const teamPaths  = ['/dashboard/teams/clubs', '/dashboard/teams/groups', '/dashboard/teams/ties', '/dashboard/teams/standings', '/dashboard/teams/bracket']
+  const indivPaths = ['/dashboard/teams', '/dashboard/groups', '/dashboard/tournament']
+  const onTeamPath  = teamPaths.some(p => pathname.startsWith(p))
+  const onIndivPath = !onTeamPath && indivPaths.some(p => pathname === p || pathname.startsWith(p + '/'))
+
+  // ✅ 선택한 대회의 종류에 맞는 메뉴만 보여 줌 (개인전 대회 → 개인전 메뉴, 단체전 대회 → 단체전 메뉴)
+  //    종류를 모르면(옛 대회 등) 둘 다
+  const eventType = events.find(e => e.id === eventId)?.event_type || null
+  const showIndiv = eventType !== 'team'
+  const showTeam  = eventType !== 'individual'
+
+  // 하위 경로면 자동 펼침, 메뉴가 하나만 보이면 그 메뉴를 펼쳐 둠
   useEffect(() => {
-    const indivPaths = ['/dashboard/teams', '/dashboard/groups', '/dashboard/tournament']
-    const teamPaths  = ['/dashboard/teams/clubs', '/dashboard/teams/groups', '/dashboard/teams/ties', '/dashboard/teams/standings', '/dashboard/teams/bracket']
-    if (teamPaths.some(p => pathname.startsWith(p)))                               { setOpenTeam(true);  setOpenIndiv(false) }
-    else if (indivPaths.some(p => pathname === p || pathname.startsWith(p + '/'))) { setOpenIndiv(true); setOpenTeam(false)  }
-  }, [pathname])
+    if (onTeamPath)        { setOpenTeam(true);  setOpenIndiv(false) }
+    else if (onIndivPath)  { setOpenIndiv(true); setOpenTeam(false)  }
+    else if (eventType === 'team')       setOpenTeam(true)
+    else if (eventType === 'individual') setOpenIndiv(true)
+  }, [pathname, eventType])  // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (isLoginPage) { setChecking(false); return }
@@ -77,7 +89,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         // 2. 대회 목록 로드 (날짜 오름차순) → 권한 범위로 제한
         const { data: evList } = await supabase
-          .from('events').select('id, name, date')
+          .from('events').select('id, name, date, event_type')
           .order('date', { ascending: true })
         const list = scopeEvents(evList ?? [], myIds)
         setEvents(list)
@@ -136,7 +148,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (isLoginPage) return
     async function refreshEvents() {
       const { data } = await supabase
-        .from('events').select('id, name, date')
+        .from('events').select('id, name, date, event_type')
         .order('date', { ascending: true })
       if (data) setEvents(scopeEvents(data, allowedRef.current))
     }
@@ -242,6 +254,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {navLink('/dashboard', '홈', '🏠')}
 
           {/* 개인전 */}
+          {showIndiv && <>
           <button onClick={() => setOpenIndiv(!openIndiv)}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-all ${
               openIndiv ? 'bg-stone-100 text-stone-800 font-bold' : 'text-stone-600 hover:bg-stone-50'
@@ -256,8 +269,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               {navLink('/dashboard/tournament', '본선 토너먼트', '🏆', true)}
             </div>
           )}
+          </>}
 
           {/* 단체전 */}
+          {showTeam && <>
           <button onClick={() => setOpenTeam(!openTeam)}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-all ${
               openTeam ? 'bg-stone-100 text-stone-800 font-bold' : 'text-stone-600 hover:bg-stone-50'
@@ -273,6 +288,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               {navLink('/dashboard/teams/bracket',   '토너먼트',      '🏆', true)}
             </div>
           )}
+          </>}
 
           <hr className="my-2" />
           {navLink('/dashboard/courts',    '코트 배정',  '🏟')}
@@ -291,7 +307,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       {/* Main */}
-      <main className="flex-1 p-4 md:p-6 max-w-5xl">{children}</main>
+      <main className="flex-1 p-4 md:p-6 max-w-5xl">
+        {/* 대회 종류와 다른 메뉴 화면(북마크 등)으로 들어오면 안내 */}
+        {((onTeamPath && eventType === 'individual') || (onIndivPath && eventType === 'team')) && (
+          <div className="mb-4 bg-amber-50 border border-amber-300 rounded-xl p-3 text-sm text-amber-900">
+            ⚠️ 지금 선택한 대회는 <b>{eventType === 'team' ? '단체전' : '개인전'}</b> 대회입니다.
+            이 화면은 {onTeamPath ? '단체전' : '개인전'}용이라 내용이 비어 있거나 맞지 않을 수 있어요.{' '}
+            <Link href={eventType === 'team' ? `/dashboard/teams/clubs?event_id=${eventId}` : '/dashboard/teams'} className="underline font-semibold">
+              {eventType === 'team' ? '단체전 메뉴로' : '개인전 메뉴로'} 이동
+            </Link>
+          </div>
+        )}
+        {children}
+      </main>
     </div>
   )
 }

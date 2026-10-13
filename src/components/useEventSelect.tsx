@@ -17,7 +17,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 
-export interface EventLite { id: string; name: string; date: string }
+export interface EventLite { id: string; name: string; date: string; event_type?: string | null }   // event_type: 'individual' | 'team'
 
 export const STORAGE_KEY = 'dashboard_event_id'
 
