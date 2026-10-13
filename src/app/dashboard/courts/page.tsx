@@ -189,6 +189,9 @@ export default function CourtsPage() {
   const [assigning, setAssigning]   = useState(false)
   const [plan, setPlan]             = useState<AutoPlan | null>(null)
   const [preferHome, setPreferHome] = useState(true)   // 본선: 그 부서 예선 코트 우선
+  // ④ 빈 코트 자동 이어 배정 (DB 트리거 trg_z_auto_fill_idle_court, 026) — null = 아직 DB에 컬럼 없음
+  const [autoFill, setAutoFill]     = useState<{ fill: boolean; steal: boolean } | null>(null)
+  const [autoFillSaving, setAutoFillSaving] = useState(false)
   useEffect(() => { setAutoCourts([]) }, [selectedVenue])
   // 조건이 바뀌면 이전 미리보기는 버림 (다시 만들어야 함)
   useEffect(() => { setPlan(null) }, [autoDiv, autoStage, autoCourts, preferHome, eventId])
@@ -288,6 +291,19 @@ export default function CourtsPage() {
       const { data, error } = await supabase.from('events').select('court_zones').eq('id', eventId).single()
       if (!error && data?.court_zones) setCourtZones(data.court_zones as CourtZones)
     } catch {}
+  }
+
+  async function loadAutoFill() {
+    const { data, error } = await supabase.from('events').select('auto_fill_courts, auto_steal_courts').eq('id', eventId).single()
+    setAutoFill(error || !data ? null : { fill: !!(data as any).auto_fill_courts, steal: !!(data as any).auto_steal_courts })
+  }
+  async function saveAutoFill(next: { fill: boolean; steal: boolean }) {
+    setAutoFillSaving(true)
+    const { error } = await supabase.from('events')
+      .update({ auto_fill_courts: next.fill, auto_steal_courts: next.fill && next.steal }).eq('id', eventId)
+    setAutoFillSaving(false)
+    if (error) { setMsg('❌ 자동 이어 배정 설정 저장 실패: ' + error.message); return }
+    setAutoFill({ fill: next.fill, steal: next.fill && next.steal })
   }
 
   async function loadEventSchedule() {
@@ -409,7 +425,7 @@ export default function CourtsPage() {
     syncCourtOrderRef(matchesRef.current, list)
   }
 
-  useEffect(() => { if (!eventId) return; loadAll(true); loadVenues(); loadCourtZones(); loadEventSchedule() }, [eventId, loadAll])
+  useEffect(() => { if (!eventId) return; loadAll(true); loadVenues(); loadCourtZones(); loadEventSchedule(); loadAutoFill() }, [eventId, loadAll])
   useEffect(() => { if (!eventId) return; const iv = setInterval(() => loadAll(false), 15000); return () => clearInterval(iv) }, [eventId, loadAll])
 
   async function saveCourtZones() {
@@ -975,6 +991,36 @@ export default function CourtsPage() {
             })}
           </div>
           {selectedVenueInfo && (() => { const cs = venueCourts(selectedVenueInfo); return <p className="text-xs text-stone-400 mt-2">{cs[0] || '-'} ~ {cs[cs.length - 1] || '-'} · PIN: {selectedVenueInfo.pin_plain}</p> })()}
+        </div>
+      )}
+
+      {/* ④ 빈 코트 자동 이어 배정 (개인전) */}
+      {autoFill && (
+        <div className={`rounded-xl border p-4 mb-4 ${autoFill.fill ? 'bg-sky-50 border-sky-300' : 'bg-white'}`}>
+          <div className="flex items-start gap-3 flex-wrap">
+            <div className="flex-1 min-w-[220px]">
+              <h3 className="font-bold text-sm">⚡ 빈 코트 자동 이어 배정 <span className="text-xs font-normal text-stone-400">(개인전 · 이 대회에만 적용)</span></h3>
+              <p className="text-xs text-stone-500 mt-1">
+                경기가 끝났는데 그 코트에 대기 경기가 없으면, 아직 코트가 없는 경기 중 다음 경기를 데려와 <b>바로 시작</b>합니다.
+                같은 조 → 같은 부서 → 다른 부서 순, 같은 날·두 팀 확정·다른 코트에서 경기 중이 아닌 경기만. 코트 구역이 있으면 지킵니다.
+              </p>
+            </div>
+            <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+              <input type="checkbox" className="w-4 h-4" checked={autoFill.fill} disabled={autoFillSaving}
+                onChange={e => saveAutoFill({ fill: e.target.checked, steal: autoFill.steal })} />
+              {autoFill.fill ? '켜짐' : '꺼짐'}
+            </label>
+          </div>
+          {autoFill.fill && (
+            <label className="mt-3 flex items-start gap-2 text-xs text-stone-600 cursor-pointer">
+              <input type="checkbox" className="w-4 h-4 mt-0.5" checked={autoFill.steal} disabled={autoFillSaving}
+                onChange={e => saveAutoFill({ fill: true, steal: e.target.checked })} />
+              <span>
+                <b>밀린 코트 경기 가져오기</b> — 데려올 경기가 없으면 같은 경기장에서 가장 밀린 코트(대기 2경기 이상)의 맨 마지막 경기를 가져와 시작
+                <span className="text-amber-600"> (조가 다른 코트로 나뉠 수 있음)</span>
+              </span>
+            </label>
+          )}
         </div>
       )}
 
