@@ -287,6 +287,8 @@ export default function DashboardPage() {
   if (!stats)  return <div className="p-6 text-center text-gray-400">데이터 없음</div>
 
   const totalAll    = stats.totalMatches + stats.totalTies
+  // 대회 종류 (event_type 없으면 클럽 유무로 추정)
+  const isTeamEvent = stats.event?.event_type ? stats.event.event_type === 'team' : stats.totalClubs > 0
   const finishedAll = stats.finishedMatches + stats.finishedTies
   const progressPct = totalAll > 0 ? Math.round(finishedAll / totalAll * 100) : 0
   const matchProgressPct = stats.totalMatches > 0 ? Math.round(stats.finishedMatches / stats.totalMatches * 100) : 0
@@ -359,8 +361,7 @@ export default function DashboardPage() {
           <div className="text-amber-800 text-xs space-y-1">
             <p>· 조회된 이벤트: <code className="bg-amber-100 px-1.5 py-0.5 rounded">{eventId}</code></p>
             <p>· 가능 원인: (1) 매치 미생성, (2) Vercel 배포 진행중, (3) 브라우저 캐시(Ctrl+Shift+R 권장)</p>
-            <p>· 조편성은 완료됐는지 확인 후 <Link href="/dashboard/groups" className="underline font-semibold">조편성</Link> →
-              <Link href="/dashboard/matches" className="underline font-semibold ml-1">경기 생성</Link> 진행</p>
+            <p>· 조편성이 끝났는지 확인 후 <Link href="/dashboard/groups" className="underline font-semibold">조편성</Link> 화면에서 <b>📋 조별 경기 생성</b> 진행</p>
           </div>
         </div>
       )}
@@ -624,9 +625,15 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {[
           { href: '/dashboard/courts',          emoji: '🎾', label: '코트 배정',   desc: '코트 현황 관리' },
-          { href: '/dashboard/teams/ties',      emoji: '🏆', label: '단체전 관리', desc: '타이 점수 입력' },
-          { href: '/dashboard/teams/groups',    emoji: '📊', label: '단체전 순위', desc: '조편성·순위 확인' },
-          { href: stats.totalClubs > 0 ? '/dashboard/teams/bracket' : '/dashboard/tournament', emoji: '🗂️', label: '토너먼트표', desc: '대진 관리' },
+          // ✅ 대회 종류에 맞는 메뉴만 (단체전 대회엔 단체전, 개인전 대회엔 개인전)
+          ...(isTeamEvent ? [
+            { href: '/dashboard/teams/ties',    emoji: '🏆', label: '단체전 관리', desc: '타이 점수 입력' },
+            { href: '/dashboard/teams/groups',  emoji: '📊', label: '단체전 순위', desc: '조편성·순위 확인' },
+            { href: '/dashboard/teams/bracket', emoji: '🗂️', label: '토너먼트표',  desc: '대진 관리' },
+          ] : [
+            { href: '/dashboard/groups',        emoji: '🎯', label: '조편성',      desc: '조·경기 생성, 순위' },
+            { href: '/dashboard/tournament',    emoji: '🗂️', label: '본선 토너먼트', desc: '대진 관리' },
+          ]),
           { href: '/dashboard/report',          emoji: '📄', label: '리포트',      desc: 'PDF·CSV 내보내기' },
           { href: '/dashboard/logs',            emoji: '👥', label: '접속 로그',   desc: '공개 페이지 접속 통계' },
         ].map(item => (
