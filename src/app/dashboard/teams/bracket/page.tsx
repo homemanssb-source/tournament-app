@@ -150,7 +150,7 @@ export default function BracketPage() {
       `✅ 토너먼트 생성 완료! ${data?.ties_created || ''}경기` +
       ` (BYE ${data?.byes || 0}개)` +
       (tbd > 0 ? ` • 미정 ${tbd}자리 — 조 경기 완료·동률 결정 시 자동으로 채워집니다` : '') +
-      (undecided.length > 0 ? ` • ⚠️ 동률 결정 필요: ${undecided.join(', ')} (순위표에서 결정)` : '')
+      (undecided.length > 0 ? ` • ⚠️ 동률 결정 필요: ${undecided.join(', ')} (조편성·순위 화면에서 결정)` : '')
     );
     loadDivData(selectedDiv);
   }

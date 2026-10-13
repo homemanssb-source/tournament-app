@@ -267,11 +267,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </button>
           {openTeam && (
             <div className="space-y-0.5">
-              {navLink('/dashboard/teams/clubs',     '클럽 관리', '🏟️', true)}
-              {navLink('/dashboard/teams/groups',    '조편성',    '⚔️', true)}
-              {navLink('/dashboard/teams/ties',      '대전 관리', '🎾', true)}
-              {navLink('/dashboard/teams/standings', '순위',      '📊', true)}
-              {navLink('/dashboard/teams/bracket',   '토너먼트',  '🏆', true)}
+              {navLink('/dashboard/teams/clubs',     '클럽·시드 관리', '🏟️', true)}
+              {navLink('/dashboard/teams/groups',    '조편성·순위',   '⚔️', true)}
+              {navLink('/dashboard/teams/ties',      '대전 관리',     '🎾', true)}
+              {navLink('/dashboard/teams/bracket',   '토너먼트',      '🏆', true)}
             </div>
           )}
 

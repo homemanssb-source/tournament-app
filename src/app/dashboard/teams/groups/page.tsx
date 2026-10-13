@@ -8,12 +8,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useEventIdWithParam } from '@/components/useDashboard';
 import {
-  fetchClubs, fetchEventTeamConfig, fetchStandings, fetchTies,
+  fetchClubs, fetchEventTeamConfig, fetchTies,
   generateFullLeague, createTeamGroups,
 } from '@/lib/team-api';
+import TeamStandingsPanel from '@/components/TeamStandingsPanel';
 import { supabase } from '@/lib/supabase';
 import { getFormatLabel, getFullLeagueTieCount } from '@/lib/team-utils';
-import type { Club, EventTeamConfig, StandingWithClub, TieWithClubs } from '@/types/team';
+import type { Club, EventTeamConfig, TieWithClubs } from '@/types/team';
 
 interface Division { id: string; name: string; sort_order: number; }
 
@@ -50,7 +51,7 @@ export default function GroupsPage() {
   const [config, setConfig] = useState<EventTeamConfig | null>(null);
   const [clubs, setClubs] = useState<Club[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
-  const [groupStandings, setGroupStandings] = useState<Record<string, StandingWithClub[]>>({});
+  const [standingsReload, setStandingsReload] = useState(0);   // 조/리그를 다시 만들면 순위표도 새로
   const [ties, setTies] = useState<TieWithClubs[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -104,25 +105,7 @@ export default function GroupsPage() {
     setClubs(clubList);
     setGroups(grps);
     setTies(tieList);
-
-    // ✅ standings도 병렬 fetch (부서별 분리)
-    if (cfg?.team_format === 'full_league') {
-      if (divList.length > 0) {
-        const results = await Promise.all(
-          divList.map((d: any) => fetchStandings(eventId, null, d.id))
-        );
-        const map: Record<string, StandingWithClub[]> = {};
-        divList.forEach((d: any, i: number) => { map[`full_${d.id}`] = results[i]; });
-        setGroupStandings(map);
-      } else {
-        setGroupStandings({ full: await fetchStandings(eventId, null) });
-      }
-    } else if (grps.length > 0) {
-      const standingsResults = await Promise.all(grps.map(g => fetchStandings(eventId, g.id)));
-      const standings: Record<string, StandingWithClub[]> = {};
-      grps.forEach((g, i) => { standings[g.id] = standingsResults[i]; });
-      setGroupStandings(standings);
-    }
+    setStandingsReload(n => n + 1);
 
     setLoading(false);
   }, [eventId]);
@@ -167,7 +150,7 @@ export default function GroupsPage() {
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">🏅 조편성</h1>
+        <h1 className="text-2xl font-bold">🏅 조편성 · 순위</h1>
         <span className="text-sm text-gray-500">
           {filteredClubs.length}팀 · {config ? getFormatLabel(config.team_format) : ''}
         </span>
@@ -257,29 +240,9 @@ export default function GroupsPage() {
             </div>
           )}
 
-          {config?.team_format === 'full_league' && (() => {
-            const key = selectedDiv ? `full_${selectedDiv}` : 'full';
-            const list = groupStandings[key];
-            if (!list) return null;
-            return (
-              <div className="bg-white rounded-lg border p-4">
-                <h3 className="font-semibold mb-3">풀리그 순위</h3>
-                <StandingsTable standings={list} />
-              </div>
-            );
-          })()}
-
-          {hasGroups && (
-            <div className="space-y-4">
-              {filteredGroups.map(g => (
-                <div key={g.id} className="bg-white rounded-lg border p-4">
-                  <h3 className="font-semibold mb-3">{g.group_label || (g.group_num + '조')}</h3>
-                  {groupStandings[g.id]
-                    ? <StandingsTable standings={groupStandings[g.id]} />
-                    : <p className="text-gray-400 text-sm">데이터 없음</p>}
-                </div>
-              ))}
-            </div>
+          {/* 순위 (예전 '순위' 메뉴를 합침) — 재계산·동률 결정 포함 */}
+          {(hasGroups || (config?.team_format === 'full_league' && hasTies)) && (
+            <TeamStandingsPanel eventId={eventId} selectedDiv={selectedDiv} reloadKey={standingsReload} />
           )}
 
           {hasTies && (
@@ -316,47 +279,6 @@ export default function GroupsPage() {
           )}
         </>
       )}
-    </div>
-  );
-}
-
-function StandingsTable({ standings }: { standings: StandingWithClub[] }) {
-  if (!standings.length) return <p className="text-gray-400 text-sm">순위 데이터 없음</p>;
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead className="bg-gray-50">
-          <tr>
-            <th className="px-3 py-2 text-left">순위</th>
-            <th className="px-3 py-2 text-left">클럽</th>
-            <th className="px-3 py-2 text-center">승</th>
-            <th className="px-3 py-2 text-center">패</th>
-            <th className="px-3 py-2 text-center">득점</th>
-            <th className="px-3 py-2 text-center">실점</th>
-            <th className="px-3 py-2 text-center">득실차</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y">
-          {standings.map(s => (
-            <tr key={s.id} className={s.is_tied ? 'bg-yellow-50' : ''}>
-              <td className="px-3 py-2">
-                {s.rank !== null ? s.rank : <span className="text-yellow-600 text-xs">동률 처리</span>}
-                {s.rank_locked && <span className="ml-1 text-xs text-green-600">✓</span>}
-              </td>
-              <td className="px-3 py-2 font-medium">
-                {s.club?.name || '-'}
-              </td>
-              <td className="px-3 py-2 text-center">{s.won}</td>
-              <td className="px-3 py-2 text-center">{s.lost}</td>
-              <td className="px-3 py-2 text-center">{s.rubbers_for}</td>
-              <td className="px-3 py-2 text-center">{s.rubbers_against}</td>
-              <td className="px-3 py-2 text-center font-medium">
-                {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }

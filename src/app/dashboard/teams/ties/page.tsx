@@ -11,7 +11,6 @@ import { useEventIdWithParam } from '@/components/useDashboard';
 import {
   fetchTies, fetchRubbers, fetchEventTeamConfig,
   fetchClubMembers, recordRubberScore, correctRubberScore, calculateStandings,
-  advanceTournamentWinner,
 } from '@/lib/team-api';
 import { supabase } from '@/lib/supabase';
 import {
