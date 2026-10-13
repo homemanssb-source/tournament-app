@@ -19,6 +19,19 @@ interface VenueMatch {
   is_team_tie?: boolean
 }
 
+// 정렬된 조 경기에서, 같은 팀이 연달아 나오지 않게 다음 경기를 고름 (대시보드 sortGroupMatches 와 동일)
+function sortGroupMatches(list: VenueMatch[]): VenueMatch[] {
+  const rem = [...list], sorted: VenueMatch[] = []
+  while (rem.length > 0) {
+    const prev = sorted[sorted.length - 1]
+    const idx = prev ? rem.findIndex(m =>
+      m.team_a_id !== prev.team_a_id && m.team_a_id !== prev.team_b_id &&
+      m.team_b_id !== prev.team_a_id && m.team_b_id !== prev.team_b_id) : 0
+    sorted.push(rem.splice(idx >= 0 ? idx : 0, 1)[0])
+  }
+  return sorted
+}
+
 // round 값 → 짧은 한국어 라벨 (대시보드와 동일)
 function roundLabelKR(round: string): string {
   const map: Record<string, string> = {
@@ -420,25 +433,36 @@ export default function VenueManagePage() {
         }
       }
 
-      // 경기 번호순 정렬 (안정적인 순서)
-      const sorted = [...targets].sort((a, b) =>
+      // ✅ 같은 조는 한 코트에 묶어서 (예선), 조 안에서는 경기번호(=생성) 순, 연속 출전은 피함 (대시보드와 동일).
+      //    묶음 순서는 첫 경기 번호 순 = 부서·조 생성 순서(1조→2조…). 본선 등 조 없는 경기는 한 경기씩.
+      const byNum = (a: VenueMatch, b: VenueMatch) =>
         (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
-      )
+      const bundles = new Map<string, VenueMatch[]>()
+      for (const m of targets) {
+        const key = m.group_id ? `g:${m.division_id}:${m.group_id}` : `m:${m.id}`
+        if (!bundles.has(key)) bundles.set(key, [])
+        bundles.get(key)!.push(m)
+      }
+      const ordered = [...bundles.values()]
+        .map(list => sortGroupMatches(list.sort(byNum)))
+        .sort((a, b) => byNum(a[0], b[0]))
 
       let successCount = 0
       const touchedCourts = new Set<string>()
-      for (const item of sorted) {
-        // 로드 최소 코트 선택
+      for (const bundle of ordered) {
+        // 남은 경기 가장 적은 코트 (같으면 앞 번호 코트)
         const court = sessionCourts.reduce((min, c) =>
           loadMap[c] < loadMap[min] ? c : min, sessionCourts[0])
-        const err = await assignItem(item, court)
-        if (!err) {
-          loadMap[court]++
-          successCount++
-          touchedCourts.add(court)
+        for (const item of bundle) {
+          const err = await assignItem(item, court)
+          if (!err) {
+            loadMap[court]++
+            successCount++
+            touchedCourts.add(court)
+          }
         }
       }
-      setAssignMsg(`✅ ${successCount}/${sorted.length}경기 자동 배정 완료`)
+      setAssignMsg(`✅ ${successCount}/${targets.length}경기 자동 배정 완료`)
       setTimeout(() => setAssignMsg(''), 4000)
       // 새로 배정된 코트들에 일괄 알림 발송
       for (const c of touchedCourts) notifyCourt(c, 'court_changed')

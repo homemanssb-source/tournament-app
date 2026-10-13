@@ -421,10 +421,44 @@ export default function CourtsPage() {
     const zoneKey    = ZONE_FINALS.has(round) ? 'finals' : 'group'
     const zoneCourts = courtZones[divId]?.[zoneKey] || []
     const pool = zoneCourts.length > 0 ? autoCourts.filter(c => zoneCourts.includes(c)) : autoCourts
-    return pool.length > 0 ? pool : autoCourts
+    return sortByCourtList(pool.length > 0 ? pool : autoCourts)
   }
-  function getLeastLoaded(pool: string[]): string {
-    return pool.reduce((best, c) => (courtOrderRef.current[c] || 0) < (courtOrderRef.current[best] || 0) ? c : best, pool[0])
+  // 코트 버튼 누른 순서가 아니라 코트 목록 순서(1번→N번)로 — 부하가 같으면 앞 코트부터 채움
+  function sortByCourtList(pool: string[]): string[] {
+    const idx = (c: string) => { const i = filteredCourtNames.indexOf(c); return i < 0 ? 9999 : i }
+    return [...pool].sort((a, b) => idx(a) - idx(b))
+  }
+  // 같은 경기일인 부서인지 (날짜 미지정 부서는 항상 같은 날로 봄)
+  function isSameDate(divId: string | null | undefined, refDivId: string): boolean {
+    const ref = divMatchDates[refDivId], d = divId ? divMatchDates[divId] : undefined
+    return !ref || !d || d === ref
+  }
+  // ✅ 코트 부하 = 같은 경기일에 그 코트에 남은(안 끝난) 경기 수.
+  //    예전엔 그 코트에 붙었던 court_order 최댓값을 썼는데, 끝난 경기·다른 날짜·다른 부서까지 포함돼서
+  //    많이 쓴 1번 코트는 늘 '바쁨', 안 쓴 끝 번호 코트가 늘 뽑히는 문제가 있었음.
+  function getPendingLoad(pool: string[], refDivId: string): Record<string, number> {
+    const load: Record<string, number> = {}
+    for (const c of pool) load[c] = 0
+    for (const m of matchesRef.current) {
+      if (m.court && m.court in load && m.status !== 'FINISHED' && isSameDate(m.division_id, refDivId)) load[m.court]++
+    }
+    const allCN = venuesRef.current.flatMap(v => venueCourts(v))
+    for (const t of tiesRef.current) {
+      const cn = (t as any).court_number; if (!cn || t.is_bye || t.status === 'completed' || t.status === 'bye') continue
+      const court = globalCourtNumToName(cn, allCN, venuesRef.current)
+      if (court in load && isSameDate(t.division_id, refDivId)) load[court]++
+    }
+    return load
+  }
+  function getLeastLoaded(pool: string[], load: Record<string, number>): string {
+    return pool.reduce((best, c) => (load[c] || 0) < (load[best] || 0) ? c : best, pool[0])
+  }
+  // 조 이름 순 (1조→2조→…10조, 숫자 인식). 조 없음은 맨 뒤
+  function compareGroupKey(a: string, b: string): number {
+    if (a === b) return 0
+    if (a === 'none') return 1
+    if (b === 'none') return -1
+    return a.localeCompare(b, 'ko', { numeric: true })
   }
 
   // ✅ 스마트 코트 선택: 1순위 빈코트, 2순위 대기 적은 코트
@@ -432,7 +466,7 @@ export default function CourtsPage() {
     const pendingCount: Record<string, number> = {}
     for (const c of pool) pendingCount[c] = 0
     for (const m of matchList) {
-      if (m.court && pool.includes(m.court) && m.status === 'PENDING' && m.score !== 'BYE') {
+      if (m.court && pool.includes(m.court) && m.status === 'PENDING' && m.score !== 'BYE' && isSameDate(m.division_id, autoDiv)) {
         pendingCount[m.court] = (pendingCount[m.court] || 0) + 1
       }
     }
@@ -476,12 +510,16 @@ export default function CourtsPage() {
           if (!byGroup.has(key)) byGroup.set(key, [])
           byGroup.get(key)!.push(t)
         }
-        const groups = [...byGroup.entries()].sort((a, b) => b[1].length - a[1].length)
+        // ✅ 조 이름 순(1조→2조…)으로, 남은 경기 가장 적은 코트에 조째로
+        const groups = [...byGroup.entries()].sort((a, b) => compareGroupKey(a[0], b[0]))
+        const pool = sortByCourtList(autoCourts)
+        const load = getPendingLoad(pool, autoDiv)
         const updates: { id:string; courtNum:number; courtName:string; order:number }[] = []
         for (const [, groupTies] of groups) {
-          const court = getLeastLoaded(autoCourts)
+          const court = getLeastLoaded(pool, load)
+          load[court] += groupTies.length
           const courtNum = getGlobalCourtNumber(court, allCourtNames)
-          for (const t of groupTies) {
+          for (const t of [...groupTies].sort((a, b) => ((a as any).tie_order ?? 0) - ((b as any).tie_order ?? 0))) {
             const nextOrder = (courtOrderRef.current[court] || 0) + 1
             courtOrderRef.current[court] = nextOrder
             updates.push({ id:t.id, courtNum, courtName:court, order:nextOrder })
@@ -512,10 +550,13 @@ export default function CourtsPage() {
     const pool = getCourtPool(autoDiv, 'group')
     const byGroup = new Map<string, MatchSlim[]>()
     for (const m of targets) { const k = m.group_label || 'none'; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k)!.push(m) }
-    const groups = [...byGroup.entries()].sort((a, b) => b[1].length - a[1].length)
+    // ✅ 조 이름 순(1조→2조…)으로, 같은 날 남은 경기가 가장 적은 코트에 조째로 배정
+    const groups = [...byGroup.entries()].sort((a, b) => compareGroupKey(a[0], b[0]))
+    const load = getPendingLoad(pool, autoDiv)
     const updates: { id: string; court: string; court_order: number }[] = []
     for (const [, groupMatches] of groups) {
-      const court = getLeastLoaded(pool)
+      const court = getLeastLoaded(pool, load)
+      load[court] += groupMatches.length
       for (const m of sortGroupMatches(groupMatches)) {
         const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
         updates.push({ id:m.id, court, court_order:nextOrder })
