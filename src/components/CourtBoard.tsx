@@ -93,7 +93,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
       if (d.name) divNameMap[d.id] = d.name
     }
 
-    // ✅ court_number(숫자) → short_name-N 포맷 변환 (timetable/page.tsx와 동일 로직)
+    // ✅ court_number(숫자) → short_name-N 포맷 변환 (events/[id]/page.tsx 와 동일 로직)
     const venueList = (venueRes.data || []) as { short_name: string; name: string; court_count: number }[]
     function courtNumToName(courtNumber: number): string {
       if (venueList.length === 0) return `코트-${courtNumber}`

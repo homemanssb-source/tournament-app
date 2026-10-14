@@ -1,6 +1,5 @@
 // ============================================================
 // src/app/dashboard/layout.tsx
-// ✅ 타임테이블 메뉴 추가 (/dashboard/timetable)
 // ✅ 대회 선택 드롭다운 복구
 // ✅ 페이지 이동 시 대회 고정 (router.refresh 제거)
 // ✅ AggregateError 방지 (async/await + try/finally)
