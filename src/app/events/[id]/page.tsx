@@ -21,7 +21,7 @@ type Mode = 'individual' | 'team'
 type IndividualTab = 'groups' | 'tournament' | 'results' | 'courts'
 type TeamTab = 'standings' | 'matches' | 'bracket' | 'courts'
 
-// ✅ [FIX] court_number → short_name-N 변환 (timetable/page.tsx 동일 로직)
+// ✅ [FIX] court_number → short_name-N 변환 (components/CourtBoard.tsx 와 동일 로직)
 interface Venue { id: string; name: string; short_name: string; court_count: number }
 function courtNumToName(courtNumber: number | null | undefined, venues: Venue[]): string {
   if (!courtNumber) return ''
