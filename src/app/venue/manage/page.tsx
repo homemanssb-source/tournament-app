@@ -4,9 +4,10 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import AdminBracketView from '@/components/AdminBracketView'
+import VenueTieScoreSheet from '@/components/VenueTieScoreSheet'
 
 // ──────────────────────────────────────────────────────────
-// 현장관리 (경기장 PIN): 코트·대진표 조회 + 시작 + 점수입력 (끝난 경기 정정 불가)
+// 현장관리 (경기장 PIN): 코트·대진표 조회 + 시작 + 점수입력 (끝난 경기 정정 불가, 단체전 복식 포함 — 031)
 // 마스터 PIN 으로 연 경우(session.is_admin): + 코트 배정/재배정/자동배정 + 끝난 경기 정정
 // (어느 쪽이든 자기 경기장 코트에 한해서만 배정 가능, 서버에서도 확인 — 030)
 // ──────────────────────────────────────────────────────────
@@ -71,6 +72,7 @@ export default function VenueManagePage() {
   const [editScore, setEditScore]   = useState('')
   const [editWinner, setEditWinner] = useState<'A' | 'B' | ''>('')
   const [submitting, setSubmitting] = useState(false)
+  const [tieScore, setTieScore]     = useState<VenueMatch | null>(null)   // 단체전 복식 점수 시트
 
   // ── 코트 배정 ──
   const [allVenueCourtNames, setAllVenueCourtNames] = useState<string[]>([])
@@ -857,6 +859,7 @@ export default function VenueManagePage() {
                             canStart={false}
                             onStart={() => {}}
                             onScore={() => openScoreEdit(inProgressMatch)}
+                            onTieScore={() => setTieScore(inProgressMatch)}
                             courts={sessionCourts}
                             onAssign={isAdmin ? (c) => handleAssign(inProgressMatch, c) : undefined}
                           />
@@ -886,6 +889,7 @@ export default function VenueManagePage() {
                               canStart={canStart}
                               onStart={() => startMatch(m.id)}
                               onScore={() => openScoreEdit(m)}
+                              onTieScore={() => setTieScore(m)}
                               courts={sessionCourts}
                               onAssign={isAdmin ? (c) => handleAssign(m, c) : undefined}
                               onMoveUp={isAdmin && allIdx > 0 ? () => handleMoveOrder(m, 'up') : undefined}
@@ -1003,6 +1007,17 @@ export default function VenueManagePage() {
         )
       })()}
 
+      {/* ── 단체전 복식 점수 시트 */}
+      {tieScore && (
+        <VenueTieScoreSheet
+          tieId={tieScore.id.replace(/^tie_/, '')}
+          token={session.token}
+          court={tieScore.court}
+          onClose={() => setTieScore(null)}
+          onSaved={() => { loadData() }}
+        />
+      )}
+
       {/* ── 점수 입력 모달 */}
       {editMatch && (
         <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4"
@@ -1106,7 +1121,7 @@ export default function VenueManagePage() {
 }
 
 // ── 코트 경기 카드 (재배정 드롭다운 포함)
-function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, onScore, courts, onAssign, onMoveUp, onMoveDown }: {
+function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, onScore, onTieScore, courts, onAssign, onMoveUp, onMoveDown }: {
   m: VenueMatch
   badge: string
   badgeStyle: string
@@ -1114,6 +1129,7 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
   canStart: boolean
   onStart: () => void
   onScore: () => void
+  onTieScore?: () => void   // 단체전 복식 점수 시트
   courts: string[]
   onAssign?: (court: string | null) => void   // 없으면 코트 이동 버튼 숨김 (경기장 PIN)
   onMoveUp?: () => void
@@ -1152,6 +1168,14 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
             <button onClick={onStart}
               className="text-xs bg-red-500 text-white px-2.5 py-1 rounded-lg hover:bg-red-600 font-bold transition-all shadow-sm">
               ▶ 시작
+            </button>
+          )}
+          {m.is_team_tie && onTieScore && (
+            <button onClick={onTieScore}
+              className={`text-xs px-2 py-1 rounded-lg transition-all ${
+                isInProgress ? 'bg-orange-100 text-orange-600 hover:bg-orange-200 font-semibold' : 'text-stone-400 hover:text-blue-500 hover:bg-blue-50'
+              }`}>
+              {isInProgress ? '복식 점수' : '✏'}
             </button>
           )}
           {!m.is_team_tie && (
