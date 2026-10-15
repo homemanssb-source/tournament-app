@@ -289,6 +289,10 @@ export default function TournamentPage() {
 
           <div className="mt-2 space-y-0.5">
             <p className="text-xs text-stone-400">* 시드 배치 + BYE 자동 배정 + 같은 조 1R 회피</p>
+            <p className="text-xs text-stone-400">
+              * 시드(조편성 화면에서 지정): 시드 선수가 속한 조의 1위가 시드 자리 — 1·2번 시드 조는 대진 양 끝(결승에서만 만남),
+              BYE 는 상위 시드부터. 시드가 없으면 조 1위끼리 랜덤.
+            </p>
             {!allGroupsDone && (
               <p className="text-xs text-blue-500">
                 * 미리 생성 시: 완료된 조는 실제 팀명, 미완료 조는 "A조 1위" 형태로 표시됩니다.
