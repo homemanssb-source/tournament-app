@@ -3,10 +3,12 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
+import AdminBracketView from '@/components/AdminBracketView'
 
 // ──────────────────────────────────────────────────────────
-// 현장관리: 조회 + 시작 + 점수입력 + 코트 배정/재배정/자동배정
-// (자기 경기장 코트에 한해서만 배정 가능)
+// 현장관리 (경기장 PIN): 코트·대진표 조회 + 시작 + 점수입력 (끝난 경기 정정 불가)
+// 마스터 PIN 으로 연 경우(session.is_admin): + 코트 배정/재배정/자동배정 + 끝난 경기 정정
+// (어느 쪽이든 자기 경기장 코트에 한해서만 배정 가능, 서버에서도 확인 — 030)
 // ──────────────────────────────────────────────────────────
 
 interface VenueMatch {
@@ -84,6 +86,9 @@ export default function VenueManagePage() {
 
   // ── group_id → group_label 매핑 (배지 표시용) ──
   const [groupLabels, setGroupLabels] = useState<Record<string, string>>({})
+
+  // ── 화면: 코트 / 대진표 ──
+  const [view, setView] = useState<'courts' | 'bracket'>('courts')
 
   // ── 세션 로드
   useEffect(() => {
@@ -169,7 +174,7 @@ export default function VenueManagePage() {
       const { data, error } = await supabase.rpc('rpc_venue_list_matches', { p_token: session.token })
       if (error) {
         sessionStorage.removeItem('venue_session')
-        router.push('/venue')
+        router.push(session.is_admin ? '/admin-pin' : '/venue')
         return
       }
       const individual: VenueMatch[] = (data.matches || []).map((m: any) => ({
@@ -224,6 +229,7 @@ export default function VenueManagePage() {
 
   // 코트 목록: session.courts 기준, 실제 배정된 court로 보완 (날짜 필터 적용)
   const sessionCourts: string[] = session?.courts || []
+  const isAdmin = !!session?.is_admin   // 마스터 PIN 으로 연 코트 관리
   const assignedCourtSet = new Set(dateFilteredMatches.map(m => m.court).filter(Boolean) as string[])
   const allCourtKeys = [
     ...sessionCourts,
@@ -302,13 +308,16 @@ export default function VenueManagePage() {
     setSubmitting(true); setMsg('')
     try {
       const winnerId = editWinner === 'A' ? editMatch.team_a_id : editMatch.team_b_id
-      const { error } = await supabase.rpc('rpc_venue_submit_score', {
-        p_token: session.token,
-        p_match_id: editMatch.id,
-        p_score: editScore,
-        p_winner_team_id: winnerId,
-      })
+      // 끝난 경기 정정은 마스터 PIN 으로만 (경기장 PIN 은 서버에서도 거절)
+      const { data, error } = isAdmin && editMatch.status === 'FINISHED'
+        ? await supabase.rpc('rpc_admin_pin_update_score', {
+            p_token: session.admin_token, p_match_id: editMatch.id, p_score: editScore, p_winner_team_id: winnerId,
+          })
+        : await supabase.rpc('rpc_venue_record_score', {
+            p_token: session.token, p_match_id: editMatch.id, p_score: editScore, p_winner_team_id: winnerId,
+          })
       if (error) { setMsg('❌ ' + error.message); return }
+      if (data && (data as any).success === false) { setMsg('❌ ' + ((data as any).error || '저장 실패')); return }
       const finishedCourt = editMatch.court
       closeModal()
       await loadData()
@@ -355,7 +364,7 @@ export default function VenueManagePage() {
 
   // 개인전 경기 코트 배정·해제·순서 (서버: 그 대회 경기 + 내 코트만)
   async function setMatchCourt(matchId: string, court: string | null, order: number | null): Promise<string | null> {
-    const { data, error } = await supabase.rpc('rpc_venue_set_match_court', {
+    const { data, error } = await supabase.rpc('rpc_venue_admin_set_match_court', {
       p_token: session.token, p_match_id: matchId, p_court: court, p_court_order: order,
     })
     if (error) return error.message
@@ -386,7 +395,7 @@ export default function VenueManagePage() {
         courtNum = idx + 1
         nextOrd = await nextCourtOrderForTies(courtNum)
       }
-      const { data, error } = await supabase.rpc('rpc_venue_assign_tie_court', {
+      const { data, error } = await supabase.rpc('rpc_venue_admin_assign_tie_court', {
         p_token: session.token,
         p_tie_id: tieId,
         p_court_number: courtNum,
@@ -565,7 +574,7 @@ export default function VenueManagePage() {
       const courtIdx = allVenueCourtNames.indexOf(courtName)
       const courtNum = courtIdx >= 0 ? courtIdx + 1 : null
       if (courtNum === null) return
-      await supabase.rpc('rpc_venue_assign_tie_court', {
+      await supabase.rpc('rpc_venue_admin_assign_tie_court', {
         p_token: session.token,
         p_tie_id: tieRowId,
         p_court_number: courtNum,
@@ -595,7 +604,7 @@ export default function VenueManagePage() {
 
   function handleLogout() {
     sessionStorage.removeItem('venue_session')
-    router.push('/venue')
+    router.push(isAdmin ? '/admin-pin/manage' : '/venue')
   }
 
   if (!session) return null
@@ -607,7 +616,10 @@ export default function VenueManagePage() {
       <header className="bg-orange-500 text-white sticky top-0 z-10 shadow-md">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div>
-            <h1 className="font-bold text-lg leading-tight">{session.venue_name}</h1>
+            <h1 className="font-bold text-lg leading-tight">
+              {session.venue_name}
+              {isAdmin && <span className="ml-2 align-middle text-[11px] bg-red-700 px-2 py-0.5 rounded-full">🛡 코트 관리</span>}
+            </h1>
             <p className="text-xs text-white/70 mt-0.5">
               {allCourtKeys.length > 0 ? allCourtKeys.join(' · ') : '코트 배정 대기 중...'}
             </p>
@@ -619,11 +631,22 @@ export default function VenueManagePage() {
               🔄
             </button>
             <button onClick={handleLogout} className="text-xs text-white/70 hover:text-white px-2">
-              로그아웃
+              {isAdmin ? '← 관리자 도구' : '로그아웃'}
             </button>
           </div>
         </div>
 
+        {/* 코트 / 대진표 */}
+        <div className="max-w-6xl mx-auto px-4 pb-2 grid grid-cols-2 gap-2">
+          {([['courts', '🏟 코트'], ['bracket', '🏆 대진표']] as const).map(([v, label]) => (
+            <button key={v} onClick={() => setView(v)}
+              className={`py-2 rounded-lg text-sm font-bold transition-all ${view === v ? 'bg-white text-orange-600' : 'bg-white/20 text-white'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {view === 'courts' && <>
         {/* 날짜 탭 (부서 match_date가 2일 이상일 때만) */}
         {(() => {
           const dates = [...new Set(Object.values(divMatchDates))].sort()
@@ -664,9 +687,16 @@ export default function VenueManagePage() {
             ))}
           </div>
         )}
+        </>}
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-4">
+      {view === 'bracket' && (
+        <main className="max-w-2xl mx-auto px-4 py-4">
+          <AdminBracketView eventId={session.event_id} />
+        </main>
+      )}
+
+      {view === 'courts' && <main className="max-w-6xl mx-auto px-4 py-4">
 
         {/* 전체 메시지 */}
         {msg && !editMatch && (
@@ -697,8 +727,8 @@ export default function VenueManagePage() {
               </div>
             )}
 
-            {/* 미배정 배너 — 라운드 필터 + 드롭다운 + 자동배정 */}
-            {filteredUnassignedByDiv.length > 0 && (
+            {/* 미배정 배너 — 라운드 필터 + 드롭다운 + 자동배정 (마스터 PIN 만) */}
+            {isAdmin && filteredUnassignedByDiv.length > 0 && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -762,7 +792,7 @@ export default function VenueManagePage() {
               <div className="text-center py-16 text-stone-400">
                 <div className="text-4xl mb-3">🎾</div>
                 <p className="font-medium">배정된 코트가 없습니다</p>
-                <p className="text-sm mt-1">운영자 대시보드에서 코트를 배정해주세요.</p>
+                <p className="text-sm mt-1">마스터 PIN(관리자 도구)에서 코트를 배정해주세요.</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -828,7 +858,7 @@ export default function VenueManagePage() {
                             onStart={() => {}}
                             onScore={() => openScoreEdit(inProgressMatch)}
                             courts={sessionCourts}
-                            onAssign={(c) => handleAssign(inProgressMatch, c)}
+                            onAssign={isAdmin ? (c) => handleAssign(inProgressMatch, c) : undefined}
                           />
                         )}
 
@@ -857,16 +887,16 @@ export default function VenueManagePage() {
                               onStart={() => startMatch(m.id)}
                               onScore={() => openScoreEdit(m)}
                               courts={sessionCourts}
-                              onAssign={(c) => handleAssign(m, c)}
-                              onMoveUp={allIdx > 0 ? () => handleMoveOrder(m, 'up') : undefined}
-                              onMoveDown={allIdx < courtMatches.length - 1 ? () => handleMoveOrder(m, 'down') : undefined}
+                              onAssign={isAdmin ? (c) => handleAssign(m, c) : undefined}
+                              onMoveUp={isAdmin && allIdx > 0 ? () => handleMoveOrder(m, 'up') : undefined}
+                              onMoveDown={isAdmin && allIdx < courtMatches.length - 1 ? () => handleMoveOrder(m, 'down') : undefined}
                             />
                           )
                         })}
 
                         {/* 완료 경기 접기 */}
                         {finishedMatches.length > 0 && (
-                          <FinishedSection items={finishedMatches} onScore={openScoreEdit} />
+                          <FinishedSection items={finishedMatches} onScore={isAdmin ? openScoreEdit : undefined} />
                         )}
 
                         {totalCount === 0 && (
@@ -883,7 +913,7 @@ export default function VenueManagePage() {
             )}
           </div>
         )}
-      </main>
+      </main>}
 
       {/* 자동 배정 미리보기 — 모바일: 아래에서 올라오는 시트 / PC: 가운데 창 */}
       {plan && (() => {
@@ -1085,7 +1115,7 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
   onStart: () => void
   onScore: () => void
   courts: string[]
-  onAssign: (court: string | null) => void
+  onAssign?: (court: string | null) => void   // 없으면 코트 이동 버튼 숨김 (경기장 PIN)
   onMoveUp?: () => void
   onMoveDown?: () => void
 }) {
@@ -1140,11 +1170,13 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
           {onMoveDown && (
             <button onClick={onMoveDown} className="text-stone-400 hover:text-stone-700 px-1 text-base leading-none" title="아래로">▼</button>
           )}
-          <button onClick={() => setShowMove(!showMove)}
-            className="text-xs text-stone-400 hover:text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg transition-all"
-            title="코트 이동/해제">
-            📍
-          </button>
+          {onAssign && (
+            <button onClick={() => setShowMove(!showMove)}
+              className="text-xs text-stone-400 hover:text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg transition-all"
+              title="코트 이동/해제">
+              📍
+            </button>
+          )}
         </div>
       </div>
       <div className="space-y-0.5">
@@ -1170,7 +1202,7 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
       )}
 
       {/* 코트 이동/해제 드롭다운 */}
-      {showMove && (
+      {showMove && onAssign && (
         <div className="mt-2 pt-2 border-t border-stone-100 flex items-center gap-2">
           <select
             defaultValue={m.court || ''}
@@ -1239,7 +1271,7 @@ function CourtAssignRow({ m, courts, onAssign }: {
 // ── 완료 경기 접기
 function FinishedSection({ items, onScore }: {
   items: VenueMatch[]
-  onScore: (m: VenueMatch) => void
+  onScore?: (m: VenueMatch) => void   // 없으면 수정 버튼 숨김 (끝난 경기 정정은 마스터 PIN)
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -1265,7 +1297,7 @@ function FinishedSection({ items, onScore }: {
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
                 <span className="text-[10px] font-mono text-stone-300">#{m.court_order}</span>
-                {!m.is_team_tie && (
+                {!m.is_team_tie && onScore && (
                   <button onClick={() => onScore(m)}
                     className="text-[10px] text-stone-300 hover:text-amber-500 px-1 transition-all">
                     수정

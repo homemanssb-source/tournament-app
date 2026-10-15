@@ -5,6 +5,7 @@ import { requestSlotCheck } from '@/lib/slot-check'
 import { useEventId, useDivisions, DivisionTabs } from '@/components/useDashboard'
 import SeedPanel, { type SeedCandidate } from '@/components/SeedPanel'
 import { calcGroupDistribution, saveSeeds } from '@/lib/seed'
+import { parseScorePair } from '@/lib/score'
 
 interface GroupMember {
   id: string
@@ -146,11 +147,11 @@ export default function GroupsPage() {
       }
 
       for (const m of finished) {
-        if (!m.score || m.score === 'BYE' || !m.score.includes(':')) continue
+        if (!m.score || m.score === 'BYE') continue
         // ✅ 점수는 "승자 먼저"로 저장되는 경우가 대부분(선수 PIN RPC가 그렇게 기록) → 위치가 아니라
         //    승자 기준으로 읽는다: 승자 = 큰 수, 패자 = 작은 수. (두 저장 방식 모두에 안전)
-        const [n1, n2] = m.score.split(':').map(Number)
-        if (isNaN(n1) || isNaN(n2)) continue
+        //    w.o("w.o", "3:2 w.o")는 승패만 세고 게임 득실은 0 (DB 순위 계산과 같음)
+        const [n1, n2] = parseScorePair(m.score) ?? [0, 0]
         const hi = Math.max(n1, n2), lo = Math.min(n1, n2)
         const aScore = m.winner_team_id === m.team_b_id ? lo : hi
         const bScore = m.winner_team_id === m.team_b_id ? hi : lo

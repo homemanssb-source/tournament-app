@@ -495,11 +495,11 @@ export default function LineupPage() {
                   </div>
                   {hasScore && !isScoring && (
                     <div className="text-center py-2 bg-gray-50 rounded-lg">
-                      <div className="text-xl font-bold">{formatSetScore(rubber!.set1_a,rubber!.set1_b)}
+                      <div className="text-xl font-bold">{rubber!.is_walkover ? <span className="text-orange-600">w.o</span> : <>{formatSetScore(rubber!.set1_a,rubber!.set1_b)}
                         {rubber!.set2_a!==null&&' / '+formatSetScore(rubber!.set2_a,rubber!.set2_b)}
-                        {rubber!.set3_a!==null&&' / '+formatSetScore(rubber!.set3_a,rubber!.set3_b)}</div>
+                        {rubber!.set3_a!==null&&' / '+formatSetScore(rubber!.set3_a,rubber!.set3_b)}</>}</div>
                       {rubber!.winning_club_id && <div className="text-xs text-blue-600 mt-1">승: {rubber!.winning_club_id===clubA?.id?clubA?.name:clubB?.name}</div>}
-                      {rubber!.is_walkover && <div className="text-xs text-orange-600 mt-1">{rubber!.winning_club_id ? '공오더 — 부전승' : '양 팀 공오더 — 승자 없음'}</div>}
+                      {rubber!.is_walkover && <div className="text-xs text-orange-600 mt-1">{rubber!.winning_club_id ? 'w.o — 부전승' : '양 팀 w.o — 승자 없음'}</div>}
                     </div>
                   )}
                   {!hasScore && !isScoring && !tieCompleted && rubber && myClub && (

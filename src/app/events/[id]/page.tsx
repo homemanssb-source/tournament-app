@@ -13,6 +13,7 @@ import Link from 'next/link'
 import { supabase, Division, Match } from '@/lib/supabase'
 import TournamentBracket from '@/components/TournamentBracket'
 import CourtBoard from '@/components/CourtBoard'
+import { parseScorePair, isWalkoverScore } from '@/lib/score'
 import { fetchClubs, fetchTies, fetchStandings, fetchEventTeamConfig } from '@/lib/team-api'
 import { getFormatLabel, getRoundLabel, getTieStatusLabel, getTieStatusColor, getMajority } from '@/lib/team-utils'
 import type { Club, TieWithClubs, StandingWithClub, EventTeamConfig } from '@/types/team'
@@ -491,9 +492,8 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
         for (const m of (sData || [])) {
           if (!teamMap[m.team_a_id]) teamMap[m.team_a_id] = { name: m.team_a_name, win:0, lose:0, scored:0, against:0 }
           if (!teamMap[m.team_b_id]) teamMap[m.team_b_id] = { name: m.team_b_name, win:0, lose:0, scored:0, against:0 }
-          const parts = (m.score || '0:0').split(':').map(Number)
-          let sa = parts[0] ?? 0
-          let sb = parts[1] ?? 0
+          // w.o 는 승패만 (게임 득실 0)
+          let [sa, sb] = parseScorePair(m.score) ?? [0, 0]
           if (m.winner_team_id === m.team_a_id && sa < sb) { [sa, sb] = [sb, sa] }
           if (m.winner_team_id === m.team_b_id && sb < sa) { [sa, sb] = [sb, sa] }
           if (m.winner_team_id === m.team_a_id) {
@@ -639,7 +639,7 @@ function MatchResultRow({ m }: { m: any }) {
   // DB score 저장 방식이 혼재 (개인PIN=team_a:team_b 고정, 마스터PIN=직접입력)
   // → 두 숫자 중 높은 쪽을 승자 점수로 간주, 항상 높은쪽:낮은쪽 순으로 표시
   let displayScore = m.score
-  if (m.winner_team_id && m.score && m.score.includes(':')) {
+  if (m.winner_team_id && m.score && m.score.includes(':') && !isWalkoverScore(m.score)) {
     const parts = m.score.split(':')
     const s0 = parseInt(parts[0], 10)
     const s1 = parseInt(parts[1], 10)

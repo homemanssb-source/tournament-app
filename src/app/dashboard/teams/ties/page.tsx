@@ -520,10 +520,11 @@ export default function TiesPage() {
                                 <div className="flex items-center justify-between">
                                   <div className="text-center flex-1">
                                     <div className="text-lg font-bold">
+                                      {r.is_walkover ? <span className="text-orange-600">w.o</span> : <>
                                       {formatSetScore(r.set1_a, r.set1_b)}
-                                      {r.is_walkover && <span className="ml-1 text-xs text-orange-600">(공오더)</span>}
                                       {r.set2_a !== null && ' / ' + formatSetScore(r.set2_a, r.set2_b)}
                                       {r.set3_a !== null && ' / ' + formatSetScore(r.set3_a, r.set3_b)}
+                                      </>}
                                     </div>
                                   </div>
                                   <button onClick={() => startScoreEdit(r)}

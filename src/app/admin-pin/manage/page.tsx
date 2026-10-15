@@ -7,8 +7,11 @@ import { getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority } fro
 import type { TieWithClubs, TeamLineup, ClubMember } from '@/types/team'
 import AdminBracketView from '@/components/AdminBracketView'
 import CourtBoard from '@/components/CourtBoard'
+import TeamStandingsPanel from '@/components/TeamStandingsPanel'
+import { normalizeAdminScore, isWalkoverScore } from '@/lib/score'
 
-type Tab = 'individual' | 'team' | 'bracket' | 'courts' | 'pins' | 'locks'
+type Tab = 'individual' | 'team' | 'standings' | 'bracket' | 'courts' | 'pins' | 'locks'
+interface VenueLite { id: string; name: string; short_name: string | null; court_count: number | null; courts: string[] | null }
 
 interface PinTeam { id: string; team_num: string; team_name: string; division_name: string; pin_plain: string }
 interface PinClub { id: string; name: string; division_name: string; captain_name: string | null; captain_pin: string | null }
@@ -50,6 +53,8 @@ export default function AdminPinManagePage() {
 
   // ── 코트 번호 → 이름 매핑 (글로벌 인덱스 기준) ──
   const [courtNames, setCourtNames] = useState<string[]>([])
+  const [venues, setVenues] = useState<VenueLite[]>([])
+  const [openingVenue, setOpeningVenue] = useState('')
 
   // 단체전 점수 입력 state
   const [scoringRubber, setScoringRubber] = useState<string | null>(null)
@@ -91,18 +96,31 @@ export default function AdminPinManagePage() {
     loadPinData(s.event_id, s.token)
     loadVenues(s.event_id)
 
-    // ✅ 단체전 ties 상태 30초마다 자동 갱신 (라인업 제출/점수 변경 실시간 반영)
-    const iv = setInterval(() => {
+    // ✅ 개인전 경기·단체전 ties 30초마다 자동 갱신 + 로그인 만료 확인
+    const iv = setInterval(async () => {
+      loadAllMatches(s.event_id)
       loadTiesData(s.event_id)
+      const { data } = await supabase.rpc('rpc_admin_pin_locks', { p_token: s.token })
+      if ((data as any)?.success === false) checkExpired((data as any).error)
     }, 30000)
     return () => clearInterval(iv)
   }, [])
 
+  // 마스터 PIN 로그인 만료(12시간 또는 PIN 변경) → 로그인 화면으로
+  function checkExpired(message?: string | null): boolean {
+    if (!message || !/만료/.test(message)) return false
+    localStorage.removeItem('admin_pin_session')
+    alert('마스터 PIN 로그인이 만료되었습니다. 다시 로그인해 주세요.')
+    router.push('/admin-pin')
+    return true
+  }
+
   // ── 베뉴 로드 → 글로벌 코트 이름 배열 생성 (dashboard/courts와 동일 로직) ──
   async function loadVenues(eventId: string) {
     const { data } = await supabase.from('venues')
-      .select('name, short_name, court_count, courts')
+      .select('id, name, short_name, court_count, courts')
       .eq('event_id', eventId).order('created_at')
+    setVenues((data || []) as VenueLite[])
     const names: string[] = (data || []).flatMap((v: any) => {
       const sn = (v.short_name?.trim() || v.name?.trim() || '코트')
       const count = v.court_count || v.courts?.length || 0
@@ -379,12 +397,19 @@ export default function AdminPinManagePage() {
 
   async function handleUpdateScore() {
     if (!session||!selectedMatch||!newScore||!newWinner) { setMsg('점수와 승자를 모두 입력해주세요.'); return }
+    const norm = normalizeAdminScore(newScore)
+    if ('error' in norm) { setMsg('❌ ' + norm.error); return }
+    const score = norm.score
+    const winnerName = newWinner==='A' ? selectedMatch.team_a_name : selectedMatch.team_b_name
+    if (!confirm(`승자: ${winnerName}\n점수: ${score}\n\n이대로 저장할까요?`)) return
+    setNewScore(score)
     setLoading(true); setMsg('')
     const winnerId = newWinner==='A' ? selectedMatch.team_a_id : selectedMatch.team_b_id
     const { error } = await supabase.rpc('rpc_admin_pin_update_score', {
-      p_token: session.token, p_match_id: selectedMatch.id, p_score: newScore, p_winner_team_id: winnerId
+      p_token: session.token, p_match_id: selectedMatch.id, p_score: score, p_winner_team_id: winnerId
     })
     if (error) {
+      if (checkExpired(error.message)) return
       // ✅ 다음 라운드가 이미 완료돼 정상 수정이 막힌 경우 → 강제 수정 옵션 제공
       //    (대시보드 코트배정 강제수정과 동일 동작)
       const blocked = /다음 라운드|완료되어/.test(error.message || '')
@@ -396,7 +421,7 @@ export default function AdminPinManagePage() {
       )) {
         // matches 직접 수정 불가(025b) — 관리자 세션 토큰으로 서버에서 강제 수정 + 본선 승자 재진출
         const { data: fr, error: ue } = await supabase.rpc('rpc_admin_pin_force_score', {
-          p_token: session.token, p_match_id: selectedMatch.id, p_score: newScore, p_winner_team_id: winnerId,
+          p_token: session.token, p_match_id: selectedMatch.id, p_score: score, p_winner_team_id: winnerId,
         })
         if (ue || (fr as any)?.success === false) { setLoading(false); setMsg('❌ ' + (ue?.message || (fr as any)?.error)); return }
         await tryFillTournamentSlotsAdmin(selectedMatch.id, session.event_id)
@@ -416,6 +441,87 @@ export default function AdminPinManagePage() {
     setLoading(false)
     setMsg('✅ 결과가 수정되었습니다.')
     loadAllMatches(session.event_id); setSelectedMatch(null)
+  }
+
+  // 팀 중도 기권: 이 팀의 남은 경기(상대가 정해진 것) 전부 w.o, 상대 승
+  async function handleWithdrawTeam(side: 'A' | 'B') {
+    if (!session || !selectedMatch) return
+    const teamId = side === 'A' ? selectedMatch.team_a_id : selectedMatch.team_b_id
+    const teamName = side === 'A' ? selectedMatch.team_a_name : selectedMatch.team_b_name
+    if (!teamId) return
+    const targets = allMatches
+      .filter(m => m.status !== 'FINISHED' && m.team_a_id && m.team_b_id && (m.team_a_id === teamId || m.team_b_id === teamId))
+      .sort((a, b) => (a.stage === 'GROUP' ? 0 : 1) - (b.stage === 'GROUP' ? 0 : 1) || (a.slot ?? 0) - (b.slot ?? 0))
+    if (targets.length === 0) { setMsg('❌ ' + teamName + ' 팀의 남은 경기가 없습니다.'); return }
+    if (!confirm(
+      `🚫 ${teamName} 대회 중도 기권\n\n남은 ${targets.length}경기를 모두 w.o (상대 승)로 처리합니다.\n` +
+      '되돌리려면 경기마다 결과를 다시 고쳐야 합니다.\n\n계속할까요?'
+    )) return
+    setLoading(true); setMsg('')
+    let done = 0
+    const fails: string[] = []
+    for (const m of targets) {
+      const winnerId = m.team_a_id === teamId ? m.team_b_id : m.team_a_id
+      const { error } = await supabase.rpc('rpc_admin_pin_update_score', {
+        p_token: session.token, p_match_id: m.id, p_score: 'w.o', p_winner_team_id: winnerId,
+      })
+      if (error) {
+        if (checkExpired(error.message)) return
+        fails.push(`${m.match_num || ''} ${error.message}`); continue
+      }
+      done++
+      await tryFillTournamentSlotsAdmin(m.id, session.event_id)
+      notifyAfterScore(m)
+    }
+    setLoading(false)
+    setMsg(fails.length
+      ? `❌ ${done}경기 w.o 처리, ${fails.length}경기 실패: ${fails.join(' / ')}`
+      : `✅ ${teamName} 기권 — ${done}경기 w.o 처리됨`)
+    loadAllMatches(session.event_id); setSelectedMatch(null)
+  }
+
+  // 단체전 클럽 불참: 남은 복식 전부 w.o, 상대 클럽 승
+  async function handleTieWalkover(absent: 'A' | 'B') {
+    if (!session || !selectedTie) return
+    const absentName = absent === 'A' ? selectedTie.club_a?.name : selectedTie.club_b?.name
+    const winnerId = absent === 'A' ? selectedTie.club_b_id : selectedTie.club_a_id
+    const winnerName = absent === 'A' ? selectedTie.club_b?.name : selectedTie.club_a?.name
+    if (!confirm(`🚫 ${absentName} 불참\n\n남은 복식을 모두 w.o 로 처리하고 ${winnerName} 승으로 기록합니다.\n계속할까요?`)) return
+    setScoreSaving(true); setTieMsg('')
+    try {
+      const { data, error } = await supabase.rpc('rpc_admin_pin_tie_walkover', {
+        p_token: session.token, p_tie_id: selectedTie.id, p_winner_club_id: winnerId,
+      })
+      if (error) { if (!checkExpired(error.message)) setTieMsg('❌ ' + error.message); return }
+      if ((data as any)?.success === false) { if (!checkExpired((data as any).error)) setTieMsg('❌ ' + (data as any).error); return }
+      const [rubberData, tieData] = await Promise.all([
+        supabase.from('tie_rubbers').select('*').eq('tie_id', selectedTie.id).order('rubber_number'),
+        supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)').eq('id', selectedTie.id).single(),
+      ])
+      setTieRubbers(rubberData.data || [])
+      if (tieData.data) {
+        setSelectedTie(tieData.data as any)
+        setTies(prev => prev.map(t => t.id === selectedTie.id ? tieData.data as any : t))
+      }
+      setTieMsg(`✅ ${absentName} 불참 — 복식 ${(data as any)?.rubbers ?? ''}개 w.o 처리`)
+    } finally {
+      setScoreSaving(false)
+    }
+  }
+
+  // 마스터 PIN 으로 경기장 코트 관리 화면 열기 (코트 배정·이동·자동 배정)
+  async function openVenueManage(v: VenueLite) {
+    if (!session) return
+    setOpeningVenue(v.id)
+    try {
+      const { data, error } = await supabase.rpc('rpc_admin_pin_open_venue', { p_token: session.token, p_venue_id: v.id })
+      if (error) { if (!checkExpired(error.message)) alert('❌ ' + error.message); return }
+      if ((data as any)?.success === false) { if (!checkExpired((data as any).error)) alert('❌ ' + (data as any).error); return }
+      sessionStorage.setItem('venue_session', JSON.stringify({ ...(data as any), admin_token: session.token }))
+      router.push('/venue/manage')
+    } finally {
+      setOpeningVenue('')
+    }
   }
 
   async function handleSelectTie(tie: TieWithClubs) {
@@ -482,8 +588,8 @@ export default function AdminPinManagePage() {
         p_set2_a: set2a ? parseInt(set2a) : null, p_set2_b: set2b ? parseInt(set2b) : null,
         p_set3_a: set3a ? parseInt(set3a) : null, p_set3_b: set3b ? parseInt(set3b) : null,
       })
-      if (err) { setScoreError(err.message); return }
-      if (data && !data.success) { setScoreError(data.error || '저장 실패'); return }
+      if (err) { if (!checkExpired(err.message)) setScoreError(err.message); return }
+      if (data && !data.success) { if (!checkExpired(data.error)) setScoreError(data.error || '저장 실패'); return }
       if (data?.reseat?.success === false && data.reseat.reseat_skipped) alert('⚠️ ' + data.reseat.error)
 
       const [rubberData, tieData] = await Promise.all([
@@ -523,14 +629,14 @@ export default function AdminPinManagePage() {
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
           <div>
             <h1 className="font-bold">🛡️ 관리자 도구</h1>
-            <p className="text-xs text-white/60">{session.event_name} · 30분 세션</p>
+            <p className="text-xs text-white/60">{session.event_name} · 12시간 로그인</p>
           </div>
           <button onClick={handleLogout} className="text-sm text-white/60 hover:text-white">로그아웃</button>
         </div>
       </header>
 
       <div className="max-w-2xl mx-auto px-4 pt-4">
-        <div className="grid grid-cols-3 gap-2 mb-4">
+        <div className="grid grid-cols-4 gap-1.5 mb-4 [&>button]:px-1 [&>button]:text-xs sm:[&>button]:text-sm">
           <button onClick={() => { setTab('individual'); setSelectedMatch(null); setMsg('') }}
             className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='individual'?'bg-red-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
             🎾 개인전
@@ -539,6 +645,12 @@ export default function AdminPinManagePage() {
             className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='team'?'bg-blue-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
             📋 단체전
           </button>
+          {ties.length > 0 && (
+            <button onClick={() => setTab('standings')}
+              className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='standings'?'bg-yellow-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              📊 순위
+            </button>
+          )}
           <button onClick={() => setTab('bracket')}
             className={`py-2.5 rounded-lg text-sm font-medium transition ${tab==='bracket'?'bg-emerald-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
             🏆 대진표
@@ -566,8 +678,43 @@ export default function AdminPinManagePage() {
         {/* ══════ 대진표 (보기 전용) ══════ */}
         {tab === 'bracket' && <AdminBracketView eventId={session.event_id} />}
 
-        {/* ══════ 코트 현황 (보기 전용, 공개 화면과 동일) ══════ */}
-        {tab === 'courts' && <CourtBoard eventId={session.event_id} />}
+        {/* ══════ 단체전 순위 + 동률 결정 ══════ */}
+        {tab === 'standings' && (
+          <>
+            {divisions.length > 1 && (
+              <div className="flex gap-1 overflow-x-auto pb-1">
+                {divisions.map(d => (
+                  <button key={d.id} onClick={() => setSelectedDivId(d.id)}
+                    className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap ${selectedDivId === d.id ? 'bg-yellow-600 text-white shadow' : 'bg-gray-100 text-gray-600'}`}>
+                    {d.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <TeamStandingsPanel eventId={session.event_id} selectedDiv={divisions.length > 0 ? selectedDivId : ''} adminToken={session.token} />
+          </>
+        )}
+
+        {/* ══════ 코트: 경기장별 코트 관리 열기 + 현황 ══════ */}
+        {tab === 'courts' && (
+          <>
+            {venues.length > 0 && (
+              <div className="bg-teal-50 border border-teal-200 rounded-xl p-3">
+                <p className="text-sm font-bold text-teal-800 mb-2">🛠 코트 배정·변경</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {venues.map(v => (
+                    <button key={v.id} onClick={() => openVenueManage(v)} disabled={!!openingVenue}
+                      className="bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded-lg py-2.5 px-2 text-sm font-bold">
+                      {openingVenue === v.id ? '여는 중...' : `${v.short_name?.trim() || v.name} 코트 관리`}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-teal-700 mt-2">경기장마다 그 경기장 코트끼리만 옮길 수 있습니다. 경기장 사이 이동은 운영자 대시보드에서 하세요.</p>
+              </div>
+            )}
+            <CourtBoard eventId={session.event_id} />
+          </>
+        )}
 
         {/* ══════ 개인전 ══════ */}
         {tab === 'individual' && (
@@ -590,12 +737,49 @@ export default function AdminPinManagePage() {
               )}
             </div>
 
-            {!searchQuery && (
-              <div className="text-center py-10 text-gray-400">
-                <div className="text-3xl mb-2">🔍</div>
-                <p>팀명 또는 경기번호를 검색하세요</p>
-              </div>
-            )}
+            {!searchQuery && !selectedMatch && (() => {
+              const byCourtName = (a: any, b: any) => (a.court || '').localeCompare(b.court || '', undefined, { numeric: true })
+              const live = allMatches.filter(m => m.status === 'IN_PROGRESS').sort(byCourtName)
+              // 코트마다 다음 대기 경기 하나 (진행 중 경기가 없는 코트 포함)
+              const next: any[] = []
+              const seen = new Set<string>()
+              for (const m of allMatches.filter(x => x.status === 'PENDING' && x.court && x.team_a_id && x.team_b_id)
+                .sort((a, b) => byCourtName(a, b) || (a.court_order ?? 0) - (b.court_order ?? 0))) {
+                if (seen.has(m.court)) continue
+                seen.add(m.court); next.push(m)
+              }
+              const card = (m: any, tag: string, tagStyle: string) => (
+                <div key={m.id} onClick={() => selectMatch(m)}
+                  className="bg-white rounded-xl border p-3 cursor-pointer hover:border-gray-300">
+                  <div className="flex items-center justify-between mb-1 gap-2">
+                    <span className="text-xs font-bold text-teal-700">📍 {m.court || '코트 미정'}</span>
+                    <span className="text-xs text-gray-400 truncate">{m.division_name} · {m.round}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${tagStyle}`}>{tag}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium">{m.team_a_name || 'TBD'}</span>
+                    <span className="text-gray-400 font-bold mx-2">{m.score || 'vs'}</span>
+                    <span className="font-medium text-right">{m.team_b_name || 'TBD'}</span>
+                  </div>
+                </div>
+              )
+              return (
+                <div className="space-y-4">
+                  <p className="text-xs text-gray-400 text-center">🔍 팀명·경기번호로 검색하거나 아래 경기를 누르세요 · 30초마다 새로고침</p>
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-bold text-gray-500 px-1">🔴 진행 중 ({live.length})</h3>
+                    {live.length === 0 && <p className="text-sm text-gray-400 px-1">진행 중인 경기가 없습니다.</p>}
+                    {live.map(m => card(m, '진행중', 'bg-red-100 text-red-700'))}
+                  </div>
+                  {next.length > 0 && (
+                    <div className="space-y-2">
+                      <h3 className="text-xs font-bold text-gray-500 px-1">⏭ 코트별 다음 경기 ({next.length})</h3>
+                      {next.map(m => card(m, '다음', 'bg-amber-100 text-amber-700'))}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
             {searchQuery && filtered.length === 0 && (
               <div className="text-center py-8 text-gray-400">검색 결과가 없습니다.</div>
             )}
@@ -650,6 +834,13 @@ export default function AdminPinManagePage() {
                   <div className="mb-3">
                     <label className="text-xs text-stone-500">점수</label>
                     <input type="text" placeholder="6:4" value={newScore} onChange={e => setNewScore(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-center text-lg font-bold mt-1" />
+                    <div className="flex gap-2 mt-2">
+                      <button onClick={() => setNewScore('w.o')}
+                        className="flex-1 py-2 rounded-lg text-xs font-bold border border-orange-300 text-orange-700 bg-orange-50">w.o (불참)</button>
+                      <button onClick={() => setNewScore(s => isWalkoverScore(s) ? s : `${(s || '').trim()} w.o`.trim())}
+                        className="flex-1 py-2 rounded-lg text-xs font-bold border border-orange-300 text-orange-700 bg-orange-50">도중 기권 (+ w.o)</button>
+                    </div>
+                    <p className="text-[11px] text-stone-400 mt-1">불참: w.o · 도중 기권: 그때까지 점수 뒤에 w.o (예: 3:2 w.o) · 승자는 이긴 팀</p>
                   </div>
                   <div className="mb-3">
                     <label className="text-xs text-stone-500">승자</label>
@@ -662,6 +853,18 @@ export default function AdminPinManagePage() {
                     {loading?'처리 중...':'결과 저장'}
                   </button>
                 </div>
+                {selectedMatch.team_a_id && selectedMatch.team_b_id && (
+                  <div className="mt-3 p-3 bg-stone-50 rounded-lg">
+                    <p className="text-sm font-bold mb-1">🚫 대회 중도 기권</p>
+                    <p className="text-xs text-stone-500 mb-2">그 팀의 남은 경기를 모두 w.o (상대 승)로 처리합니다.</p>
+                    <div className="flex gap-2">
+                      <button onClick={() => handleWithdrawTeam('A')} disabled={loading}
+                        className="flex-1 py-2 rounded-lg text-xs font-medium border border-stone-300 hover:border-red-400 disabled:opacity-50">{selectedMatch.team_a_name} 기권</button>
+                      <button onClick={() => handleWithdrawTeam('B')} disabled={loading}
+                        className="flex-1 py-2 rounded-lg text-xs font-medium border border-stone-300 hover:border-red-400 disabled:opacity-50">{selectedMatch.team_b_name} 기권</button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -777,6 +980,18 @@ export default function AdminPinManagePage() {
 
                     {isSelected && (
                       <div className="border-t bg-gray-50 p-4 space-y-3">
+                        {tie.status !== 'completed' && tie.club_a_id && tie.club_b_id && (
+                          <div className="bg-white rounded-lg border border-orange-200 p-3">
+                            <p className="text-sm font-bold mb-1">🚫 클럽 불참</p>
+                            <p className="text-xs text-gray-500 mb-2">남은 복식을 모두 w.o 로 처리하고 상대 클럽 승으로 기록합니다.</p>
+                            <div className="flex gap-2">
+                              <button onClick={() => handleTieWalkover('A')} disabled={scoreSaving}
+                                className="flex-1 py-2 rounded-lg text-xs font-medium border border-gray-300 hover:border-orange-400 disabled:opacity-50">{tie.club_a?.name} 불참</button>
+                              <button onClick={() => handleTieWalkover('B')} disabled={scoreSaving}
+                                className="flex-1 py-2 rounded-lg text-xs font-medium border border-gray-300 hover:border-orange-400 disabled:opacity-50">{tie.club_b?.name} 불참</button>
+                            </div>
+                          </div>
+                        )}
                         {Array.from({ length: tie.rubber_count }, (_, i) => i+1).map(num => {
                           const laA = tieLineups.find(l => l.rubber_number===num && l.club_id===tie.club_a_id)
                           const laB = tieLineups.find(l => l.rubber_number===num && l.club_id===tie.club_b_id)
@@ -812,10 +1027,11 @@ export default function AdminPinManagePage() {
                               {hasScore && !isScoring && (
                                 <div className="flex items-center justify-between">
                                   <div className="text-center flex-1 py-1 bg-gray-50 rounded text-sm font-bold">
+                                    {rubber.is_walkover ? <span className="text-orange-600">w.o</span> : <>
                                     {formatSetScore(rubber.set1_a, rubber.set1_b)}
-                                    {rubber.is_walkover && <span className="ml-1 text-xs text-orange-600">(공오더)</span>}
                                     {rubber.set2_a !== null && ' / '+formatSetScore(rubber.set2_a, rubber.set2_b)}
                                     {rubber.set3_a !== null && ' / '+formatSetScore(rubber.set3_a, rubber.set3_b)}
+                                    </>}
                                     {rubber.winning_club_id && (
                                       <span className="text-xs text-blue-600 ml-2">
                                         승: {rubber.winning_club_id===tie.club_a_id?tie.club_a?.name:tie.club_b?.name}
