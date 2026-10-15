@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useEventId } from '@/components/useDashboard'
+import { parseScorePair } from '@/lib/score'
 
 interface EventStats {
   event: any
@@ -231,8 +232,9 @@ export default function DashboardPage() {
           if (!teamWins[m.team_a_id]) teamWins[m.team_a_id] = { name: m.team_a_name, id: m.team_a_id, wins: 0, diff: 0 }
           if (!teamWins[m.team_b_id]) teamWins[m.team_b_id] = { name: m.team_b_name, id: m.team_b_id, wins: 0, diff: 0 }
           // ✅ 승자 기준으로 읽기 (점수가 "승자 먼저"로 저장되는 경우가 대부분)
-          const [n1, n2] = (m.score || '0:0').split(':').map(Number)
-          const hi = Math.max(n1 || 0, n2 || 0), lo = Math.min(n1 || 0, n2 || 0)
+          // w.o 는 승패만 (게임 득실 0)
+          const [n1, n2] = parseScorePair(m.score) ?? [0, 0]
+          const hi = Math.max(n1, n2), lo = Math.min(n1, n2)
           if (m.winner_team_id === m.team_a_id) { teamWins[m.team_a_id].wins++; teamWins[m.team_a_id].diff += (hi - lo); teamWins[m.team_b_id].diff -= (hi - lo) }
           else if (m.winner_team_id === m.team_b_id) { teamWins[m.team_b_id].wins++; teamWins[m.team_b_id].diff += (hi - lo); teamWins[m.team_a_id].diff -= (hi - lo) }
         }

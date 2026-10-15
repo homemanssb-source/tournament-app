@@ -16,10 +16,11 @@ function getRankStyle(rank: number | null) {
   return { bg: '', text: '', icon: '' };
 }
 
-export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0 }: {
+export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0, adminToken }: {
   eventId: string
   selectedDiv: string        // '' = 부서 구분 없음
   reloadKey?: number         // 부모가 조편성 등을 다시 만들면 올려서 다시 불러오게 함
+  adminToken?: string        // 마스터 PIN 화면: 동률 순위만 이 토큰으로 저장 (재계산 버튼 없음)
 }) {
   const [config, setConfig] = useState<EventTeamConfig | null>(null);
   const [groups, setGroups] = useState<any[]>([]);
@@ -121,7 +122,10 @@ export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0
       // 마지막 팀까지 저장되면 동률이 풀리고, DB가 본선 자리를 자동으로 채운다
       let reseat: any = null;
       for (const s of all) {
-        const r: any = await setManualRank(eventId, s.club_id, parseInt(manualRanks[s.club_id]), manualNotes || '수동 결정');
+        const rank = parseInt(manualRanks[s.club_id]);
+        const r: any = adminToken
+          ? (await supabase.rpc('rpc_admin_pin_set_manual_rank', { p_token: adminToken, p_club_id: s.club_id, p_rank: rank })).data
+          : await setManualRank(eventId, s.club_id, rank, manualNotes || '수동 결정');
         if (r && r.success === false) throw new Error(r.error || '순위 저장 실패');
         reseat = r?.reseat ?? null;
       }
@@ -146,15 +150,23 @@ export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0
     return !!group && group.division_id === selectedDiv;
   });
   const hasTied = visible.some(([, list]) => list.some(s => s.is_tied));
+  // 마스터 PIN(휴대폰) 화면: 경기·러버승·러버패 칸을 빼고 좁게
+  const compact = !!adminToken;
+  const cell = compact ? 'px-2 py-2' : 'px-4 py-3';
 
   return (
     <div id="standings" className="space-y-4 scroll-mt-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-bold">📊 순위</h2>
-        <button onClick={handleRecalculate} disabled={recalculating || loading}
-          className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded text-sm disabled:opacity-50">
-          {recalculating ? '계산중..' : '🔄 순위 재계산'}
-        </button>
+        {adminToken ? (
+          <button onClick={loadData} disabled={loading}
+            className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded text-sm disabled:opacity-50">🔄 새로고침</button>
+        ) : (
+          <button onClick={handleRecalculate} disabled={recalculating || loading}
+            className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded text-sm disabled:opacity-50">
+            {recalculating ? '계산중..' : '🔄 순위 재계산'}
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -187,20 +199,20 @@ export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0
                   <table className="w-full text-sm">
                     <thead className="bg-gray-50 border-t">
                       <tr>
-                        <th className="px-4 py-3 text-left w-16">순위</th>
-                        <th className="px-4 py-3 text-left">팀명</th>
-                        <th className="px-4 py-3 text-center w-16">경기</th>
-                        <th className="px-4 py-3 text-center w-16">승</th>
-                        <th className="px-4 py-3 text-center w-16">패</th>
-                        <th className="px-4 py-3 text-center w-20">러버승</th>
-                        <th className="px-4 py-3 text-center w-20">러버패</th>
-                        <th className="px-4 py-3 text-center w-20">득실차</th>
-                        <th className="px-4 py-3 text-center w-24">상태</th>
+                        <th className={`${cell} text-left w-16 whitespace-nowrap`}>순위</th>
+                        <th className={`${cell} text-left`}>팀명</th>
+                        {!compact && <th className="px-4 py-3 text-center w-16">경기</th>}
+                        <th className={`${cell} text-center w-12`}>승</th>
+                        <th className={`${cell} text-center w-12`}>패</th>
+                        {!compact && <th className="px-4 py-3 text-center w-20">러버승</th>}
+                        {!compact && <th className="px-4 py-3 text-center w-20">러버패</th>}
+                        <th className={`${cell} text-center w-16 whitespace-nowrap`}>득실차</th>
+                        <th className={`${cell} text-center w-20`}>상태</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
                       {standings.length === 0 && (
-                        <tr><td colSpan={9} className="px-4 py-6 text-center text-gray-400">데이터 없음</td></tr>
+                        <tr><td colSpan={compact ? 6 : 9} className="px-4 py-6 text-center text-gray-400">데이터 없음</td></tr>
                       )}
                       {standings.map(s => {
                         const isTied = s.is_tied;
@@ -209,7 +221,7 @@ export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0
                           <tr key={s.id}
                             className={`${isTied ? 'bg-yellow-50 cursor-pointer hover:bg-yellow-100' : rs.bg ? rs.bg + ' ' : ''}`}
                             onClick={isTied ? () => openManualRank(s, standings) : undefined}>
-                            <td className="px-4 py-3">
+                            <td className={cell}>
                               {s.rank !== null ? (
                                 <span className="flex items-center gap-1">
                                   {rs.icon && <span className="text-base">{rs.icon}</span>}
@@ -217,27 +229,27 @@ export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0
                                 </span>
                               ) : <span className="text-yellow-600 font-medium">-</span>}
                             </td>
-                            <td className="px-4 py-3">
-                              <span className={`font-medium ${rs.text}`}>{s.club?.name || '-'}</span>
+                            <td className={cell}>
+                              <span className={`font-medium ${rs.text} ${compact ? 'whitespace-nowrap' : ''}`}>{s.club?.name || '-'}</span>
                               {s.club?.seed_number && (
                                 <span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">{s.club.seed_number}시드</span>
                               )}
                             </td>
-                            <td className="px-4 py-3 text-center">{s.played}</td>
-                            <td className="px-4 py-3 text-center font-bold">
+                            {!compact && <td className="px-4 py-3 text-center">{s.played}</td>}
+                            <td className={`${cell} text-center font-bold`}>
                               <span className={s.won > 0 ? 'text-blue-600' : ''}>{s.won}</span>
                             </td>
-                            <td className="px-4 py-3 text-center">
+                            <td className={`${cell} text-center`}>
                               <span className={s.lost > 0 ? 'text-red-500' : ''}>{s.lost}</span>
                             </td>
-                            <td className="px-4 py-3 text-center">{s.rubbers_for}</td>
-                            <td className="px-4 py-3 text-center">{s.rubbers_against}</td>
-                            <td className="px-4 py-3 text-center font-bold">
+                            {!compact && <td className="px-4 py-3 text-center">{s.rubbers_for}</td>}
+                            {!compact && <td className="px-4 py-3 text-center">{s.rubbers_against}</td>}
+                            <td className={`${cell} text-center font-bold`}>
                               <span className={s.rubber_diff > 0 ? 'text-green-600' : s.rubber_diff < 0 ? 'text-red-600' : ''}>
                                 {s.rubber_diff > 0 ? '+' : ''}{s.rubber_diff}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-center">
+                            <td className={`${cell} text-center whitespace-nowrap`}>
                               {s.rank_locked
                                 ? <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">확정 ✓</span>
                                 : isTied
@@ -283,11 +295,11 @@ export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0
                 </div>
               ))}
             </div>
-            <div>
+            {!adminToken && <div>
               <label className="block text-sm text-gray-600 mb-1">사유 (선택)</label>
               <input value={manualNotes} onChange={e => setManualNotes(e.target.value)}
                 placeholder="수동 결정 이유" className="w-full border rounded px-3 py-2 text-sm" />
-            </div>
+            </div>}
             <div className="flex gap-3 pt-2">
               <button onClick={handleSaveManualRanks} disabled={savingManual}
                 className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50">

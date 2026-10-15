@@ -44,7 +44,7 @@ export default function AdminPinPage() {
 
       <div className="text-5xl mb-4">🛡️</div>
       <h1 className="text-2xl font-bold mb-2">관리자 도구</h1>
-      <p className="text-stone-500 text-sm mb-8">마스터 PIN을 입력하세요 (30분 세션)</p>
+      <p className="text-stone-500 text-sm mb-8">마스터 PIN을 입력하세요 (12시간 유지)</p>
 
       <div className="w-full max-w-sm space-y-4">
         <input type="tel" value={pin}
