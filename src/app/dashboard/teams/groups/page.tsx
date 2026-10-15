@@ -14,36 +14,11 @@ import {
 import TeamStandingsPanel from '@/components/TeamStandingsPanel';
 import { supabase } from '@/lib/supabase';
 import { getFormatLabel, getFullLeagueTieCount } from '@/lib/team-utils';
+import { calcGroupDistribution, saveSeeds } from '@/lib/seed';
+import SeedPanel from '@/components/SeedPanel';
 import type { Club, EventTeamConfig, TieWithClubs } from '@/types/team';
 
 interface Division { id: string; name: string; sort_order: number; }
-
-// 서버(rpc_create_team_groups v2)와 완전 동일한 분배 로직.
-// 1팀 조 방지 (2+1→3, 3+1→2+2, 4+1→3+2, 5+1→3+3, 6+1→4+3).
-function calcGroupDistribution(totalTeams: number, groupSize: number): number[] {
-  if (totalTeams < 2) return [];
-  const tpg = Math.max(2, Math.min(6, groupSize));
-  const remainder   = totalTeams % tpg;
-  const fullGroups  = Math.floor(totalTeams / tpg);
-  const result: number[] = [];
-
-  if (remainder === 0) {
-    for (let i = 0; i < fullGroups; i++) result.push(tpg);
-  } else if (remainder === 1) {
-    // 마지막 1팀을 앞 조에 병합해서 1팀 조 없앰
-    for (let i = 0; i < fullGroups - 1; i++) result.push(tpg);
-    if (tpg === 2)      result.push(3);
-    else if (tpg === 3) { result.push(2); result.push(2); }
-    else if (tpg === 4) { result.push(3); result.push(2); }
-    else if (tpg === 5) { result.push(3); result.push(3); }
-    else if (tpg === 6) { result.push(4); result.push(3); }
-    else                 result.push(tpg + 1);
-  } else {
-    for (let i = 0; i < fullGroups; i++) result.push(tpg);
-    result.push(remainder);
-  }
-  return result;
-}
 
 export default function GroupsPage() {
   const eventId = useEventIdWithParam();
@@ -129,6 +104,8 @@ export default function GroupsPage() {
   async function handleCreateGroups() {
     if (distribution.length === 0) { alert('조편성할 팀이 없습니다.'); return; }
     const desc = distribution.map((size, i) => `${String.fromCharCode(65 + i)}조: ${size}팀`).join(', ');
+    const seedCount = filteredClubs.filter(c => c.seed_number != null).length;
+    if (seedCount > groupCount) { alert(`시드(${seedCount}팀)가 조 수(${groupCount}개)보다 많습니다. 시드 수를 줄이거나 조당 팀 수를 줄여주세요.`); return; }
     if (!confirm(`${groupCount}개 조로 편성합니다.\n${desc}`)) return;
     setGenerating(true);
     try {
@@ -187,6 +164,15 @@ export default function GroupsPage() {
               </button>
               {hasTies && <p className="text-xs text-red-500">재생성하면 기존 경기가 모두 초기화됩니다.</p>}
             </div>
+          )}
+
+          {(config?.team_format === 'group_tournament' || config?.team_format === 'prelim_tournament') && (
+            <SeedPanel
+              candidates={filteredClubs.map(c => ({ id: c.id, name: c.name, seed: c.seed_number ?? null }))}
+              maxSeeds={groupCount}
+              unit="팀"
+              onSave={async ids => { await saveSeeds('clubs', eventId, selectedDiv || null, ids); await loadData(); }}
+            />
           )}
 
           {(config?.team_format === 'group_tournament' || config?.team_format === 'prelim_tournament') && (

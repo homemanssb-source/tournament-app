@@ -3,6 +3,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { requestSlotCheck } from '@/lib/slot-check'
 import { useEventId, useDivisions, DivisionTabs } from '@/components/useDashboard'
+import SeedPanel, { type SeedCandidate } from '@/components/SeedPanel'
+import { calcGroupDistribution, saveSeeds } from '@/lib/seed'
 
 interface GroupMember {
   id: string
@@ -36,6 +38,8 @@ export default function GroupsPage() {
   const [msg, setMsg] = useState('')
   const [generating, setGenerating] = useState(false)
   const [groupSize, setGroupSize] = useState(4)
+  // 시드 후보 = 이 부서의 전체 팀
+  const [divTeams, setDivTeams] = useState<SeedCandidate[]>([])
 
   // 조별 순위 데이터
   const [standings, setStandings] = useState<Record<string, GroupStanding[]>>({})
@@ -53,18 +57,22 @@ export default function GroupsPage() {
     if (!eventId || !selected) return
     setLoading(true)
     try {
+      const { data: teamList } = await supabase.from('teams').select('id, team_name, seed_number')
+        .eq('event_id', eventId).eq('division_id', selected)
+      setDivTeams((teamList || []).map((t: any) => ({ id: t.id, name: t.team_name, seed: t.seed_number ?? null })))
+
       const { data: rows } = await supabase.from('v_group_board').select('*')
         .eq('event_id', eventId).eq('division_id', selected)
         .order('group_num').order('team_num')
 
       const teamIds = [...new Set((rows || []).map((r: any) => r.team_id))]
-      const checkedInMap = new Map<string, { checked_in: boolean; checked_in_at: string | null }>()
+      const checkedInMap = new Map<string, { checked_in: boolean; checked_in_at: string | null; seed: number }>()
 
       if (teamIds.length > 0) {
         const { data: teamRows } = await supabase
-          .from('teams').select('id, checked_in, checked_in_at').in('id', teamIds)
+          .from('teams').select('id, checked_in, checked_in_at, seed_number').in('id', teamIds)
         for (const t of (teamRows || [])) {
-          checkedInMap.set(t.id, { checked_in: t.checked_in ?? false, checked_in_at: t.checked_in_at ?? null })
+          checkedInMap.set(t.id, { checked_in: t.checked_in ?? false, checked_in_at: t.checked_in_at ?? null, seed: t.seed_number ?? 0 })
         }
       }
 
@@ -76,7 +84,7 @@ export default function GroupsPage() {
         const ci = checkedInMap.get(r.team_id)
         map.get(r.group_id)!.members.push({
           id: r.member_id, team_id: r.team_id, team_name: r.team_name,
-          seed: r.seed || 0,
+          seed: ci?.seed ?? 0,
           checked_in: ci?.checked_in ?? false, checked_in_at: ci?.checked_in_at ?? null,
         })
       }
@@ -207,6 +215,12 @@ export default function GroupsPage() {
   }, [loadGroups])
 
   async function generateGroups() {
+    const seedCount = divTeams.filter(t => t.seed != null).length
+    const groupCount = calcGroupDistribution(divTeams.length, groupSize).length
+    if (seedCount > groupCount) {
+      setMsg(`❌ 시드(${seedCount}팀)가 조 수(${groupCount}개)보다 많습니다. 시드 수를 줄이거나 조당 인원을 줄여주세요.`)
+      return
+    }
     setGenerating(true); setMsg('')
     const { data, error } = await supabase.rpc('rpc_generate_groups', {
       p_event_id: eventId, p_division_id: selected, p_group_size: groupSize,
@@ -355,6 +369,16 @@ export default function GroupsPage() {
         </div>
       )}
 
+      {/* 시드 배정 — 조편성 전에 정해 두면 예선·본선 모두 반영 */}
+      {divTeams.length >= 2 && (
+        <SeedPanel
+          candidates={divTeams}
+          maxSeeds={calcGroupDistribution(divTeams.length, groupSize).length}
+          unit="팀"
+          onSave={async ids => { await saveSeeds('teams', eventId, selected, ids); await loadGroups() }}
+        />
+      )}
+
       {/* 조편성 도구 */}
       <div className="bg-white rounded-xl border p-4 mb-4">
         <div className="flex flex-wrap gap-3 items-center">
@@ -382,6 +406,7 @@ export default function GroupsPage() {
         </div>
         <p className="text-xs text-stone-400 mt-2">
           * 1팀 조 방지 보정 자동 적용 (2+1→3, 3+1→2+2, 4+1→3+2)
+          {divTeams.some(t => t.seed != null) && ' · 시드는 서로 다른 조 첫 자리에 배치'}
         </p>
       </div>
 
