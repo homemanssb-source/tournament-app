@@ -1,6 +1,7 @@
 // ============================================================
 // 빈 코트 자동 이어 배정(026·027) 실서버 시뮬레이션
 //   node scripts/sim-auto-court.mjs run       → 테스트 대회 만들고 시나리오 진행 + 검사 (대회는 남겨 둠 — 화면 확인용)
+//   node scripts/sim-auto-court.mjs seed      → 테스트 대회 준비만 (경기 전부 미배정, ④ 꺼짐) — 관리자 화면 확인용
 //   node scripts/sim-auto-court.mjs cleanup   → '__TEST_SIM_자동배정_' 대회 전부 삭제
 // 준비(대회·팀·코트 배정)는 service_role, 점수 입력은 anon 키 + 마스터 PIN 토큰(실제 현장과 같은 경로).
 // 알림 선점(auto_notified_at)은 배포된 /api/notify/court 를 경기장 토큰으로 호출해 확인 (테스트 팀은 구독 없음 → 실제 푸시 없음).
@@ -93,7 +94,7 @@ async function makeTeams(ev, div, defs, pinBase) {
 const setFlags = (eventId, fill, steal) => svc.from('events').update({ auto_fill_courts: fill, auto_steal_courts: steal }).eq('id', eventId)
 const place = (id, court, order) => svc.from('matches').update({ court, court_order: order }).eq('id', id)
 
-async function run(state) {
+async function run(state, seedOnly = false) {
   sec('준비')
   const ev = await makeEvent()
   const D1 = must(await svc.from('divisions').insert({ event_id: ev.id, name: '복식부', sort_order: 1, match_date: DATE }).select().single(), '부서1')
@@ -120,6 +121,7 @@ async function run(state) {
   check(G.length === 2 && H.length === 2, `조편성: 복식부 ${G.length}조 · 학생단식 ${H.length}조`)
   check((await byGroup(G[0].id)).length === 6 && (await byGroup(H[0].id)).length === 3, '조별 경기: 4팀 조 6경기 · 3팀 조 3경기')
   state.eventId = ev.id; state.master = '7418888'; state.venuePins = { S: '7419001', J: '7419002' }
+  if (seedOnly) return
 
   const login = await rpcA('rpc_admin_pin_login', { p_master_pin: '7418888', p_event_id: ev.id })
   check(!failed(login) && login.data?.token, '마스터 PIN 로그인', errText(login))
@@ -232,10 +234,10 @@ async function run(state) {
 async function main() {
   const mode = process.argv[2]
   if (mode === 'cleanup') return cleanup()
-  if (mode !== 'run') { console.log('usage: run | cleanup'); return }
+  if (mode !== 'run' && mode !== 'seed') { console.log('usage: run | seed | cleanup'); return }
   await cleanup()
   const state = {}
-  try { await run(state) } catch (e) { check(false, '중단: ' + e.message) }
+  try { await run(state, mode === 'seed') } catch (e) { check(false, '중단: ' + e.message) }
   writeFileSync(STATE, JSON.stringify(state, null, 2))
   const fail = results.filter(r => !r.ok)
   console.log(`\n══════ 결과: ${results.length - fail.length}/${results.length} 통과 ══════`)

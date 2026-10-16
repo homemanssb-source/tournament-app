@@ -61,7 +61,7 @@ export default function TiesPage() {
       setGroups(grpsRes.data || []);
       const divList = divsRes.data || [];
       setDivisions(divList);
-      setSelectedDiv(prev => prev || (divList[0]?.id ?? ''));
+      setSelectedDiv(prev => divList.some((d: any) => d.id === prev) ? prev : (divList[0]?.id ?? ''));   // 대회를 바꾸면 그 대회 첫 부서로
       // ✅ venues → 코트 이름 목록 생성
       const venueList = venueRes.data || [];
       const names: string[] = venueList.flatMap((v: any) => {

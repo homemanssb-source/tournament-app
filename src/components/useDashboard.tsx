@@ -3,12 +3,30 @@ import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase, Division } from '@/lib/supabase'
 
+function readStoredEventId(): string {
+  try { return localStorage.getItem('dashboard_event_id') || '' } catch { return '' }
+}
+
+// ✅ 사이드바에서 대회를 바꾸면(같은 탭: 'dashboard_event_changed', 다른 탭: storage) 바로 따라감.
+//    예전엔 화면이 처음 열릴 때만 읽어서, 새로고침 전까지 이전 대회 화면이 남고
+//    그 상태로 누른 버튼이 이전 대회에 적용될 수 있었다.
+function useEventChangeListener(onChange: (id: string) => void) {
+  useEffect(() => {
+    const handle = () => onChange(readStoredEventId())
+    const onStorage = (e: StorageEvent) => { if (e.key === 'dashboard_event_id') handle() }
+    window.addEventListener('dashboard_event_changed', handle)
+    window.addEventListener('storage', onStorage)
+    return () => {
+      window.removeEventListener('dashboard_event_changed', handle)
+      window.removeEventListener('storage', onStorage)
+    }
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+}
+
 export function useEventId(): string {
   const [id, setId] = useState('')
-  useEffect(() => {
-    const stored = localStorage.getItem('dashboard_event_id') || ''
-    setId(stored)
-  }, [])
+  useEffect(() => { setId(readStoredEventId()) }, [])
+  useEventChangeListener(setId)
   return id
 }
 
@@ -19,9 +37,19 @@ export function useEventIdWithParam(): string {
   const [id, setId] = useState('')
   useEffect(() => {
     const fromParam = searchParams.get('event_id') || ''
-    const fromStore = typeof window !== 'undefined' ? localStorage.getItem('dashboard_event_id') || '' : ''
-    setId(fromParam || fromStore)
+    setId(fromParam || readStoredEventId())
   }, [searchParams])
+  // 대회를 바꾸면 새 대회로 — 주소의 ?event_id= 도 같이 바꿔 둠 (예전 값으로 되돌아가지 않게)
+  useEventChangeListener(newId => {
+    setId(newId)
+    try {
+      const url = new URL(window.location.href)
+      if (url.searchParams.has('event_id') && newId) {
+        url.searchParams.set('event_id', newId)
+        window.history.replaceState(window.history.state, '', url.toString())
+      }
+    } catch {}
+  })
   return id
 }
 

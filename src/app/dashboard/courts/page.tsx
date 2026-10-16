@@ -223,6 +223,8 @@ export default function CourtsPage() {
   const [venueStartTimes, setVenueStartTimes] = useState<Record<string, string>>({})
   const [divMatchDates, setDivMatchDates]     = useState<Record<string, string>>({})
   const [dateFilter, setDateFilter]           = useState<string>('ALL')
+  // 대회를 바꾸면 이전 대회의 필터·선택은 비움 (날짜는 새 대회 일정이 오면 다시 자동 선택됨)
+  useEffect(() => { setDateFilter('ALL'); setSelectedVenue('ALL'); setAutoDiv(''); setViewFilter('ALL') }, [eventId])
 
   const filteredCourtNames = courtNames
 
