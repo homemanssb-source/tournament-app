@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useEventId } from '@/components/useDashboard'
+import { isAdminOnlyPath } from '@/lib/admin-only-paths'
 import { parseScorePair } from '@/lib/score'
 
 interface EventStats {
@@ -101,6 +102,13 @@ export default function DashboardPage() {
   const eventId = useEventId()
   const [stats, setStats] = useState<EventStats | null>(null)
   const [loading, setLoading] = useState(true)
+  // 운영자 계정이면 메인 전용 화면 바로가기를 숨김
+  const [isOperator, setIsOperator] = useState(false)
+  useEffect(() => {
+    supabase.rpc('rpc_my_access').then(({ data, error }) => {
+      if (!error) setIsOperator((data as any)?.role !== 'admin')
+    })
+  }, [])
   const [recentActivity, setRecentActivity] = useState<any[]>([])
 
   const [allMatches, setAllMatches] = useState<MatchRow[]>([])
@@ -638,7 +646,7 @@ export default function DashboardPage() {
           ]),
           { href: '/dashboard/report',          emoji: '📄', label: '리포트',      desc: 'PDF·CSV 내보내기' },
           { href: '/dashboard/logs',            emoji: '👥', label: '접속 로그',   desc: '공개 페이지 접속 통계' },
-        ].map(item => (
+        ].filter(item => !(isOperator && isAdminOnlyPath(item.href))).map(item => (
           <Link key={item.href} href={item.href}
             className="bg-white rounded-xl border p-4 hover:shadow-md hover:border-blue-300 transition-all">
             <div className="text-2xl mb-2">{item.emoji}</div>

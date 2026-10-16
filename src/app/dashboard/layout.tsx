@@ -13,6 +13,7 @@ import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { EventChooser, kstToday, type EventLite } from '@/components/useEventSelect'
+import { isAdminOnlyPath } from '@/lib/admin-only-paths'
 
 // ✅ 운영자는 배정된 대회만 보이게 (allowed=null → 메인 관리자, 전체)
 function scopeEvents(list: EventLite[], allowed: string[] | null): EventLite[] {
@@ -189,7 +190,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       onPick={id => { handleEventChange(id); setNeedChoose(false) }} />
   )
 
+  const isOperator = role !== 'admin'
+
   function navLink(href: string, label: string, emoji: string, indent = false) {
+    if (isOperator && isAdminOnlyPath(href)) return null
     const fullHref = href.includes('event_id') ? href
       : (href.startsWith('/dashboard/teams/') && href !== '/dashboard/teams'
           ? `${href}?event_id=${eventId}` : href)
@@ -253,7 +257,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {navLink('/dashboard', '홈', '🏠')}
 
           {/* 개인전 */}
-          {showIndiv && <>
+          {showIndiv && !isOperator && <>
           <button onClick={() => setOpenIndiv(!openIndiv)}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-all ${
               openIndiv ? 'bg-stone-100 text-stone-800 font-bold' : 'text-stone-600 hover:bg-stone-50'
@@ -273,7 +277,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           {/* 단체전 */}
           {showTeam && <>
           <button onClick={() => setOpenTeam(!openTeam)}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-all ${
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-all ${
               openTeam ? 'bg-stone-100 text-stone-800 font-bold' : 'text-stone-600 hover:bg-stone-50'
             }`}>
             <span>📋 단체전</span>
@@ -317,7 +321,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </Link>
           </div>
         )}
-        {children}
+        {isOperator && isAdminOnlyPath(pathname) ? (
+          <div className="bg-white rounded-2xl border border-stone-200 p-6 text-center max-w-md mx-auto mt-6">
+            <div className="text-3xl mb-2">🔒</div>
+            <p className="font-bold">메인 관리자만 쓰는 화면입니다</p>
+            <p className="text-xs text-stone-400 mt-1">조편성·본선·팀 관리·설정은 메인 관리자가 합니다. 코트 배정은 왼쪽 메뉴에서 할 수 있습니다.</p>
+            <Link href="/dashboard/courts" className="inline-block mt-4 text-sm font-bold text-tennis-700 underline">🏟 코트 배정으로</Link>
+          </div>
+        ) : children}
       </main>
     </div>
   )
