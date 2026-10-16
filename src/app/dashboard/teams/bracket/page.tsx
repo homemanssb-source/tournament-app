@@ -44,7 +44,7 @@ export default function BracketPage() {
         .eq('event_id', eventId).order('sort_order');
       const divList = divs || [];
       setDivisions(divList);
-      if (divList.length > 0) setSelectedDiv(prev => prev || divList[0].id);
+      if (divList.length > 0) setSelectedDiv(prev => divList.some((d: any) => d.id === prev) ? prev : divList[0].id);   // 대회를 바꾸면 그 대회 첫 부서로
     } finally {
       setLoading(false);
     }

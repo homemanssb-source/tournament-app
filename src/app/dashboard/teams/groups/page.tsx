@@ -74,7 +74,7 @@ export default function GroupsPage() {
 
     setDivisions(divList);
     if (divList.length > 0) {
-      setSelectedDiv(prev => prev || divList[0].id);
+      setSelectedDiv(prev => divList.some((d: any) => d.id === prev) ? prev : divList[0].id);   // 대회를 바꾸면 그 대회 첫 부서로
     }
     setConfig(cfg);
     setClubs(clubList);
