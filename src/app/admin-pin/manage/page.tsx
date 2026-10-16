@@ -401,7 +401,18 @@ export default function AdminPinManagePage() {
     if ('error' in norm) { setMsg('❌ ' + norm.error); return }
     const score = norm.score
     const winnerName = newWinner==='A' ? selectedMatch.team_a_name : selectedMatch.team_b_name
-    if (!confirm(`승자: ${winnerName}\n점수: ${score}\n\n이대로 저장할까요?`)) return
+    // 목록은 30초마다 갱신 → 그 사이 선수·현장관리가 입력했을 수 있음. 저장 직전에 다시 읽음
+    const { data: fresh } = await supabase.from('v_matches_with_teams').select('*').eq('id', selectedMatch.id).single()
+    const changed = !!fresh && (fresh.status !== selectedMatch.status || (fresh.score || '') !== (selectedMatch.score || '')
+      || fresh.winner_team_id !== selectedMatch.winner_team_id)
+    const warn = changed
+      ? `⚠️ 화면을 연 뒤 이 경기 결과가 바뀌었습니다.\n지금: ${fresh.score || '점수 없음'}${fresh.winner_name ? ' (승: ' + fresh.winner_name + ')' : ''}\n\n그래도 아래로 바꿀까요?\n`
+      : ''
+    if (!confirm(`${warn}승자: ${winnerName}\n점수: ${score}\n\n이대로 저장할까요?`)) {
+      if (changed) { setSelectedMatch(fresh); loadAllMatches(session.event_id) }
+      return
+    }
+    const base = fresh || selectedMatch   // 알림 판단은 최신 상태 기준 (중복 '경기 준비' 알림 방지)
     setNewScore(score)
     setLoading(true); setMsg('')
     const winnerId = newWinner==='A' ? selectedMatch.team_a_id : selectedMatch.team_b_id
@@ -425,7 +436,7 @@ export default function AdminPinManagePage() {
         })
         if (ue || (fr as any)?.success === false) { setLoading(false); setMsg('❌ ' + (ue?.message || (fr as any)?.error)); return }
         await tryFillTournamentSlotsAdmin(selectedMatch.id, session.event_id)
-        notifyAfterScore(selectedMatch)
+        notifyAfterScore(base)
         setLoading(false)
         setMsg('✅ 강제 수정됨 (운영자 모드)')
         loadAllMatches(session.event_id); setSelectedMatch(null)
@@ -436,7 +447,7 @@ export default function AdminPinManagePage() {
 
     // ✅ 조별 경기인 경우 본선 TBD 슬롯 자동 채우기
     await tryFillTournamentSlotsAdmin(selectedMatch.id, session.event_id)
-    notifyAfterScore(selectedMatch)
+    notifyAfterScore(base)
 
     setLoading(false)
     setMsg('✅ 결과가 수정되었습니다.')
@@ -449,7 +460,10 @@ export default function AdminPinManagePage() {
     const teamId = side === 'A' ? selectedMatch.team_a_id : selectedMatch.team_b_id
     const teamName = side === 'A' ? selectedMatch.team_a_name : selectedMatch.team_b_name
     if (!teamId) return
-    const targets = allMatches
+    // 저장 직전 최신 목록 (그 사이 끝난 경기를 w.o 로 덮어쓰지 않게)
+    const { data: teamMatches } = await supabase.from('v_matches_with_teams').select('*')
+      .eq('event_id', session.event_id).or(`team_a_id.eq.${teamId},team_b_id.eq.${teamId}`)
+    const targets = (teamMatches || [])
       .filter(m => m.status !== 'FINISHED' && m.team_a_id && m.team_b_id && (m.team_a_id === teamId || m.team_b_id === teamId))
       .sort((a, b) => (a.stage === 'GROUP' ? 0 : 1) - (b.stage === 'GROUP' ? 0 : 1) || (a.slot ?? 0) - (b.slot ?? 0))
     if (targets.length === 0) { setMsg('❌ ' + teamName + ' 팀의 남은 경기가 없습니다.'); return }
@@ -570,8 +584,20 @@ export default function AdminPinManagePage() {
 
     // 이미 입력된 러버면 정정 (조별: 순위·본선 재배정 / 토너먼트: 다음 라운드 시작 전까지만)
     const rubber = tieRubbers.find((r: any) => r.id === scoringRubber)
-    const isCorrection = rubber?.status === 'completed'
-    if (isCorrection) {
+    // 주장·현장관리가 그 사이 입력했을 수 있음 → 저장 직전에 다시 읽음
+    const { data: freshRubber } = await supabase.from('tie_rubbers').select('*').eq('id', scoringRubber).single()
+    if (freshRubber && freshRubber.status === 'completed' && rubber?.status !== 'completed') {
+      const now = freshRubber.is_walkover ? 'w.o' : [formatSetScore(freshRubber.set1_a, freshRubber.set1_b),
+        freshRubber.set2_a !== null ? formatSetScore(freshRubber.set2_a, freshRubber.set2_b) : '',
+        freshRubber.set3_a !== null ? formatSetScore(freshRubber.set3_a, freshRubber.set3_b) : ''].filter(Boolean).join(' / ')
+      if (!confirm(`⚠️ 화면을 연 뒤 이 복식 점수가 입력되었습니다.\n지금: ${now}\n\n그래도 입력한 점수로 정정할까요?`)) {
+        setTieRubbers(prev => prev.map((r: any) => r.id === freshRubber.id ? freshRubber : r))
+        setScoringRubber(null)
+        return
+      }
+    }
+    const isCorrection = (freshRubber?.status ?? rubber?.status) === 'completed'
+    if (isCorrection && rubber?.status === 'completed') {
       const msg = '이미 입력된 점수를 정정합니다.\n' +
         '대전 결과·순위·본선 자리가 다시 계산됩니다.\n' +
         '계속하시겠습니까?'
