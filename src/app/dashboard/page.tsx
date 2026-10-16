@@ -371,7 +371,9 @@ export default function DashboardPage() {
           <div className="text-amber-800 text-xs space-y-1">
             <p>· 조회된 이벤트: <code className="bg-amber-100 px-1.5 py-0.5 rounded">{eventId}</code></p>
             <p>· 가능 원인: (1) 매치 미생성, (2) Vercel 배포 진행중, (3) 브라우저 캐시(Ctrl+Shift+R 권장)</p>
-            <p>· 조편성이 끝났는지 확인 후 <Link href="/dashboard/groups" className="underline font-semibold">조편성</Link> 화면에서 <b>📋 조별 경기 생성</b> 진행</p>
+            {isOperator
+              ? <p>· 조편성·경기 생성은 메인 관리자가 합니다. 메인 관리자에게 요청하세요.</p>
+              : <p>· 조편성이 끝났는지 확인 후 <Link href="/dashboard/groups" className="underline font-semibold">조편성</Link> 화면에서 <b>📋 조별 경기 생성</b> 진행</p>}
           </div>
         </div>
       )}
