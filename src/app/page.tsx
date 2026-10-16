@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { TEST_EVENT_PREFIX } from '@/components/useEventSelect'
 
 // ── 스타일 토큰 ─────────────────────────────────────────────
 const SOFT_SHADOW = '0 1px 2px rgba(0,0,0,0.03), 0 8px 32px -4px rgba(0,0,0,0.06)'
@@ -80,38 +81,29 @@ export default function HomePage() {
 
     async function load() {
       try {
-        // 1) Live 먼저
-        const { data: activeEvents } = await supabase
+        // ✅ 가장 가까운 대회 — 대시보드의 '공개/비공개(status)'나 대회 선택과 상관없이 날짜 기준
+        //    1) 오늘 대회 → 진행 중   2) 앞으로(끝나지 않은) 가장 빠른 대회 → 예정   3) 없으면 대기 화면
+        //    (예전엔 status='active' 대회를 먼저 보여 줘서, 대회를 열거나 테스트 대회가 생기면 메인이 바뀌었음)
+        const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+        const { data: evRows } = await supabase
           .from('events')
-          .select('id, name, date, event_type')
-          .eq('status', 'active')
-          .order('date', { ascending: false })
+          .select('id, name, date, event_type, status')
+          .gte('date', today)
+          .order('date', { ascending: true })
 
         if (cancelled) return
 
-        if (activeEvents && activeEvents.length > 0) {
-          const ev = activeEvents[0] as EventInfo
-          setState({ kind: 'live', event: ev })
-          await loadStats(activeEvents.map((e: any) => e.id))
+        const list = ((evRows || []) as (EventInfo & { status?: string })[]).filter(e => !e.name?.startsWith(TEST_EVENT_PREFIX))
+        const todays = list.filter(e => e.date === today)
+        if (todays.length > 0) {
+          setState({ kind: 'live', event: todays[0] })
+          await loadStats(todays.map(e => e.id))
           return
         }
-
-        // 2) Upcoming
-        const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
-        const { data: nextEvents } = await supabase
-          .from('events')
-          .select('id, name, date, event_type')
-          .gte('date', today)
-          .neq('status', 'completed')
-          .order('date', { ascending: true })
-          .limit(1)
-
-        if (cancelled) return
-
-        if (nextEvents && nextEvents.length > 0) {
-          const ev = nextEvents[0] as EventInfo
-          setState({ kind: 'upcoming', event: ev })
-          await loadStats([ev.id])   // ✅ 다가오는 대회도 참가팀/코트 통계 표시
+        const next = list.find(e => e.status !== 'completed')
+        if (next) {
+          setState({ kind: 'upcoming', event: next })
+          await loadStats([next.id])   // ✅ 다가오는 대회도 참가팀/코트 통계 표시
           return
         }
 
