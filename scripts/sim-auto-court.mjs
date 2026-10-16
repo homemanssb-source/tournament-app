@@ -104,8 +104,8 @@ async function run(state, seedOnly = false) {
   const t2 = await makeTeams(ev, D2, Array.from({ length: 6 }, (_, i) => ({ p1: `단${i + 1}`, c1: `학교${i + 1}` })), 7410101)
   // 경기장 2곳: S(S-1~S-4), J(J-1~J-2)
   must(await svc.from('venues').insert([
-    { event_id: ev.id, name: '시뮬S경기장', short_name: 'S', court_count: 4, courts: ['S-1', 'S-2', 'S-3', 'S-4'], pin_plain: '7419001', manager_name: 'S 관리자', created_at: new Date().toISOString() },
-    { event_id: ev.id, name: '시뮬J경기장', short_name: 'J', court_count: 2, courts: ['J-1', 'J-2'], pin_plain: '7419002', manager_name: 'J 관리자', created_at: new Date(Date.now() + 1000).toISOString() },
+    { event_id: ev.id, name: '시뮬S경기장', short_name: 'S', court_count: 4, courts: ['S-1', 'S-2', 'S-3', 'S-4'], pin_plain: '741901', manager_name: 'S 관리자', created_at: new Date().toISOString() },
+    { event_id: ev.id, name: '시뮬J경기장', short_name: 'J', court_count: 2, courts: ['J-1', 'J-2'], pin_plain: '741902', manager_name: 'J 관리자', created_at: new Date(Date.now() + 1000).toISOString() },
   ]).select(), '경기장')
   must(await svc.rpc('rpc_set_master_pin', { p_event_id: ev.id, p_new_pin: '7418888' }), '마스터 PIN')
   for (const [d, size] of [[D1, 4], [D2, 3]]) {
@@ -120,7 +120,7 @@ async function run(state, seedOnly = false) {
   const autoRows = async () => (await all()).filter(m => m.auto_assigned_at)
   check(G.length === 2 && H.length === 2, `조편성: 복식부 ${G.length}조 · 학생단식 ${H.length}조`)
   check((await byGroup(G[0].id)).length === 6 && (await byGroup(H[0].id)).length === 3, '조별 경기: 4팀 조 6경기 · 3팀 조 3경기')
-  state.eventId = ev.id; state.master = '7418888'; state.venuePins = { S: '7419001', J: '7419002' }
+  state.eventId = ev.id; state.master = '7418888'; state.venuePins = { S: '741901', J: '741902' }
   if (seedOnly) return
 
   const login = await rpcA('rpc_admin_pin_login', { p_master_pin: '7418888', p_event_id: ev.id })
@@ -210,7 +210,7 @@ async function run(state, seedOnly = false) {
   void justDone5
 
   sec('⑥ 선수 알림: 자동 배정된 경기 두 팀에 1회 (배포된 API)')
-  const vl = await rpcA('rpc_venue_login', { p_pin_code: '7419001', p_event_id: ev.id })
+  const vl = await rpcA('rpc_venue_login', { p_pin_code: '741901', p_event_id: ev.id })
   check(!failed(vl) && vl.data?.token, '경기장 PIN 로그인 (알림 API 호출용)', errText(vl))
   const call = async () => {
     const res = await fetch(`${SITE}/api/notify/court`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
