@@ -4,3 +4,6 @@ node_modules
 .env
 .vercel
 .live-defs/
+
+# 현장 운영 시뮬레이션 결과 (테스트 토큰 포함)
+.sim-state*.json
