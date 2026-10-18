@@ -114,10 +114,18 @@ export async function POST(request: NextRequest) {
     }
     const memberMap: Record<string, any> = {};
     if (memberIds.size > 0) {
-      const { data: membersData } = await appA
+      const { data: membersData, error: memErr } = await appA
         .from('members')
         .select('member_id, name, pin_code, grade, club')
         .in('member_id', [...memberIds]);
+      // 회원 조회 실패 시 그대로 진행하면 이름 빈 팀이 생기고 나머지는 '중복'으로 빠진다 → 아무것도 만들지 않고 중단
+      // (앱A 회원 테이블은 공개 키로 못 읽음 — Vercel 에 APP_A_SERVICE_ROLE_KEY 가 맞게 있어야 함)
+      if (memErr) {
+        return NextResponse.json({
+          success: false,
+          error: `앱A 회원 조회 실패: ${memErr.message} — Vercel 환경변수 APP_A_SERVICE_ROLE_KEY 를 확인하세요. 팀은 하나도 만들지 않았습니다.`,
+        }, { status: 500 });
+      }
       for (const m of (membersData || [])) {
         memberMap[m.member_id] = m;
       }
@@ -182,6 +190,11 @@ export async function POST(request: NextRequest) {
         // 선수 정보
         const member1 = team.member1_id ? memberMap[team.member1_id] : null;
         const member2 = team.member2_id ? memberMap[team.member2_id] : null;
+        // 회원 정보를 못 찾으면 이름 빈 팀을 만들지 않고 건너뜀 (다음 가져오기 때 다시 시도)
+        if (!member1?.name || (team.member2_id && !member2?.name)) {
+          errors.push(`회원 정보 없음: ${team.team_name || recordId} (앱A 회원 ${[team.member1_id, team.member2_id].filter(Boolean).join(', ')})`);
+          continue;
+        }
 
         const p1Name = member1?.name || '';
         const p2Name = member2?.name || '';
