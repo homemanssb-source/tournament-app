@@ -272,6 +272,10 @@ function SyncDashboardInner() {
                     {(syncResult.duplicate ?? 0) > 0 && <p className="text-orange-600">⚠️ 중복 제외: {syncResult.duplicate}팀</p>}
                     {(syncResult.excluded ?? 0) > 0 && <p className="text-gray-400">🗑 삭제/취소 제외: {syncResult.excluded}팀</p>}
                     {(syncResult.updated ?? 0) > 0 && <p className="text-blue-600">🔄 업데이트: {syncResult.updated}건</p>}
+                    {/* 개인전은 cancelled 가 숫자(취소 표시한 팀 수), 단체전은 클럽 이름 목록 */}
+                    {typeof syncResult.cancelled === 'number' && syncResult.cancelled > 0 && (
+                      <p className="text-orange-600">🚫 앱A에서 취소됨: {syncResult.cancelled}팀 — 앱B 팀은 그대로 있습니다 (필요하면 직접 삭제)</p>
+                    )}
                     <p className="text-gray-600 border-t border-green-200 pt-1 mt-1">
                       앱A 전체: {syncResult.total ?? 0}팀
                     </p>
@@ -279,7 +283,7 @@ function SyncDashboardInner() {
                 ) : (
                   <p className="text-red-700">실패: {syncResult.error}</p>
                 )}
-                {syncResult.cancelled?.map((c: string, i: number) => (
+                {Array.isArray(syncResult.cancelled) && syncResult.cancelled.map((c: string, i: number) => (
                   <p key={`c${i}`} className="text-orange-600 text-xs">🚫 앱A에서 취소됨: {c} — 앱B 클럽은 그대로 있습니다 (필요하면 직접 삭제)</p>
                 ))}
                 {syncResult.warnings?.map((w: string, i: number) => (
