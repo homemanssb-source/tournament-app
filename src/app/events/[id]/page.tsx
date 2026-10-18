@@ -17,6 +17,7 @@ import { parseScorePair, isWalkoverScore } from '@/lib/score'
 import { fetchClubs, fetchTies, fetchStandings, fetchEventTeamConfig } from '@/lib/team-api'
 import { getFormatLabel, getRoundLabel, getTieStatusLabel, getTieStatusColor, getMajority } from '@/lib/team-utils'
 import type { Club, TieWithClubs, StandingWithClub, EventTeamConfig } from '@/types/team'
+import { computeLeagueStandings, leagueAllFinished, leaguePlacement, divisionTeamFormat, type LeagueRow } from '@/lib/league'
 
 type Mode = 'individual' | 'team'
 type IndividualTab = 'groups' | 'tournament' | 'results' | 'courts'
@@ -167,7 +168,12 @@ export default function EventDetailPage() {
     setTies(filteredTies)
 
     const map: Record<string, StandingWithClub[]> = {}
-    if (cfg?.team_format === 'full_league') {
+    // 부서마다 진행방식이 다를 수 있음 (divisions.format → 없으면 대회 설정)
+    const { data: divRow } = divId
+      ? await supabase.from('divisions').select('*').eq('id', divId).single()
+      : { data: null }
+    if (divisionTeamFormat(divRow as any, cfg?.team_format) === 'full_league') {
+      setGroups([])
       // 부서별 풀리그 — 선택한 부서 것만 (섞이면 1위가 여러 팀으로 보임)
       map['full'] = await fetchStandings(eventId, null, divId || null)
     } else {
@@ -436,8 +442,11 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
 function TournamentView({ eventId, divisionId }: { eventId: string; divisionId: string }) {
   const [matches, setMatches] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [isLeague, setIsLeague] = useState(false)
   useEffect(() => {
     setLoading(true)
+    supabase.from('divisions').select('*').eq('id', divisionId).single()
+      .then(({ data }: { data: any }) => setIsLeague(data?.format === 'full_league'))
     // ✅ v_matches_with_teams 뷰 사용 → team_a_name, team_b_name 포함
     supabase.from('v_matches_with_teams').select('*')
       .eq('event_id', eventId).eq('division_id', divisionId).eq('stage', 'FINALS')
@@ -453,7 +462,11 @@ function TournamentView({ eventId, divisionId }: { eventId: string; divisionId: 
       })
   }, [eventId, divisionId])
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
-  if (!matches.length) return <p className="text-center py-10 text-stone-400">아직 토너먼트가 없습니다.</p>
+  if (!matches.length) return (
+    <p className="text-center py-10 text-stone-400">
+      {isLeague ? '🔁 풀리그 부서입니다 — 본선 없이 리그 순위로 입상이 정해집니다. (경기결과 탭의 순위)' : '아직 토너먼트가 없습니다.'}
+    </p>
+  )
   return <TournamentBracket matches={matches} />
 }
 
@@ -462,6 +475,7 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
   const [matches, setMatches] = useState<any[]>([])
   const [groups, setGroups]   = useState<any[]>([])
   const [standings, setStandings] = useState<Record<string, any[]>>({})
+  const [league, setLeague] = useState<Record<string, LeagueBoard> | null>(null)
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState<'standings' | 'matches'>('standings')
 
@@ -481,6 +495,26 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
         .eq('event_id', eventId).eq('division_id', divisionId)
         .order('group_num')
       setGroups(gData || [])
+
+      // 풀리그 부서: 승수 → 승자승 → 게임득실 → 운영자 지정 순위, 끝나면 입상 표시
+      const { data: dRow } = await supabase.from('divisions').select('*').eq('id', divisionId).single()
+      if ((dRow as any)?.format === 'full_league' && gData?.length) {
+        const lmap: Record<string, LeagueBoard> = {}
+        for (const g of gData) {
+          const [{ data: mem }, { data: board }, { data: gm }] = await Promise.all([
+            supabase.from('group_members').select('team_id, manual_rank').eq('group_id', g.id),
+            supabase.from('v_group_board').select('team_id, team_name').eq('group_id', g.id),
+            supabase.from('matches').select('status, score, team_a_id, team_b_id, winner_team_id').eq('group_id', g.id).eq('stage', 'GROUP'),
+          ])
+          const nameOf = new Map((board || []).map((b: any) => [b.team_id, b.team_name]))
+          const ms = (gm || []).filter((m: any) => m.score !== 'BYE')
+          lmap[g.id] = {
+            rows: computeLeagueStandings((mem || []).map((m: any) => ({ team_id: m.team_id, team_name: nameOf.get(m.team_id) || '', manual_rank: m.manual_rank })), ms),
+            done: leagueAllFinished(ms), finished: ms.filter((m: any) => m.status === 'FINISHED').length, total: ms.length,
+          }
+        }
+        setLeague(lmap)
+      } else setLeague(null)
 
       const map: Record<string, any[]> = {}
       await Promise.all((gData || []).map(async (g: any) => {
@@ -532,8 +566,13 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
         </button>
       </div>
 
+      {/* 풀리그 순위 */}
+      {view === 'standings' && league && groups.map(g => league[g.id] && (
+        <LeagueTable key={g.id} board={league[g.id]} />
+      ))}
+
       {/* 조별 순위 */}
-      {view === 'standings' && (
+      {view === 'standings' && !league && (
         <div className="space-y-3">
           {groups.length === 0 && <p className="text-center py-8 text-stone-400">조편성 데이터가 없습니다.</p>}
           {groups.map(g => {
@@ -621,6 +660,65 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+interface LeagueBoard { rows: LeagueRow[]; done: boolean; finished: number; total: number }
+
+function LeagueTable({ board }: { board: LeagueBoard }) {
+  const n = board.rows.length
+  const medal = (rank: number | null) => !board.done || rank == null ? null
+    : rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank <= 4 ? '🥉' : null
+  return (
+    <div className="bg-white rounded-xl border overflow-hidden">
+      <div className="bg-[#2d5016] text-white px-4 py-2.5 font-bold text-sm flex justify-between">
+        <span>🔁 풀리그 {board.done ? '최종 순위' : '순위'}</span>
+        <span className="text-white/70 text-xs font-normal">{board.finished}/{board.total}경기</span>
+      </div>
+      <table className="w-full text-sm">
+        <thead className="bg-stone-50 border-b">
+          <tr>
+            <th className="px-3 py-2 text-left w-8 text-stone-400 font-medium">#</th>
+            <th className="px-3 py-2 text-left text-stone-600 font-medium">팀</th>
+            <th className="px-3 py-2 text-center w-10 text-stone-600 font-medium">승</th>
+            <th className="px-3 py-2 text-center w-10 text-stone-600 font-medium">패</th>
+            <th className="px-3 py-2 text-center w-14 text-stone-600 font-medium">득실</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-stone-100">
+          {board.rows.map((t, i) => {
+            const m = medal(t.rank)
+            const place = board.done && t.rank != null ? leaguePlacement(t.rank, n).report : ''
+            return (
+              <tr key={t.team_id} className={board.done && t.rank === 1 ? 'bg-green-50' : ''}>
+                <td className="px-3 py-2.5">
+                  {m ? <span className="text-base">{m}</span> : <span className="text-stone-400 text-xs">{t.rank ?? i + 1}</span>}
+                </td>
+                <td className="px-3 py-2.5">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <PlayerPair raw={t.team_name} winner={board.done && t.rank === 1} />
+                    {place && place !== '참가' && (
+                      <span className="text-[11px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-bold flex-shrink-0">{place}</span>
+                    )}
+                    {t.rank == null && t.tied && (
+                      <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium flex-shrink-0">동률</span>
+                    )}
+                  </div>
+                </td>
+                <td className="px-3 py-2.5 text-center font-bold text-green-700">{t.wins}</td>
+                <td className="px-3 py-2.5 text-center text-stone-400">{t.losses}</td>
+                <td className="px-3 py-2.5 text-center">
+                  <span className={t.game_diff > 0 ? 'text-green-600 font-medium' : t.game_diff < 0 ? 'text-red-500' : 'text-stone-400'}>
+                    {t.game_diff > 0 ? '+' : ''}{t.game_diff}
+                  </span>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      <p className="text-[11px] text-stone-400 px-3 py-2 border-t border-stone-100">순위: 승수 → 승자승 → 게임득실</p>
     </div>
   )
 }

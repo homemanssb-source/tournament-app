@@ -6,6 +6,8 @@ import { useEventId, useDivisions, DivisionTabs } from '@/components/useDashboar
 import SeedPanel, { type SeedCandidate } from '@/components/SeedPanel'
 import { calcGroupDistribution, saveSeeds } from '@/lib/seed'
 import { parseScorePair } from '@/lib/score'
+import DivisionOverview from '@/components/DivisionOverview'
+import { computeLeagueStandings, fullLeagueMatchCount, leaguePlacement } from '@/lib/league'
 
 interface GroupMember {
   id: string
@@ -47,7 +49,12 @@ export default function GroupsPage() {
   // 조별 경기 완료 여부
   const [groupDone, setGroupDone] = useState<Record<string, boolean>>({})
   // 수동 순위 지정 모달
-  const [rankModal, setRankModal] = useState<{ groupId: string; groupLabel: string; teams: GroupStanding[] } | null>(null)
+  // positions: 풀리그 동률일 때 그 팀들이 차지하는 순위 자리 (예: 2·3위)
+  const [rankModal, setRankModal] = useState<{ groupId: string; groupLabel: string; teams: GroupStanding[]; positions?: number[] } | null>(null)
+  // 이 부서 진행방식 (divisions.format) — 풀리그면 부서 전체가 한 조('리그'), 본선 없음
+  const [divFormat, setDivFormat] = useState<string | null>(null)
+  const isLeague = divFormat === 'full_league'
+  const [overviewKey, setOverviewKey] = useState(0)
   // 수동 순위 지정 상태 (team_id → rank)
   const [manualRanks, setManualRanks] = useState<Record<string, number>>({})
   const [savingRank, setSavingRank] = useState(false)
@@ -58,6 +65,10 @@ export default function GroupsPage() {
     if (!eventId || !selected) return
     setLoading(true)
     try {
+      const { data: divRow } = await supabase.from('divisions').select('*').eq('id', selected).single()
+      const league = (divRow as any)?.format === 'full_league'
+      setDivFormat((divRow as any)?.format ?? null)
+
       const { data: teamList } = await supabase.from('teams').select('id, team_name, seed_number')
         .eq('event_id', eventId).eq('division_id', selected)
       setDivTeams((teamList || []).map((t: any) => ({ id: t.id, name: t.team_name, seed: t.seed_number ?? null })))
@@ -111,7 +122,9 @@ export default function GroupsPage() {
 
       // 조별 경기 결과 로드
       if (groupList.length > 0) {
-        await loadStandings(groupList)
+        await loadStandings(groupList, league)
+      } else {
+        setStandings({}); setGroupDone({})
       }
     } finally {
       setLoading(false)
@@ -119,7 +132,7 @@ export default function GroupsPage() {
   }, [eventId, selected])
 
   // 조별 순위 계산 (클라이언트에서 직접 계산)
-  async function loadStandings(groupList: GroupData[]) {
+  async function loadStandings(groupList: GroupData[], league: boolean) {
     if (!eventId || !selected) return
 
     // 해당 부서 조별 경기 전체 조회
@@ -134,11 +147,27 @@ export default function GroupsPage() {
     const newStandings: Record<string, GroupStanding[]> = {}
     const newGroupDone: Record<string, boolean> = {}
 
+    // 풀리그: 승수 → 승자승 → 게임득실 → 수동 순위(group_members.manual_rank)
+    let manualMap = new Map<string, number | null>()
+    if (league) {
+      const { data: mr } = await supabase.from('group_members').select('team_id, manual_rank')
+        .in('group_id', groupList.map(g => g.id))
+      manualMap = new Map((mr || []).map((r: any) => [r.team_id, r.manual_rank ?? null]))
+    }
+
     for (const g of groupList) {
       const gMatches = matches.filter(m => m.group_id === g.id)
       const finished = gMatches.filter(m => m.status === 'FINISHED')
       const allDone = gMatches.length > 0 && gMatches.every(m => m.status === 'FINISHED')
       newGroupDone[g.id] = allDone
+
+      if (league) {
+        newStandings[g.id] = computeLeagueStandings(
+          g.members.map(m => ({ team_id: m.team_id, team_name: m.team_name, manual_rank: manualMap.get(m.team_id) ?? null })),
+          gMatches,
+        )
+        continue
+      }
 
       // 팀별 통계 계산
       const stats: Record<string, { wins: number; losses: number; gf: number; ga: number }> = {}
@@ -242,6 +271,19 @@ export default function GroupsPage() {
     setMsg(`✅ 조별 경기 생성 완료! ${data?.matches_created || ''}경기`)
   }
 
+  // 풀리그: 부서 전체를 한 조('리그')로 + 서로 한 번씩 경기 생성 (원형 대진 순서)
+  async function generateLeague() {
+    const n = divTeams.length
+    if (!confirm(`${n}팀 풀리그를 만듭니다. (${fullLeagueMatchCount(n)}경기 · 팀당 ${n - 1}경기)\n본선 없이 리그 순위로 입상이 정해집니다.`)) return
+    setGenerating(true); setMsg('')
+    const { data, error } = await supabase.rpc('rpc_generate_league', { p_event_id: eventId, p_division_id: selected })
+    setGenerating(false)
+    if (error) { setMsg('❌ ' + error.message); return }
+    setMsg(`✅ 풀리그 생성 완료! ${data?.teams}팀 · ${data?.matches_created}경기`)
+    setOverviewKey(k => k + 1)
+    loadGroups()
+  }
+
   async function deleteAllGroups() {
     if (!confirm('현재 부서의 모든 조편성을 삭제하시겠습니까? (조별 경기도 함께 삭제됩니다)')) return
     setMsg('')
@@ -251,12 +293,24 @@ export default function GroupsPage() {
     await supabase.from('matches').delete().eq('event_id', eventId).eq('division_id', selected).eq('stage', 'GROUP')
     await supabase.from('groups').delete().in('id', groupIds)
     setMsg('✅ 조편성 삭제됨')
+    setOverviewKey(k => k + 1)
     loadGroups()
   }
 
   // 수동 순위 지정 모달 열기
   function openRankModal(g: GroupData) {
     const st = standings[g.id] || []
+    if (isLeague) {
+      // 풀리그: 승수·승자승·득실까지 같은 팀들만, 그 팀들이 차지하는 자리 안에서 순서를 정한다
+      const rows = st as any[]
+      const tiedIdx = rows.map((r, i) => (r.tied ? i : -1)).filter(i => i >= 0)
+      const teams = tiedIdx.map(i => rows[i])
+      const init: Record<string, number> = {}
+      teams.forEach((s: any, k: number) => { init[s.team_id] = s.rank ?? 0 })
+      setManualRanks(init)
+      setRankModal({ groupId: g.id, groupLabel: g.label, teams, positions: tiedIdx.map(i => i + 1) })
+      return
+    }
     const initRanks: Record<string, number> = {}
     // 이미 rank가 있는 팀은 그대로, null인 팀만 초기화
     st.forEach((s, i) => { initRanks[s.team_id] = s.rank ?? (i + 1) })
@@ -278,6 +332,19 @@ export default function GroupsPage() {
     }
 
     setSavingRank(true)
+    if (isLeague) {
+      try {
+        for (const [teamId, rank] of Object.entries(manualRanks)) {
+          const { error } = await supabase.from('group_members').update({ manual_rank: rank })
+            .eq('group_id', groupId).eq('team_id', teamId)
+          if (error) { setMsg('❌ 순위 저장 실패: ' + error.message); return }
+        }
+        setMsg(`✅ ${groupLabel} 순위 확정`)
+        setRankModal(null)
+        loadGroups()
+      } finally { setSavingRank(false) }
+      return
+    }
     try {
       // group_members 테이블에 manual_rank 저장 (없으면 matches winner 기반으로 처리)
       // 실제로는 qualifier_label 매칭을 위해 순위대로 wins를 조작하는 대신
@@ -362,6 +429,9 @@ export default function GroupsPage() {
         )}
       </div>
 
+      <DivisionOverview eventId={eventId} kind="individual" selected={selected} onSelect={setSelected}
+        reloadKey={overviewKey} onChanged={loadGroups} />
+
       <DivisionTabs divisions={divisions} selected={selected} onSelect={setSelected} />
 
       {msg && (
@@ -371,7 +441,7 @@ export default function GroupsPage() {
       )}
 
       {/* 시드 배정 — 조편성 전에 정해 두면 예선·본선 모두 반영 */}
-      {divTeams.length >= 2 && (
+      {divTeams.length >= 2 && !isLeague && (
         <SeedPanel
           candidates={divTeams}
           maxSeeds={calcGroupDistribution(divTeams.length, groupSize).length}
@@ -380,8 +450,31 @@ export default function GroupsPage() {
         />
       )}
 
+      {/* 풀리그 도구 */}
+      {isLeague && (
+        <div className="bg-white rounded-xl border border-tennis-200 p-4 mb-4">
+          <div className="flex flex-wrap gap-3 items-center">
+            <span className="text-sm font-semibold text-tennis-700">🔁 풀리그 부서</span>
+            <button onClick={generateLeague} disabled={generating || groups.length > 0 || divTeams.length < 2}
+              className="bg-tennis-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-tennis-700 disabled:opacity-50">
+              {generating ? '생성 중...' : `🏆 풀리그 생성 (${divTeams.length}팀 · ${fullLeagueMatchCount(divTeams.length)}경기)`}
+            </button>
+            {groups.length > 0 && (
+              <button onClick={deleteAllGroups}
+                className="bg-red-100 text-red-600 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-200">
+                🗑️ 리그 삭제
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-stone-400 mt-2">
+            * 모두 서로 한 번씩 · 본선 없이 리그 순위로 입상 (1위 우승 · 2위 준우승 · 3·4위 4강{divTeams.length >= 6 ? ' · 5~8위 8강' : ''})
+            · 순위: 승수 → 승자승 → 게임득실 → 직접 지정
+          </p>
+        </div>
+      )}
+
       {/* 조편성 도구 */}
-      <div className="bg-white rounded-xl border p-4 mb-4">
+      {!isLeague && <div className="bg-white rounded-xl border p-4 mb-4">
         <div className="flex flex-wrap gap-3 items-center">
           <div className="flex items-center gap-2">
             <label className="text-sm text-stone-600">조당 인원:</label>
@@ -409,7 +502,7 @@ export default function GroupsPage() {
           * 1팀 조 방지 보정 자동 적용 (2+1→3, 3+1→2+2, 4+1→3+2)
           {divTeams.some(t => t.seed != null) && ' · 시드는 서로 다른 조 첫 자리에 배치'}
         </p>
-      </div>
+      </div>}
 
       {/* 범례 */}
       {totalCount > 0 && (
@@ -427,7 +520,9 @@ export default function GroupsPage() {
       {loading ? (
         <p className="text-stone-400 text-center py-10">불러오는 중...</p>
       ) : groups.length === 0 ? (
-        <p className="text-stone-400 text-center py-10">아직 조편성이 없습니다. 자동 조편성 버튼을 눌러주세요.</p>
+        <p className="text-stone-400 text-center py-10">
+          {isLeague ? '아직 풀리그가 없습니다. 풀리그 생성 버튼을 눌러주세요.' : '아직 조편성이 없습니다. 자동 조편성 버튼을 눌러주세요.'}
+        </p>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {groups.map(g => {
@@ -436,6 +531,10 @@ export default function GroupsPage() {
             const isDone = groupDone[g.id] ?? false
             const hasTie = isDone && gStandings.some(s => s.rank === null)
             const allRanked = isDone && gStandings.length > 0 && gStandings.every(s => s.rank !== null)
+            // 풀리그: 경기 중에도 순위표, 수동 지정한 동률은 다시 고칠 수 있게
+            const leaguePlayed = isLeague && gStandings.some((s: any) => s.played > 0)
+            const leagueTieEditable = isLeague && isDone && gStandings.some((s: any) => s.tied)
+            const showTable = (isDone || leaguePlayed) && gStandings.length > 0
 
             return (
               <div key={g.id} className="bg-white rounded-xl border overflow-hidden">
@@ -455,9 +554,11 @@ export default function GroupsPage() {
                 </div>
 
                 {/* 순위표 (경기 완료 시) */}
-                {isDone && gStandings.length > 0 && (
+                {showTable && (
                   <div className="border-b border-stone-100 bg-stone-50 px-3 py-2">
-                    <div className="text-xs text-stone-400 mb-1.5 font-medium">경기 결과</div>
+                    <div className="text-xs text-stone-400 mb-1.5 font-medium">
+                      {isLeague ? (isDone ? '최종 순위' : '현재 순위 (진행 중)') : '경기 결과'}
+                    </div>
                     {gStandings.map((s, i) => (
                       <div key={s.team_id} className={`flex items-center gap-2 py-1 text-xs ${
                         s.rank === 1 ? 'text-tennis-700 font-bold' :
@@ -474,6 +575,12 @@ export default function GroupsPage() {
                           {s.rank === null ? '?' : s.rank}
                         </span>
                         <span className="flex-1 truncate">{s.team_name}</span>
+                        {isLeague && isDone && s.rank != null && leaguePlacement(s.rank, gStandings.length).report !== '참가' && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-bold">
+                            {leaguePlacement(s.rank, gStandings.length).report}
+                          </span>
+                        )}
+                        {isLeague && (s as any).manual && <span className="text-[10px] text-amber-600">지정</span>}
                         <span className="text-stone-400 font-mono">{s.wins}승 {s.losses}패</span>
                         <span className={`font-mono ${s.game_diff > 0 ? 'text-tennis-600' : s.game_diff < 0 ? 'text-red-400' : 'text-stone-400'}`}>
                           {s.game_diff > 0 ? '+' : ''}{s.game_diff}
@@ -483,15 +590,15 @@ export default function GroupsPage() {
 
                     {/* 액션 버튼 */}
                     <div className="flex gap-1.5 mt-2">
-                      {hasTie && (
+                      {(hasTie || leagueTieEditable) && (
                         <button
                           onClick={() => openRankModal(g)}
-                          className="flex-1 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-white hover:bg-amber-600"
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold ${hasTie ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-white border border-amber-300 text-amber-700'}`}
                         >
-                          ✏️ 순위 직접 지정
+                          {hasTie ? '✏️ 순위 직접 지정' : '✏️ 동률 순위 수정'}
                         </button>
                       )}
-                      {allRanked && (
+                      {allRanked && !isLeague && (
                         <button
                           onClick={() => fillSlots(g.id, g.label)}
                           disabled={fillingGroup === g.id}
@@ -544,7 +651,7 @@ export default function GroupsPage() {
           <div className="bg-white rounded-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
             <h3 className="font-bold text-lg mb-1">✏️ 순위 직접 지정</h3>
             <p className="text-xs text-stone-400 mb-4">
-              {rankModal.groupLabel} · 승수/게임득실 동률 — 직접 순위를 지정해주세요
+              {rankModal.groupLabel} · {rankModal.positions ? '승수·승자승·게임득실까지 동률' : '승수/게임득실 동률'} — 직접 순위를 지정해주세요
             </p>
 
             <div className="space-y-2 mb-6">
@@ -557,13 +664,17 @@ export default function GroupsPage() {
                     </div>
                   </div>
                   <select
-                    value={manualRanks[s.team_id] ?? ''}
+                    value={manualRanks[s.team_id] || ''}
                     onChange={e => setManualRanks(prev => ({ ...prev, [s.team_id]: Number(e.target.value) }))}
                     className="border-2 border-amber-300 rounded-lg px-2 py-1.5 text-sm font-bold w-16 text-center focus:border-amber-500 focus:outline-none"
                   >
                     <option value="">-</option>
-                    {rankModal.teams.map((_, i) => (
-                      <option key={i + 1} value={i + 1}>{i + 1}위</option>
+                    {(rankModal.positions
+                      // 풀리그: 같은 동률 덩어리 자리 안에서만 (예: 2·3위 동률 → 2위/3위)
+                      ? Array.from({ length: (s as any).tieSize || 1 }, (_, k) => ((s as any).tieStart ?? 1) + k)
+                      : rankModal.teams.map((_, i) => i + 1)
+                    ).map(p => (
+                      <option key={p} value={p}>{p}위</option>
                     ))}
                   </select>
                 </div>
@@ -590,7 +701,7 @@ export default function GroupsPage() {
                   new Set(Object.values(manualRanks)).size !== rankModal.teams.length}
                 className="flex-1 py-2.5 rounded-xl bg-amber-500 text-white font-bold text-sm hover:bg-amber-600 disabled:opacity-50"
               >
-                {savingRank ? '처리 중...' : '순위 확정 + 본선 진출'}
+                {savingRank ? '처리 중...' : rankModal.positions ? '순위 확정' : '순위 확정 + 본선 진출'}
               </button>
             </div>
           </div>

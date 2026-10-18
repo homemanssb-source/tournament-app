@@ -45,7 +45,7 @@ function nextPow2(n: number): number { let p = 1; while (p < n) p *= 2; return p
 
 // 조편성 + 부서 + teams 데이터로 예상 경기 수 자동 계산 (시뮬레이터 동일 로직)
 function calcExpectedMatches(
-  divisions: { id: string; name: string }[],
+  divisions: { id: string; name: string; format?: string | null }[],
   groups: { id: string; division_id: string | null }[],
   teams: { id: string; group_id: string | null; division_id: string | null }[],
 ): ExpectedMatches {
@@ -59,6 +59,13 @@ function calcExpectedMatches(
     for (const g of divGroups) {
       const n = teams.filter(t => t.group_id === g.id).length
       if (n >= 2) divPrelim += n * (n - 1) / 2   // round-robin
+    }
+    // 풀리그 부서: 리그 경기만 (조편성 전이면 부서 전체 기준), 본선 없음
+    if (div.format === 'full_league') {
+      const lp = divGroups.length ? divPrelim : (teamsInDiv >= 2 ? teamsInDiv * (teamsInDiv - 1) / 2 : 0)
+      prelim += lp
+      byDivision.push({ division_id: div.id, name: div.name, teamsInDiv, groupCount: divGroups.length, prelim: lp, advance: 0, bracket: 0, finals: 0, byes: 0 })
+      continue
     }
     // 본선: 각 조 1·2위 진출 → 2^n 브래킷
     const advance = divGroups.length * 2
@@ -138,7 +145,7 @@ export default function DashboardPage() {
         allTeamsRes,        // detectTied용 — teams 전체 한 번에 조회 (M개→1개)
       ] = await Promise.all([
         supabase.from('events').select('*').eq('id', eventId).single(),
-        supabase.from('divisions').select('id,name,match_date').eq('event_id', eventId).order('sort_order'),
+        supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order'),   // * — format(034) 포함
         // ✅ matches: status별 3번 count → 한 번에 id+status만 조회
         supabase.from('matches').select('id,status').eq('event_id', eventId).neq('score', 'BYE'),
         // ✅ ties: status별 3번 count → 한 번에 id+status만 조회

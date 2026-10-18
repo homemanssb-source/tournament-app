@@ -14,6 +14,7 @@ import { operatorFromRequest } from '@/lib/api-auth';
 import { createClient } from '@supabase/supabase-js';
 import { findParticipantOnlyTeams } from '@/lib/participation';
 import { getAppAClient } from '@/lib/app-a-server';
+import { fetchLeaguePlacements } from '@/lib/league-results';
 
 const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -140,9 +141,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!matches || matches.length === 0) {
+    // ── 1-0. 풀리그 부서: 리그 순위로 입상 (경기가 다 끝나고 순위가 다 정해진 부서만) ──
+    const league = await fetchLeaguePlacements(appB, event_id);
+    const leagueWarnings = [
+      ...league.unfinished.map(n => `${n}: 풀리그 경기가 남아 있어 전송하지 않았습니다.`),
+      ...league.unresolved.map(n => `${n}: 풀리그 동률 순위를 조편성 화면에서 먼저 지정하세요 (전송 안 함).`),
+    ];
+
+    if ((!matches || matches.length === 0) && league.placements.length === 0) {
       return NextResponse.json(
-        { success: true, message: '전송할 본선 결과가 없습니다.', synced: 0 },
+        { success: true, message: '전송할 본선 결과가 없습니다.', synced: 0, warnings: leagueWarnings.length ? leagueWarnings : undefined },
         { headers: corsHeaders },
       );
     }
@@ -154,7 +162,7 @@ export async function POST(request: NextRequest) {
       .eq('event_id', event_id);
 
     const placedIds = new Set<string>(
-      matches.filter(m => m.round && m.winner_team_id)
+      (matches || []).filter(m => m.round && m.winner_team_id)
         .flatMap(m => [m.team_a_id, m.team_b_id].filter(Boolean) as string[]),
     );
     const participantOnly = findParticipantOnlyTeams(allMatches || [], placedIds);
@@ -162,8 +170,9 @@ export async function POST(request: NextRequest) {
     // ── 2. 관련 팀 정보 조회 ──
     // ★ 수정: p1_club, p2_club 추가 조회
     const teamIds = [...new Set([
-      ...matches.flatMap(m => [m.team_a_id, m.team_b_id].filter(Boolean)),
+      ...(matches || []).flatMap(m => [m.team_a_id, m.team_b_id].filter(Boolean)),
       ...participantOnly.map(p => p.team_id),
+      ...league.placements.map(p => p.team_id),
     ])];
     const { data: teamsData } = await appB
       .from('teams')
@@ -174,8 +183,9 @@ export async function POST(request: NextRequest) {
 
     // ── 3. 부서 정보 조회 ──
     const divIds = [...new Set([
-      ...matches.map(m => m.division_id),
+      ...(matches || []).map(m => m.division_id),
       ...participantOnly.map(p => p.division_id),
+      ...league.placements.map(p => p.division_id),
     ].filter(Boolean))];
     const { data: divsData } = await appB
       .from('divisions')
@@ -187,7 +197,7 @@ export async function POST(request: NextRequest) {
     // ── 4. 각 팀의 최고 순위 계산 ──
     const teamBestRank = new Map<string, { rank: string; divisionName: string }>();
 
-    for (const match of matches) {
+    for (const match of matches || []) {
       if (!match.round || !match.winner_team_id) continue;
 
       const loserId = match.team_a_id === match.winner_team_id ? match.team_b_id : match.team_a_id;
@@ -208,6 +218,11 @@ export async function POST(request: NextRequest) {
           teamBestRank.set(loserId, { rank: loserRank, divisionName: divName });
         }
       }
+    }
+
+    // 풀리그 부서: 1위 우승 · 2위 준우승 · 3·4위 4강 · (6팀 이상) 5~8위 8강 · 나머지 참가
+    for (const p of league.placements) {
+      teamBestRank.set(p.team_id, { rank: p.appA, divisionName: p.division_name });
     }
 
     // 예선 탈락 등 본선 순위가 없는 팀은 '참가'
@@ -337,6 +352,7 @@ export async function POST(request: NextRequest) {
       total: teamBestRank.size * 2,
       unmatched: unmatchedPlayers.length > 0 ? unmatchedPlayers : undefined,
       errors: errors.length > 0 ? errors : undefined,
+      warnings: leagueWarnings.length > 0 ? leagueWarnings : undefined,
     }, { headers: corsHeaders });
 
   } catch (err: any) {

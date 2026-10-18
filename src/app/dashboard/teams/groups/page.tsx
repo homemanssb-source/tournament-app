@@ -14,6 +14,8 @@ import {
 import TeamStandingsPanel from '@/components/TeamStandingsPanel';
 import { supabase } from '@/lib/supabase';
 import { getFormatLabel, getFullLeagueTieCount } from '@/lib/team-utils';
+import { divisionTeamFormat } from '@/lib/league';
+import DivisionOverview from '@/components/DivisionOverview';
 import { calcGroupDistribution, saveSeeds } from '@/lib/seed';
 import SeedPanel from '@/components/SeedPanel';
 import type { Club, EventTeamConfig, TieWithClubs } from '@/types/team';
@@ -62,7 +64,7 @@ export default function GroupsPage() {
 
     // ✅ 부서, config, clubs, groups, ties를 한 번에 병렬 fetch
     const [divsRes, cfg, clubList, grpsRes, tieList] = await Promise.all([
-      supabase.from('divisions').select('id, name, sort_order, team_match_type').eq('event_id', eventId).order('sort_order'),
+      supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order'),   // * — format(034) 포함
       fetchEventTeamConfig(eventId),
       fetchClubs(eventId),
       supabase.from('groups').select('*').eq('event_id', eventId).order('group_num'),
@@ -87,10 +89,24 @@ export default function GroupsPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // 부서별 진행방식을 저장해 둔다 — 풀리그/조 생성 함수가 대회 설정(team_format)을 바꿔도 다른 부서 방식이 그대로 유지되게
+  async function pinDivisionFormats(selectedFormat: 'full_league' | 'group_knockout') {
+    for (const d of divisions as any[]) {
+      const want = d.id === selectedDiv
+        ? selectedFormat
+        : (d.format ?? (divisionTeamFormat(d, config?.team_format) === 'full_league' ? 'full_league' : 'group_knockout'));
+      if (d.format !== want) {
+        const { error } = await supabase.from('divisions').update({ format: want }).eq('id', d.id);
+        if (error) throw new Error('부서 진행방식 저장 실패: ' + error.message);
+      }
+    }
+  }
+
   async function handleFullLeague() {
     if (!confirm(`${filteredClubs.length}팀 풀리그를 생성합니다. (${getFullLeagueTieCount(filteredClubs.length)}경기)`)) return;
     setGenerating(true);
     try {
+      if (divisions.length > 0) await pinDivisionFormats('full_league');
       const r = await generateFullLeague(eventId, selectedDiv || undefined);
       if (!r.success) { alert(r.error); return; }
       await loadData();
@@ -109,6 +125,7 @@ export default function GroupsPage() {
     if (!confirm(`${groupCount}개 조로 편성합니다.\n${desc}`)) return;
     setGenerating(true);
     try {
+      if (divisions.length > 0) await pinDivisionFormats('group_knockout');
       const r = await createTeamGroups(eventId, groupCount, groupSize, selectedDiv || undefined);
       if (!r.success) { alert(r.error); return; }
       await loadData();
@@ -123,15 +140,20 @@ export default function GroupsPage() {
 
   const hasTies = filteredTies.length > 0;
   const hasGroups = filteredGroups.length > 0;
+  // 이 부서 진행방식 (부서 설정 → 없으면 대회 설정)
+  const fmt = divisionTeamFormat(divisions.find(d => d.id === selectedDiv) as any, config?.team_format);
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">🏅 조편성 · 순위</h1>
         <span className="text-sm text-gray-500">
-          {filteredClubs.length}팀 · {config ? getFormatLabel(config.team_format) : ''}
+          {filteredClubs.length}팀 · {getFormatLabel(fmt)}
         </span>
       </div>
+
+      <DivisionOverview eventId={eventId} kind="team" selected={selectedDiv} onSelect={setSelectedDiv}
+        reloadKey={standingsReload} onChanged={loadData} />
 
       {divisions.length > 0 && (
         <div className="flex gap-1 overflow-x-auto">
@@ -152,7 +174,7 @@ export default function GroupsPage() {
 
       {filteredClubs.length >= 2 && (
         <>
-          {config?.team_format === 'full_league' && (
+          {fmt === 'full_league' && (
             <div className="bg-white rounded-lg border p-6 space-y-4">
               <h2 className="font-semibold">풀리그 생성</h2>
               <p className="text-sm text-gray-500">
@@ -166,7 +188,7 @@ export default function GroupsPage() {
             </div>
           )}
 
-          {(config?.team_format === 'group_tournament' || config?.team_format === 'prelim_tournament') && (
+          {(fmt === 'group_tournament' || fmt === 'prelim_tournament') && (
             <SeedPanel
               candidates={filteredClubs.map(c => ({ id: c.id, name: c.name, seed: c.seed_number ?? null }))}
               maxSeeds={groupCount}
@@ -175,10 +197,10 @@ export default function GroupsPage() {
             />
           )}
 
-          {(config?.team_format === 'group_tournament' || config?.team_format === 'prelim_tournament') && (
+          {(fmt === 'group_tournament' || fmt === 'prelim_tournament') && (
             <div className="bg-white rounded-lg border p-6 space-y-4">
               <h2 className="font-semibold">
-                {config.team_format === 'group_tournament' ? '조별리그 편성' : '예선 조편성'}
+                {fmt === 'group_tournament' ? '조별리그 편성' : '예선 조편성'}
               </h2>
               <div className="flex gap-4 items-end">
                 <div>
@@ -227,7 +249,7 @@ export default function GroupsPage() {
           )}
 
           {/* 순위 (예전 '순위' 메뉴를 합침) — 재계산·동률 결정 포함 */}
-          {(hasGroups || (config?.team_format === 'full_league' && hasTies)) && (
+          {(hasGroups || (fmt === 'full_league' && hasTies)) && (
             <TeamStandingsPanel eventId={eventId} selectedDiv={selectedDiv} reloadKey={standingsReload} />
           )}
 

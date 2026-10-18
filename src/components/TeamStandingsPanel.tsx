@@ -6,6 +6,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { fetchStandings, fetchEventTeamConfig, calculateStandings, setManualRank } from '@/lib/team-api';
 import type { StandingWithClub, EventTeamConfig } from '@/types/team';
+import { divisionTeamFormat } from '@/lib/league';
 
 interface Division { id: string; name: string; sort_order: number; }
 
@@ -39,7 +40,7 @@ export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0
 
     const [cfg, divsRes, grpsRes] = await Promise.all([
       fetchEventTeamConfig(eventId),
-      supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
+      supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order'),   // * — format(034) 포함
       supabase.from('groups').select('*').eq('event_id', eventId).order('division_id').order('group_num'),
     ]);
 
@@ -47,17 +48,23 @@ export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0
     const divList = divsRes.data || [];
     setDivisions(divList);
 
+    // 부서마다 진행방식이 다를 수 있음 (divisions.format → 없으면 대회 설정)
     const map: Record<string, StandingWithClub[]> = {};
-    if (cfg?.team_format === 'full_league') {
-      // ✅ C3 우회: 부서별로 분리 조회
-      if (divList.length > 0) {
-        const results = await Promise.all(divList.map(d => fetchStandings(eventId, null, d.id)));
-        divList.forEach((d, i) => { map[`full_${d.id}`] = results[i]; });
-      } else {
-        map['full'] = await fetchStandings(eventId, null);
-      }
+    const grps = grpsRes.data || [];
+    if (divList.length > 0) {
+      const leagueDivs = divList.filter((d: any) => divisionTeamFormat(d, cfg?.team_format) === 'full_league');
+      const leagueIds = new Set(leagueDivs.map((d: any) => d.id));
+      const groupList = grps.filter(g => !leagueIds.has(g.division_id));
+      setGroups(groupList);
+      const [fullRes, grpRes] = await Promise.all([
+        Promise.all(leagueDivs.map((d: any) => fetchStandings(eventId, null, d.id))),
+        Promise.all(groupList.map(g => fetchStandings(eventId, g.id))),
+      ]);
+      leagueDivs.forEach((d: any, i: number) => { map[`full_${d.id}`] = fullRes[i]; });
+      groupList.forEach((g, i) => { map[g.id] = grpRes[i]; });
+    } else if (cfg?.team_format === 'full_league') {
+      map['full'] = await fetchStandings(eventId, null);
     } else {
-      const grps = grpsRes.data || [];
       setGroups(grps);
       const standingsResults = await Promise.all(grps.map(g => fetchStandings(eventId, g.id)));
       grps.forEach((g, i) => { map[g.id] = standingsResults[i]; });
@@ -72,15 +79,15 @@ export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0
   async function handleRecalculate() {
     setRecalculating(true);
     try {
-      if (config?.team_format === 'full_league') {
-        // ✅ C3 근본: 부서별로 따로 재계산 (순위가 division 내부에서만 부여됨)
-        if (divisions.length > 0) {
-          await Promise.all(divisions.map(d => calculateStandings(eventId, null, d.id)));
-        } else {
-          await calculateStandings(eventId, null);
-        }
+      // ✅ C3 근본: 풀리그는 부서별로 따로 재계산 (순위가 division 내부에서만 부여됨), 조별은 조마다
+      const leagueDivs = divisions.filter((d: any) => divisionTeamFormat(d, config?.team_format) === 'full_league');
+      if (divisions.length === 0 && config?.team_format === 'full_league') {
+        await calculateStandings(eventId, null);
       } else {
-        await Promise.all(groups.map(g => calculateStandings(eventId, g.id)));
+        await Promise.all([
+          ...leagueDivs.map(d => calculateStandings(eventId, null, d.id)),
+          ...groups.map(g => calculateStandings(eventId, g.id)),
+        ]);
       }
       await loadData();
     } catch (err: any) { alert(err.message || '순위 재계산 실패'); }
