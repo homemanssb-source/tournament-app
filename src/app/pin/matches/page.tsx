@@ -643,8 +643,14 @@ export default function PinMatchesPage() {
                   {byRound[round].map(m => {
                     const isLive   = m.status === 'IN_PROGRESS'
                     const isDone   = m.status === 'FINISHED'
-                    const canInput = isLive && !m.locked_by_participant
-                    const queue    = (m.court ? courtQueues.get(m.court) || [] : []).map(decoQueue)
+                    // ✅ 코트의 이번 차례: 운영자가 ▶(시작)을 안 눌러도, 그 코트에 진행중 경기가 없고
+                    //    내 경기가 첫 번째 미완료 경기이며 양 팀이 정해졌으면 점수 입력 가능
+                    const rawQueue = m.court ? courtQueues.get(m.court) || [] : []
+                    const isCourtTurn = !isLive && !isDone && !!m.team_a_id && !!m.team_b_id
+                      && !rawQueue.some(q => q.status === 'IN_PROGRESS')
+                      && rawQueue.find(q => q.status !== 'FINISHED')?.id === m.id
+                    const canInput = (isLive || isCourtTurn) && !m.locked_by_participant
+                    const queue    = rawQueue.map(decoQueue)
                     const showQueue = m.court && queue.length > 0 && !isDone
                     const loser    = loserScores[m.id] || ''
 
@@ -680,6 +686,8 @@ export default function PinMatchesPage() {
                                 <span className="text-lg font-black text-stone-700">{m.score}</span>
                               ) : isLive ? (
                                 <span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-0.5 rounded-full">진행中</span>
+                              ) : isCourtTurn ? (
+                                <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">이번 차례</span>
                               ) : (
                                 <span className="text-stone-300 font-bold text-sm">VS</span>
                               )}
@@ -766,7 +774,7 @@ export default function PinMatchesPage() {
                             )
                           })()}
 
-                          {!isDone && !isLive && (
+                          {!isDone && !isLive && !isCourtTurn && (
                             <div className="text-center py-2 text-xs text-stone-400">
                               {(() => {
                                 // 내 경기가 이 코트의 첫 경기이고 아직 아무 경기도 시작되지 않았으면 시작 예정 시각 표시
@@ -776,7 +784,7 @@ export default function PinMatchesPage() {
                                 const t = nothingStarted && isFirst ? firstStartFor(m.court) : ''
                                 return t ? <span className="block mb-1 text-sm font-bold text-[#2d5016]">⏰ 첫 경기 · {t} 시작 예정</span> : null
                               })()}
-                              ⏳ 경기 대기 중 · 진행中이 되면 점수 입력 가능{queuePlaceholders[m.id] && (() => { const ph = queuePlaceholders[m.id]; const meInFirst = m.my_side === 'A' ? !!ph.a : !!ph.b; return (
+                              ⏳ 경기 대기 중 · 앞 경기가 끝나면 점수 입력 가능{queuePlaceholders[m.id] && (() => { const ph = queuePlaceholders[m.id]; const meInFirst = m.my_side === 'A' ? !!ph.a : !!ph.b; return (
                                 <span className="block mt-1 text-amber-600">
                                   {meInFirst ? '🔀 앞 경기에서 이기면 바로 다음 경기, 지면 마지막 경기입니다' : '🔀 앞 경기 승자와 먼저, 패자와 나중에 붙습니다 (앞 경기 결과 후 확정)'}
                                 </span>) })()}
