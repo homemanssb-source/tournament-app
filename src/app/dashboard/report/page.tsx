@@ -4,6 +4,7 @@ import { useEventId } from '@/components/useDashboard'
 import { supabase } from '@/lib/supabase'
 import { fetchStandings, fetchTies } from '@/lib/team-api'
 import { findParticipantOnlyTeams } from '@/lib/participation'
+import { fetchLeaguePlacements } from '@/lib/league-results'
 import type { StandingWithClub, TieWithClubs } from '@/types/team'
 
 interface EventInfo {
@@ -95,7 +96,7 @@ export default function ReportPage() {
     try {
       const [eventRes, divsRes, grpsRes, matchRes, tieData] = await Promise.all([
         supabase.from('events').select('name,date,location,event_type,status').eq('id', eventId).single(),
-        supabase.from('divisions').select('id,name,sort_order').eq('event_id', eventId).order('sort_order'),
+        supabase.from('divisions').select('*').eq('event_id', eventId).order('sort_order'),
         supabase.from('groups').select('*').eq('event_id', eventId).order('group_num'),
         // ✅ team_a_id, team_b_id, winner_team_id, division_id 추가
         supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId).neq('score', 'BYE').order('division_name').order('stage').order('round'),
@@ -124,6 +125,11 @@ export default function ReportPage() {
       }
       if (!grpsRes.data?.length) {
         map['full'] = await fetchStandings(eventId, null)
+      } else if (eventRes.data?.event_type !== 'individual') {
+        // 단체전 부서별 풀리그 (divisions.format) — 조가 있는 대회에서도 그 부서 리그 순위를 함께
+        for (const d of divList as any[]) {
+          if (d.format === 'full_league') map[`full:${d.name}`] = await fetchStandings(eventId, null, d.id)
+        }
       }
       setStandingsMap(map)
     } finally {
@@ -134,6 +140,7 @@ export default function ReportPage() {
   useEffect(() => { loadData() }, [loadData])
 
   // ✅ 부서별 순위 생성 — 본선 완료 경기에서 라운드별 팀 추출 후 선수 정보 조회
+  const [leagueNotes, setLeagueNotes] = useState<string[]>([])
   const buildPlayerRanks = useCallback(async () => {
     if (!eventId || matches.length === 0) return
     setRankLoading(true)
@@ -162,6 +169,16 @@ export default function ReportPage() {
           teamPlaceList.push({ team_id: loserId, division_id: m.division_id, division_name: m.division_name, place })
         }
       }
+
+      // 풀리그 부서: 리그 순위로 입상 (경기 완료 + 순위 확정된 부서만)
+      const league = await fetchLeaguePlacements(supabase, eventId)
+      for (const p of league.placements) {
+        teamPlaceList.push({ team_id: p.team_id, division_id: p.division_id, division_name: p.division_name, place: p.report })
+      }
+      setLeagueNotes([
+        ...league.unfinished.map(n => `${n}: 풀리그 진행 중`),
+        ...league.unresolved.map(n => `${n}: 풀리그 동률 순위 미지정 (조편성 화면에서 지정)`),
+      ])
 
       // 본선 순위가 없는 팀(예선 탈락 등) → '참가' — 앱A 참가 포인트 대상
       const { data: rawMatches } = await supabase
@@ -257,7 +274,7 @@ export default function ReportPage() {
       const rows = [['그룹', '순위', '클럽명', '경기수', '승', '패', '러버승', '러버패', '득실차', '상태']]
       Object.entries(standingsMap).forEach(([key, standings]) => {
         const group = groups.find(g => g.id === key)
-        const groupName = key === 'full' ? '풀리그' : group?.group_label || group?.group_name || key
+        const groupName = key === 'full' ? '풀리그' : key.startsWith('full:') ? `${key.slice(5)} 풀리그` : group?.group_label || group?.group_name || key
         standings.forEach(s => {
           rows.push([
             groupName, String(s.rank ?? '동점'), s.club?.name || '',
@@ -341,7 +358,7 @@ export default function ReportPage() {
         for (const [key, standings] of Object.entries(standingsMap)) {
           if (standings.length === 0) continue
           const group = groups.find(g => g.id === key)
-          const groupName = key === 'full' ? 'Full League' : group?.group_label || group?.group_name || key
+          const groupName = key === 'full' ? 'Full League' : key.startsWith('full:') ? `${key.slice(5)} League` : group?.group_label || group?.group_name || key
 
           autoTable(doc, {
             startY: yPos,
@@ -482,6 +499,11 @@ export default function ReportPage() {
         )}
 
         <div className="p-4">
+          {leagueNotes.length > 0 && (
+            <div className="mb-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 space-y-0.5">
+              {leagueNotes.map(n => <p key={n}>⚠️ {n}</p>)}
+            </div>
+          )}
           {rankLoading ? (
             <p className="text-center py-6 text-stone-400 text-sm">순위 계산 중...</p>
           ) : playerRanks.length === 0 ? (
@@ -620,7 +642,7 @@ function StandingsPreview({ standingsMap, groups }: { standingsMap: Record<strin
     <div className="space-y-4">
       {entries.map(([key, standings]) => {
         const group = groups.find(g => g.id === key)
-        const groupName = key === 'full' ? '풀리그' : group?.group_label || group?.group_name || key
+        const groupName = key === 'full' ? '풀리그' : key.startsWith('full:') ? `${key.slice(5)} 풀리그` : group?.group_label || group?.group_name || key
         return (
           <div key={key}>
             <h4 className="font-semibold text-sm text-gray-600 mb-2">{groupName}</h4>

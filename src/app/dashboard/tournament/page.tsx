@@ -184,6 +184,7 @@ export default function TournamentPage() {
     loadGroupProgress()
   }
 
+  const isLeague = (divisions.find(d => d.id === selected) as any)?.format === 'full_league'
   const allGroupsDone = groupProgress.total > 0 && groupProgress.finished === groupProgress.total
   const hasBracket = bracket.length > 0
   const hasTbd = tbdSlots.length > 0
@@ -194,6 +195,12 @@ export default function TournamentPage() {
     <div>
       <h1 className="text-2xl font-bold mb-4">🏆 본선 토너먼트</h1>
       <DivisionTabs divisions={divisions} selected={selected} onSelect={setSelected} />
+
+      {isLeague && (
+        <div className="mb-4 p-4 rounded-xl border border-tennis-200 bg-tennis-50 text-sm text-tennis-800">
+          🔁 <b>풀리그 부서</b>입니다 — 본선 없이 리그 순위로 입상이 정해집니다. 순위·동률 지정은 <b>조편성</b> 화면에서 하세요.
+        </div>
+      )}
 
       {msg && (
         <div className={`mb-4 p-3 rounded-xl text-sm ${
@@ -241,7 +248,7 @@ export default function TournamentPage() {
       </div>
 
       {/* 브래킷 생성 패널 */}
-      {!hasBracket && (
+      {!hasBracket && !isLeague && (
         <div className="bg-white rounded-xl border p-4 mb-4">
           <div className="flex flex-wrap gap-3 items-center mb-3">
             <div className="flex items-center gap-2">
