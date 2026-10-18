@@ -49,6 +49,8 @@ export interface AppATeamSource {
   getDivisions(): Promise<Res<AppADivision[]>>;
   getEntries(): Promise<Res<AppAEntry[]>>;
   getMembers(entryId: string): Promise<Res<AppAMember[]>>;
+  // 주장 회원 PIN (member_id → pin_code). 앱A는 9/30부터 신청서에 주장 PIN을 저장하지 않음(항상 '')
+  getCaptainPins?(memberIds: string[]): Promise<Res<Record<string, string>>>;
 }
 
 export interface TeamSyncResult {
@@ -99,6 +101,15 @@ export function appATeamSource(appA: SupabaseClient, appAEventId: string): AppAT
       const { data, error } = await appA.from('team_event_members')
         .select('member_id, member_name, gender, grade, member_order').eq('entry_id', entryId).order('member_order');
       return { data, error: error?.message };
+    },
+    async getCaptainPins(memberIds: string[]) {
+      if (!memberIds.length) return { data: {} };
+      // members.pin_code 는 공개 키로 못 읽음 → 서비스 키 필요 (app-a-server)
+      const { data, error } = await appA.from('members').select('member_id, pin_code').in('member_id', memberIds);
+      if (error) return { data: null, error: error.message };
+      const map: Record<string, string> = {};
+      for (const m of data || []) if (m.member_id && m.pin_code) map[m.member_id] = String(m.pin_code);
+      return { data: map };
     },
   };
 }
@@ -189,6 +200,17 @@ export async function syncTeamEntries(
   const active = entries.filter(e => ACTIVE_STATUSES.includes(e.status ?? ''));
   const inactive = entries.filter(e => !ACTIVE_STATUSES.includes(e.status ?? ''));
 
+  // 주장 PIN = 신청서 값(예전 데이터) → 없으면 앱A 주장 회원 PIN. 둘 다 없으면 null (빈 값으로 덮어쓰지 않음)
+  let captainPinByMember: Record<string, string> = {};
+  if (src.getCaptainPins) {
+    const ids = [...new Set(active.map(e => e.captain_member_id).filter((x): x is string => !!x))];
+    const res = await src.getCaptainPins(ids);
+    if (res.error) warnings.push(`앱A 주장 PIN 조회 실패 — 기존 PIN 유지 (${res.error})`);
+    else captainPinByMember = res.data || {};
+  }
+  const captainPinOf = (e: AppAEntry): string | null =>
+    (e.captain_pin || '').trim() || (e.captain_member_id ? captainPinByMember[e.captain_member_id] : '') || null;
+
   const { data: clubsRaw } = await appB.from('clubs')
     .select('id, name, division_id, captain_name, captain_pin').eq('event_id', eventId);
   const clubs = (clubsRaw || []) as { id: string; name: string; division_id: string | null; captain_name: string | null; captain_pin: string | null }[];
@@ -229,6 +251,7 @@ export async function syncTeamEntries(
 
       let club = findClub(entry, div.bId);
       const isNew = !club;
+      const pin = captainPinOf(entry);
       let changed = false;
 
       if (!club) {
@@ -239,17 +262,20 @@ export async function syncTeamEntries(
         }
         const { data: nc, error } = await appB.from('clubs').insert({
           event_id: eventId, name: entry.club_name, division_id: div.bId,
-          captain_name: entry.captain_name, captain_pin: entry.captain_pin,
+          captain_name: entry.captain_name, captain_pin: pin,
         }).select('id, name, division_id, captain_name, captain_pin').single();
         if (error || !nc) { errors.push(`${entry.club_name}: 클럽 생성 실패 — ${error?.message}`); continue; }
-        club = { ...nc, captain_pin: entry.captain_pin };
+        club = { ...nc, captain_pin: pin };
+        if (!pin) warnings.push(`${entry.club_name}: 주장 PIN 없음 — 대시보드에서 지정하세요`);
         clubs.push(club); clubById.set(club.id, club);
       } else {
         const patch: Record<string, any> = {};
         if (club.name !== entry.club_name) patch.name = entry.club_name;
         if ((club.division_id ?? null) !== div.bId) patch.division_id = div.bId;
         if ((club.captain_name ?? null) !== (entry.captain_name ?? null)) patch.captain_name = entry.captain_name;
-        if ((club.captain_pin ?? null) !== (entry.captain_pin ?? null)) patch.captain_pin = entry.captain_pin; // 앱A 기준
+        // 앱A 기준이지만 빈 값으로는 절대 덮어쓰지 않음 (운영자가 지정한 PIN 보존)
+        if (pin && club.captain_pin !== pin) patch.captain_pin = pin;
+        else if (!pin && !club.captain_pin) warnings.push(`${entry.club_name}: 주장 PIN 없음 — 대시보드에서 지정하세요`);
         if (Object.keys(patch).length) {
           const { error } = await appB.from('clubs').update(patch).eq('id', club.id);
           if (error) { errors.push(`${entry.club_name}: 클럽 갱신 실패 — ${error.message}`); continue; }

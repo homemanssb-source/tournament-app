@@ -77,7 +77,9 @@ const src = {
   async getDivisions() { return { data: A.divisions.map(d => ({ ...d })) }; },
   async getEntries() { return { data: A.entries.map(e => ({ ...e })) }; },
   async getMembers(id) { return A.fail.members ? { data: null, error: 'timeout' } : { data: (A.members[id] || []).map(m => ({ ...m })) }; },
+  async getCaptainPins(ids) { return A.fail.pins ? { data: null, error: 'permission denied' } : { data: Object.fromEntries(ids.filter(i => A.memberPins[i]).map(i => [i, A.memberPins[i]])) }; },
 };
+A.memberPins = {}; A.fail.pins = false;
 const sync = (o) => syncTeamEntries(sb, src, eventId, o);
 const clubsNow = async () => must(await sb.from('clubs').select('*').eq('event_id', eventId).order('created_at'), '클럽');
 const membersOf = async (cid) => must(await sb.from('club_members').select('*').eq('club_id', cid).order('member_order'), '선수');
@@ -149,6 +151,23 @@ async function main() {
   A.entries[0].captain_pin = '999999';
   r = await sync();
   ok((await sb.from('club_pins').select('captain_pin').eq('club_id', ga.id).single()).data?.captain_pin === '999999', '앱A PIN 반영 (club_pins)');
+
+  console.log('\nS6b 신청서 주장 PIN 빈 값(앱A 9/30 이후) → 주장 회원 PIN 사용');
+  const pinOf = async (cid) => (await sb.from('club_pins').select('captain_pin').eq('club_id', cid).maybeSingle()).data?.captain_pin ?? null;
+  A.entries[0].captain_pin = '';
+  A.fail.pins = true;
+  r = await sync();
+  ok(await pinOf(ga.id) === '999999' && (r.warnings || []).some(w => w.includes('주장 PIN 조회 실패')), '회원 PIN 조회 실패 → 기존 PIN 유지 + 경고');
+  A.fail.pins = false;
+  r = await sync();
+  ok(await pinOf(ga.id) === '999999', '회원 PIN 없음 → 빈 값으로 덮어쓰지 않음');
+  A.memberPins.MA1 = '555555';
+  r = await sync();
+  ok(await pinOf(ga.id) === '555555', '주장 회원(MA1) PIN 반영');
+  A.entries[3].captain_pin = '';   // 나클럽: 주장 회원 ID 없음 → 기존 444444 유지
+  r = await sync();
+  ok(await pinOf(na.id) === '444444' && !(r.warnings || []).some(w => w.includes('나클럽: 주장 PIN 없음')), '주장 회원 ID 없음 → 기존 PIN 유지');
+  A.entries[3].captain_pin = '444444';
 
   console.log('\nS7  1부 대전 후 경기방식 변경');
   A.divisions[0].team_match_type = '3_doubles';
