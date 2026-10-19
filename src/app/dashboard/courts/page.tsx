@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { withVenuePins } from '@/lib/pins'
 import { authHeaders } from '@/lib/auth-headers';
 import { useEventId, useDivisions } from '@/components/useDashboard'
-import { fillSlotsIfGroupComplete, groupPlaceholders } from '@/lib/tournament'
+import { fillSlotsIfGroupComplete, groupPlaceholders, fetchPendingByeIds } from '@/lib/tournament'
 import { requestSlotCheck } from '@/lib/slot-check'
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import type { TieWithClubs } from '@/types/team'
@@ -330,17 +330,18 @@ export default function CourtsPage() {
     if (!eventId) return
     if (showLoading) setLoading(true)
     try {
-      const [matchRes, tieRes, grpRes] = await Promise.all([
+      const [matchRes, tieRes, grpRes, byeIds] = await Promise.all([
         supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
           .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true }).order('id'),
         supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)')
           .eq('event_id', eventId).order('tie_order', { ascending:true, nullsFirst:false }).order('id'),
         supabase.from('groups').select('id, group_label').eq('event_id', eventId),
+        fetchPendingByeIds(eventId),   // 본선 TBD 부전승 자리 — 코트 필요 없음
       ])
       const _grpMap: Record<string,string> = {}
       for (const g of grpRes.data || []) { if (g.group_label) _grpMap[g.id] = g.group_label }
       const matchList = (matchRes.data || [])
-        .filter((m: any) => m.score !== 'BYE')
+        .filter((m: any) => m.score !== 'BYE' && !byeIds.has(m.id))
         .sort((a: any, b: any) => {
           if ((a.court ?? '') !== (b.court ?? '')) return (a.court ?? '').localeCompare(b.court ?? '', undefined, { numeric: true })
           const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)
@@ -401,10 +402,13 @@ export default function CourtsPage() {
 
   async function loadMatches() {
     if (!eventId) return
-    const { data } = await supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
-      .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true }).order('id')
+    const [{ data }, byeIds] = await Promise.all([
+      supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
+        .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true }).order('id'),
+      fetchPendingByeIds(eventId),
+    ])
     const list = (data || [])
-      .filter((m: any) => m.score !== 'BYE')
+      .filter((m: any) => m.score !== 'BYE' && !byeIds.has(m.id))
       .sort((a: any, b: any) => {
         if ((a.court ?? '') !== (b.court ?? '')) return (a.court ?? '').localeCompare(b.court ?? '', undefined, { numeric: true })
         const od = (a.court_order ?? 9999) - (b.court_order ?? 9999)

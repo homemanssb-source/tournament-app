@@ -123,3 +123,33 @@ export function groupPlaceholders(matches: PlaceholderMatch[]): Record<string, P
   }
   return out
 }
+
+// ============================================================
+// 본선 미리 생성(TBD) 대진의 부전승 자리 — 한쪽만 "A조 1위" 같은 자리이고 반대쪽은 비어 있음.
+// 조 경기가 끝나 슬롯이 채워지면 rpc_fill_tournament_slots 가 바로 BYE 로 끝내고 다음 라운드로 올리므로
+// 코트가 필요 없다 → 코트 배정 화면의 미배정 목록·자동 배정에서 뺀다.
+// (v_matches_with_teams 에는 qualifier_label 이 없어서 matches 에서 따로 읽는다)
+// ============================================================
+export function isPendingByeSlot(m: {
+  status?: string | null; stage?: string | null
+  team_a_id?: string | null; team_b_id?: string | null
+  qualifier_label_a?: string | null; qualifier_label_b?: string | null
+}): boolean {
+  if ((m.stage || '').toUpperCase() === 'GROUP' || m.status === 'FINISHED') return false
+  const a = !!(m.team_a_id || m.qualifier_label_a)
+  const b = !!(m.team_b_id || m.qualifier_label_b)
+  return a !== b && !!(m.qualifier_label_a || m.qualifier_label_b)
+}
+
+// 반환: 경기 id → 부전승으로 올라갈 자리 이름 (예: "1조 1위")
+export async function fetchPendingByeIds(eventId: string | null | undefined): Promise<Map<string, string>> {
+  if (!eventId) return new Map()
+  const { data } = await supabase
+    .from('matches')
+    .select('id, status, stage, team_a_id, team_b_id, qualifier_label_a, qualifier_label_b')
+    .eq('event_id', eventId)
+    .neq('stage', 'GROUP')
+    .neq('status', 'FINISHED')
+  return new Map((data || []).filter(isPendingByeSlot)
+    .map(m => [m.id, m.qualifier_label_a || m.qualifier_label_b || ''] as [string, string]))
+}

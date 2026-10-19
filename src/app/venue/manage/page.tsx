@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { fetchPendingByeIds } from '@/lib/tournament'
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import AdminBracketView from '@/components/AdminBracketView'
 import VenueTieScoreSheet from '@/components/VenueTieScoreSheet'
@@ -173,13 +174,16 @@ export default function VenueManagePage() {
   const loadData = useCallback(async () => {
     if (!session) return
     try {
-      const { data, error } = await supabase.rpc('rpc_venue_list_matches', { p_token: session.token })
+      const [{ data, error }, byeIds] = await Promise.all([
+        supabase.rpc('rpc_venue_list_matches', { p_token: session.token }),
+        fetchPendingByeIds(session.event_id),   // 본선 TBD 부전승 자리 — 코트 필요 없음
+      ])
       if (error) {
         sessionStorage.removeItem('venue_session')
         router.push(session.is_admin ? '/admin-pin' : '/venue')
         return
       }
-      const individual: VenueMatch[] = (data.matches || []).map((m: any) => ({
+      const individual: VenueMatch[] = (data.matches || []).filter((m: any) => !byeIds.has(m.id)).map((m: any) => ({
         ...m, is_team_tie: false,
         status: normalizeStatus(m.status),
         group_label: m.group_id ? (groupLabels[m.group_id] || null) : null,
