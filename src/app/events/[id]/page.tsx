@@ -883,13 +883,13 @@ function TeamMatchesView({ ties, venues }: { ties: TieWithClubs[]; venues: Venue
 }
 
 function TeamBracketView({ ties }: { ties: TieWithClubs[] }) {
-  const ROUND_ORDER = ['round_of_16', 'quarter', 'semi', 'final']
+  const ROUND_ORDER = ['round_of_32', 'round_of_16', 'quarter', 'semi', 'final']
   const roundLabels: Record<string, string> = {
-    round_of_16: '16강', quarter: '8강', semi: '4강', final: '결승',
+    round_of_32: '32강', round_of_16: '16강', quarter: '8강', semi: '4강', final: '결승',
   }
 
   const tournamentTies = ties.filter(t =>
-    ['round_of_16', 'quarter', 'semi', 'final'].includes(t.round || '')
+    ['round_of_32', 'round_of_16', 'quarter', 'semi', 'final'].includes(t.round || '')
   )
 
   if (tournamentTies.length === 0) {
