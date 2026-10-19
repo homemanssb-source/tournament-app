@@ -8,6 +8,7 @@
 // ============================================================
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { fetchPendingByeIds } from '@/lib/tournament'
 import { fetchTies } from '@/lib/team-api'
 
 type Status = 'PENDING' | 'IN_PROGRESS' | 'FINISHED'
@@ -77,12 +78,13 @@ export default function AdminBracketView({ eventId }: { eventId: string }) {
 
   const load = useCallback(async () => {
     try {
-      const [mRes, ties, dRes, vRes] = await Promise.all([
+      const [mRes, ties, dRes, vRes, byeIds] = await Promise.all([
         supabase.from('v_matches_with_teams').select('*')
           .eq('event_id', eventId).eq('stage', 'FINALS').order('slot'),
         fetchTies(eventId).catch(() => []),
         supabase.from('divisions').select('id, name, sort_order').eq('event_id', eventId).order('sort_order'),
         supabase.from('venues').select('name, short_name, court_count').eq('event_id', eventId).order('created_at'),
+        fetchPendingByeIds(eventId),   // 본선 TBD 부전승 자리 → BYE 로 표시, 코트 미배정에서 제외
       ])
       const divs = (dRes.data || []) as { id: string; name: string }[]
       const venues = vRes.data || []
@@ -93,10 +95,10 @@ export default function AdminBracketView({ eventId }: { eventId: string }) {
         const aTbd = !m.team_a_id, bTbd = !m.team_b_id
         const card: Card = {
           id: m.id, num: m.match_num ? `#${m.match_num}` : '', pos: m.slot ?? 0, round: ko(m.round || ''),
-          status: (m.status as Status) || 'PENDING', bye: m.score === 'BYE',
+          status: (m.status as Status) || 'PENDING', bye: m.score === 'BYE' || byeIds.has(m.id),
           score: m.score && m.score !== 'BYE' ? m.score : null,
           court: m.court || null, courtOrder: m.court_order ?? null,
-          a: aTbd ? (m.qualifier_label_a || 'TBD') : (m.team_a_name || 'TBD'),
+          a: aTbd ? (m.qualifier_label_a || byeIds.get(m.id) || 'TBD') : (m.team_a_name || 'TBD'),
           b: bTbd ? (m.qualifier_label_b || 'TBD') : (m.team_b_name || 'TBD'),
           aTbd, bTbd,
           aWin: !!m.winner_team_id && m.winner_team_id === m.team_a_id,
@@ -245,7 +247,7 @@ export default function AdminBracketView({ eventId }: { eventId: string }) {
       <div className="space-y-2">
         {cards.map(c => c.bye ? (
           <div key={c.id} className="rounded-xl border border-dashed border-stone-200 px-3 py-2 text-xs text-stone-400 flex justify-between gap-2">
-            <span className="truncate">{c.num && `${c.num} · `}부전승 {c.aTbd ? c.b : c.a}</span>
+            <span className="truncate">{c.num && `${c.num} · `}부전승 {c.aTbd ? (c.b !== 'TBD' ? c.b : c.a) : c.a}</span>
             <span>BYE</span>
           </div>
         ) : (
