@@ -815,7 +815,6 @@ function TeamStandingsView({ standingsMap, groups }: { standingsMap: Record<stri
                     <td className="px-3 py-2 font-bold">{s.rank ?? <span className="text-yellow-500 text-xs">동점</span>}</td>
                     <td className="px-3 py-2 font-medium">
                       {s.club?.name}
-                      {s.club?.seed_number && <span className="ml-1 text-xs text-yellow-600">[{s.club.seed_number}]</span>}
                     </td>
                     <td className="px-3 py-2 text-center font-medium">{s.won}</td>
                     <td className="px-3 py-2 text-center">{s.lost}</td>
