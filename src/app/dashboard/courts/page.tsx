@@ -61,12 +61,13 @@ const FINALS_ROUND_ORDER = ['128강','R128','64강','R64','32강','R32','16강',
 const STAGE_LABEL: Record<string, string> = { GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', ALL_FINALS:'전체본선', '128강':'128강', '64강':'64강', '32강':'32강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
 const TEAM_STAGE_TABS = [
   { key:'group',       round:'group',       label:'예선' },
+  { key:'round_of_32', round:'round_of_32', label:'32강' },
   { key:'round_of_16', round:'round_of_16', label:'16강' },
   { key:'quarter',     round:'quarter',     label:'8강'  },
   { key:'semi',        round:'semi',        label:'4강'  },
   { key:'final',       round:'final',       label:'결승' },
 ]
-const TEAM_STAGE_LABEL: Record<string,string> = { group:'예선', round_of_16:'16강', quarter:'8강', semi:'4강', final:'결승' }
+const TEAM_STAGE_LABEL: Record<string,string> = { group:'예선', round_of_32:'32강', round_of_16:'16강', quarter:'8강', semi:'4강', final:'결승' }
 
 // round 값 → 짧은 표시 라벨
 function getRoundBadge(round: string, groupLabel: string | null, divisionName: string): { round: string; div: string } {
@@ -74,7 +75,7 @@ function getRoundBadge(round: string, groupLabel: string | null, divisionName: s
     'GROUP': '예선', 'R32': '32강', 'R16': '16강', 'QF': '8강', 'SF': '4강', 'F': '결승',
     '128강': '128강', '64강': '64강', '32강': '32강', '16강': '16강', '8강': '8강', '4강': '4강', '결승': '결승',
     'group': '예선', 'full_league': '리그',
-    'round_of_16': '16강', 'quarter': '8강', 'semi': '4강', 'final': '결승',
+    'round_of_32': '32강', 'round_of_16': '16강', 'quarter': '8강', 'semi': '4강', 'final': '결승',
   }
   const roundLabel = roundMap[round] || round
   const label = groupLabel ? `${roundLabel} ${groupLabel}` : roundLabel

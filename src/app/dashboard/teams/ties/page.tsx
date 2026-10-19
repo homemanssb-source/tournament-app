@@ -180,7 +180,7 @@ export default function TiesPage() {
       setEditingRubber(null);
 
       // ✅ 토너먼트 자동 진출은 SQL(rpc_calculate_tie_result)에서 자동 처리
-      const isTournament = ['round_of_16', 'quarter', 'semi', 'final'].includes(selectedTie?.round || '');
+      const isTournament = ['round_of_32', 'round_of_16', 'quarter', 'semi', 'final'].includes(selectedTie?.round || '');
 
       await loadData();
       // 조별리그면 순위 계산 (풀리그면 division 단위로)
@@ -249,7 +249,7 @@ export default function TiesPage() {
       });
       const labelMap: Record<string, string> = {
         full_league: '풀리그', group: '조별리그',
-        round_of_16: '16강', quarter: '8강', semi: '4강', final: '결승', etc: '기타',
+        round_of_32: '32강', round_of_16: '16강', quarter: '8강', semi: '4강', final: '결승', etc: '기타',
       };
       return Object.entries(rg).map(([r, tl]) => ({
         groupName: labelMap[r] || r, groupId: null, divisionId: null, ties: tl,
@@ -268,8 +268,8 @@ export default function TiesPage() {
     }
 
     // 토너먼트 ties (group_id 없는 것)
-    const roundOrder = ['round_of_16', 'quarter', 'semi', 'final'];
-    const roundLabels: Record<string, string> = { round_of_16: '16강', quarter: '8강', semi: '4강', final: '결승' };
+    const roundOrder = ['round_of_32', 'round_of_16', 'quarter', 'semi', 'final'];
+    const roundLabels: Record<string, string> = { round_of_32: '32강', round_of_16: '16강', quarter: '8강', semi: '4강', final: '결승' };
     const tournTies = ties.filter(t => !t.group_id && (!selectedDiv || (t as any).division_id === selectedDiv));
     if (tournTies.length > 0) {
       // 라운드별로 분리
