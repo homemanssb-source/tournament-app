@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
-import { useEventSelect, EventChooser } from '@/components/useEventSelect'
+import { useEventSelect, EventChooser, EventBar } from '@/components/useEventSelect'
 import { usePushSubscription } from '@/hooks/usePushSubscription'
 import PushHelp, { usePushEnv } from '@/components/PushHelp'
 
@@ -20,7 +20,7 @@ const NOTIF_DONE_KEY = 'pin_notif_done'
 export default function PinPage() {
   const router = useRouter()
   // ✅ 대회 자동 선택 (같은 날 2개+면 선택 화면, ?event= 링크 지원) — 공용 훅
-  const { selectedEvent, setSelectedEvent, todayEvents, needChoose } = useEventSelect()
+  const { selectedEvent, setSelectedEvent, needChoose, showChooser, chooserEvents, openChooser, cancelChooser, currentEvent, canChange } = useEventSelect()
   const [pin, setPin] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -342,8 +342,9 @@ export default function PinPage() {
     )
   }
 
-  // ✅ 같은 날 대회가 2개 이상이면 먼저 고르게 함
-  if (needChoose) return <EventChooser events={todayEvents} onPick={setSelectedEvent} />
+  // ✅ 같은 날 대회가 2개 이상이면 먼저 고르게 함 · [대회 변경] 누르면 직접 고름
+  if (showChooser) return <EventChooser events={chooserEvents} onPick={id => { setSelectedEvent(id); setError('') }} onCancel={cancelChooser} currentId={selectedEvent}
+    {...(needChoose ? {} : { title: '대회를 선택하세요', subtitle: '참가하는 대회를 눌러주세요.' })} />
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4">
@@ -352,6 +353,7 @@ export default function PinPage() {
       <h1 className="text-2xl font-bold mb-2">점수 입력</h1>
       <p className="text-stone-500 text-sm mb-8">내 팀 전용 PIN 입력</p>
 
+      <EventBar event={currentEvent} onChange={openChooser} canChange={canChange} />
       <div className="w-full max-w-sm space-y-4">
         {/* 알림이 안 되는 폰이면 PIN 넣기 전에 먼저 안내 — 다른 브라우저/홈 화면 아이콘으로 옮기면 PIN 을 다시 넣어야 하므로
             (단체전 알림 켜기 화면은 자체 안내가 있어 중복 표시 안 함) */}

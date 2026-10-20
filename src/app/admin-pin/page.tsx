@@ -3,12 +3,12 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
-import { useEventSelect, EventChooser } from '@/components/useEventSelect'
+import { useEventSelect, EventChooser, EventBar } from '@/components/useEventSelect'
 
 export default function AdminPinPage() {
   const router = useRouter()
   // ✅ 대회 자동 선택 (같은 날 2개+면 선택 화면, ?event= 링크 지원) — 공용 훅
-  const { selectedEvent, setSelectedEvent, todayEvents, needChoose } = useEventSelect()
+  const { selectedEvent, setSelectedEvent, needChoose, showChooser, chooserEvents, openChooser, cancelChooser, currentEvent, canChange } = useEventSelect()
   const [pin, setPin] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -35,8 +35,9 @@ export default function AdminPinPage() {
     router.push('/admin-pin/manage')
   }
 
-  // ✅ 같은 날 대회가 2개 이상이면 먼저 고르게 함
-  if (needChoose) return <EventChooser events={todayEvents} onPick={setSelectedEvent} />
+  // ✅ 같은 날 대회가 2개 이상이면 먼저 고르게 함 · [대회 변경] 누르면 직접 고름
+  if (showChooser) return <EventChooser events={chooserEvents} onPick={id => { setSelectedEvent(id); setError('') }} onCancel={cancelChooser} currentId={selectedEvent}
+    {...(needChoose ? {} : { title: '대회를 선택하세요', subtitle: '참가하는 대회를 눌러주세요.' })} />
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4">
@@ -46,6 +47,7 @@ export default function AdminPinPage() {
       <h1 className="text-2xl font-bold mb-2">관리자 도구</h1>
       <p className="text-stone-500 text-sm mb-8">마스터 PIN을 입력하세요 (12시간 유지)</p>
 
+      <EventBar event={currentEvent} onChange={openChooser} canChange={canChange} />
       <div className="w-full max-w-sm space-y-4">
         <input type="tel" value={pin}
           onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
