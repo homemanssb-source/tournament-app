@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { withVenuePins } from '@/lib/pins'
 import { authHeaders } from '@/lib/auth-headers';
 import { useEventId, useDivisions } from '@/components/useDashboard'
-import { fillSlotsIfGroupComplete, groupPlaceholders, fetchPendingByeIds } from '@/lib/tournament'
+import { fillSlotsIfGroupComplete, groupPlaceholders, tieGroupPlaceholders, fetchPendingByeIds } from '@/lib/tournament'
 import { requestSlotCheck } from '@/lib/slot-check'
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import type { TieWithClubs } from '@/types/team'
@@ -174,9 +174,18 @@ export default function CourtsPage() {
 
   // ✅ 3팀 조 자리표시 + 순번 접두 — 코트판에 그릴 때만 팀명을 바꿔 보여준다 (데이터 불변)
   //    첫 경기가 끝나기 전엔 남은 두 경기를 (앞 경기 승자)/(앞 경기 패자) vs 3번 으로 표시
+  //    단체전 3팀 조도 같은 규칙 (DB 트리거 036) — 대전은 'tie_<id>' 키
   const placeholders = React.useMemo(() => groupPlaceholders(matches as any), [matches])
+  const tiePlaceholders = React.useMemo(() => {
+    const ph = tieGroupPlaceholders(ties as any)
+    return Object.fromEntries(Object.entries(ph).map(([k, v]) => ['tie_' + k, v]))
+  }, [ties])
   function decorate(m: MatchSlim): MatchSlim {
-    if (m.is_team_tie || m.stage !== 'GROUP') return m
+    if (m.is_team_tie) {
+      const ph = tiePlaceholders[m.id]
+      return ph ? { ...m, team_a_name: ph.a ?? m.team_a_name, team_b_name: ph.b ?? m.team_b_name } : m
+    }
+    if (m.stage !== 'GROUP') return m
     const ph = placeholders[m.id]
     const pre = (id: string, name: string) => (seqMap[id] != null ? String(seqMap[id]) + "번 " + name : name)
     return {

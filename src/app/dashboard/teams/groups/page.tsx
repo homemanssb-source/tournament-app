@@ -6,6 +6,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { tieGroupPlaceholders } from '@/lib/tournament';
 import { useEventIdWithParam } from '@/components/useDashboard';
 import {
   fetchClubs, fetchEventTeamConfig, fetchTies,
@@ -30,6 +31,8 @@ export default function GroupsPage() {
   const [groups, setGroups] = useState<any[]>([]);
   const [standingsReload, setStandingsReload] = useState(0);   // 조/리그를 다시 만들면 순위표도 새로
   const [ties, setTies] = useState<TieWithClubs[]>([]);
+  // 3팀 조: 첫 대전 전엔 남은 두 대전을 (앞 경기 승자)/(앞 경기 패자) vs 3번 으로 표시 (036)
+  const tiePh = useMemo(() => tieGroupPlaceholders(ties as any), [ties]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [groupSize, setGroupSize] = useState(3);
@@ -261,9 +264,9 @@ export default function GroupsPage() {
                   <div key={tie.id} className="flex items-center justify-between py-2">
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-gray-400">#{tie.tie_order}</span>
-                      <span className="font-medium text-sm">{tie.club_a?.name || 'TBD'}</span>
+                      <span className="font-medium text-sm">{tiePh[tie.id]?.a || tie.club_a?.name || 'TBD'}</span>
                       <span className="text-gray-400 text-xs">vs</span>
-                      <span className="font-medium text-sm">{tie.club_b?.name || 'TBD'}</span>
+                      <span className="font-medium text-sm">{tiePh[tie.id]?.b || tie.club_b?.name || 'TBD'}</span>
                       {(tie as any).court_number && (
                         <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded ml-2">
                           코트 {(tie as any).court_number}

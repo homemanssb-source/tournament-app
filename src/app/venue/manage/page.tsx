@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { fetchPendingByeIds } from '@/lib/tournament'
+import { fetchPendingByeIds, groupPlaceholders } from '@/lib/tournament'
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import AdminBracketView from '@/components/AdminBracketView'
 import VenueTieScoreSheet from '@/components/VenueTieScoreSheet'
@@ -193,7 +193,10 @@ export default function VenueManagePage() {
         status: normalizeStatus(t.status),
         group_label: t.group_id ? (groupLabels[t.group_id] || null) : null,
       }))
-      setMatches([...individual, ...ties])
+      // 단체전 3팀 조: 첫 대전 전엔 남은 두 대전을 (앞 경기 승자)/(앞 경기 패자) vs 3번 으로 표시 (036)
+      const tph = groupPlaceholders(ties.filter(t => t.group_id) as any)
+      const tiesShown = ties.map(t => tph[t.id] ? { ...t, team_a_name: tph[t.id].a ?? t.team_a_name, team_b_name: tph[t.id].b ?? t.team_b_name } : t)
+      setMatches([...individual, ...tiesShown])
       setLastUpdate(new Date())
     } finally {
       setLoading(false)

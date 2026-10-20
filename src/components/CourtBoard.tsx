@@ -46,10 +46,10 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
   // 당일 첫 경기 시작 시각: 경기장별 start_time(없으면 대회 start_time). 코트에 아직 시작된 경기가 없을 때만 표시
   const [firstStart, setFirstStart] = useState<{ byVenue: Record<string, string>; event: string }>({ byVenue: {}, event: '' })
   const inputRef = useRef<HTMLInputElement>(null)
-  // 3팀 조: 첫 경기가 끝나기 전엔 남은 두 경기를 (앞 경기 승자)/(앞 경기 패자) vs 3번 으로 표시
+  // 3팀 조(개인전·단체전): 첫 경기가 끝나기 전엔 남은 두 경기를 (앞 경기 승자)/(앞 경기 패자) vs 3번 으로 표시
   const placeholders = React.useMemo(() => groupPlaceholders(matches as any), [matches])
   const deco = (m: CourtMatch): CourtMatch => {
-    const ph = placeholders[m.id]; if (!ph || m.is_team_tie) return m
+    const ph = placeholders[m.id]; if (!ph) return m
     return { ...m, team_a_name: ph.a ?? m.team_a_name, team_b_name: ph.b ?? m.team_b_name }
   }
   const suggRef  = useRef<HTMLDivElement>(null)
@@ -134,6 +134,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
       winner_team_id: t.winning_club_id || null, is_team_tie: true,
       ended_at: t.ended_at ?? null,
       group_label: t.group_id ? (grpMap[t.group_id] || null) : null,
+      group_id: t.round === 'group' ? (t.group_id ?? null) : null,   // 3팀 조 자리표시 (036)
     }))
 
     setMatches([...indivMatches, ...tieMatches])
