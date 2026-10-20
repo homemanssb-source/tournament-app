@@ -174,9 +174,12 @@ export default function VenueManagePage() {
   const loadData = useCallback(async () => {
     if (!session) return
     try {
-      const [{ data, error }, byeIds] = await Promise.all([
+      const [{ data, error }, byeIds, { data: tieRows }] = await Promise.all([
         supabase.rpc('rpc_venue_list_matches', { p_token: session.token }),
         fetchPendingByeIds(session.event_id),   // 본선 TBD 부전승 자리 — 코트 필요 없음
+        // RPC 는 대전 순서를 100 + 대전번호 로 보내서 코트 순서(court_order)와 다름 (토너먼트 대전은 전부 100 → 맨 앞)
+        // → 마스터·대시보드가 정한 실제 court_order 로 바꿔 씀
+        supabase.from('ties').select('id, court_order').eq('event_id', session.event_id),
       ])
       if (error) {
         sessionStorage.removeItem('venue_session')
@@ -188,8 +191,10 @@ export default function VenueManagePage() {
         status: normalizeStatus(m.status),
         group_label: m.group_id ? (groupLabels[m.group_id] || null) : null,
       }))
+      const tieOrder = new Map(((tieRows || []) as { id: string; court_order: number | null }[]).map(r => [r.id, r.court_order]))
       const ties: VenueMatch[] = (data.ties || []).map((t: any) => ({
         ...t, is_team_tie: true,
+        court_order: tieOrder.get(t.id) ?? t.court_order,
         status: normalizeStatus(t.status),
         group_label: t.group_id ? (groupLabels[t.group_id] || null) : null,
       }))
@@ -570,7 +575,8 @@ export default function VenueManagePage() {
   //    ties는 RLS로 anon update 차단되므로 RPC 사용
   async function handleMoveOrder(item: VenueMatch, direction: 'up' | 'down') {
     if (!item.court) return
-    const courtMatches = matches
+    // 같은 코트라도 다른 날(부서 경기일) 경기와는 바꾸지 않음
+    const courtMatches = dateFilteredMatches
       .filter(m => m.court === item.court)
       .sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
     const idx = courtMatches.findIndex(m => m.id === item.id)
