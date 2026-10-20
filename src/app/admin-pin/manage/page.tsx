@@ -1,5 +1,6 @@
 ﻿'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { tieGroupPlaceholders } from '@/lib/tournament'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { fetchTies, fetchClubMembers } from '@/lib/team-api'
@@ -40,6 +41,8 @@ export default function AdminPinManagePage() {
 
   // ── 단체전 ──
   const [ties, setTies] = useState<TieWithClubs[]>([])
+  // 3팀 조: 첫 대전 전엔 남은 두 대전을 (앞 경기 승자)/(앞 경기 패자) vs 3번 으로 표시 (036)
+  const tiePh = useMemo(() => tieGroupPlaceholders(ties as any), [ties])
   const [tiesLoading, setTiesLoading] = useState(false)
   const [tieSearchQuery, setTieSearchQuery] = useState('')
   const [selectedTie, setSelectedTie] = useState<TieWithClubs | null>(null)
@@ -975,9 +978,9 @@ export default function AdminPinManagePage() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs text-gray-400">#{tie.tie_order}</span>
-                          <span className={`font-semibold ${aWin?'text-blue-600':''}`}>{tie.club_a?.name||'TBD'}</span>
+                          <span className={`font-semibold ${aWin?'text-blue-600':''}`}>{tiePh[tie.id]?.a||tie.club_a?.name||'TBD'}</span>
                           <span className="text-gray-400 text-sm">vs</span>
-                          <span className={`font-semibold ${bWin?'text-blue-600':''}`}>{tie.club_b?.name||'TBD'}</span>
+                          <span className={`font-semibold ${bWin?'text-blue-600':''}`}>{tiePh[tie.id]?.b||tie.club_b?.name||'TBD'}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           {(tie.status==='completed'||tie.status==='in_progress') && (

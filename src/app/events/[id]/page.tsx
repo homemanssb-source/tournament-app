@@ -8,6 +8,7 @@
 'use client'
 import React from 'react'
 import { useEffect, useState, useCallback } from 'react'
+import { tieGroupPlaceholders } from '@/lib/tournament'
 import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase, Division, Match } from '@/lib/supabase'
@@ -835,6 +836,8 @@ function TeamStandingsView({ standingsMap, groups }: { standingsMap: Record<stri
 }
 
 function TeamMatchesView({ ties, venues }: { ties: TieWithClubs[]; venues: Venue[] }) {
+  // 3팀 조: 첫 대전 전엔 남은 두 대전을 (앞 경기 승자)/(앞 경기 패자) vs 3번 으로 표시 (036)
+  const tiePh = React.useMemo(() => tieGroupPlaceholders(ties as any), [ties])
   if (ties.length === 0) return <div className="text-center text-gray-400 py-8">타이가 없습니다.</div>
   return (
     <div className="space-y-2">
@@ -847,7 +850,7 @@ function TeamMatchesView({ ties, venues }: { ties: TieWithClubs[]; venues: Venue
           <div className="flex items-center justify-between">
             <div className="flex-1">
               <span className={`font-medium ${!!tie.winning_club_id && tie.winning_club_id === tie.club_a_id ? 'text-green-700' : ''}`}>
-                {tie.club_a?.name || 'TBD'}
+                {tiePh[tie.id]?.a || tie.club_a?.name || 'TBD'}
               </span>
             </div>
             <div className="text-center px-4">
@@ -863,7 +866,7 @@ function TeamMatchesView({ ties, venues }: { ties: TieWithClubs[]; venues: Venue
             </div>
             <div className="flex-1 text-right">
               <span className={`font-medium ${!!tie.winning_club_id && tie.winning_club_id === tie.club_b_id ? 'text-green-700' : ''}`}>
-                {tie.club_b?.name || 'TBD'}
+                {tiePh[tie.id]?.b || tie.club_b?.name || 'TBD'}
               </span>
             </div>
           </div>

@@ -124,6 +124,34 @@ export function groupPlaceholders(matches: PlaceholderMatch[]): Record<string, P
   return out
 }
 
+// 단체전 대전(ties) 버전 — DB 트리거 trg_a0_team_group3_winner_next(036)가 첫 대전 후 순서를 바꾼다.
+// ties 행을 그대로 받아 tie.id 기준으로 돌려준다 (조 대전만 대상).
+export interface PlaceholderTie {
+  id: string
+  group_id?: string | null
+  round?: string | null
+  status: string
+  tie_order?: number | null
+  court_order?: number | null
+  club_a_id: string | null
+  club_b_id: string | null
+  club_a_name?: string | null
+  club_b_name?: string | null
+  club_a?: { name?: string | null } | null   // TieWithClubs 그대로 넘겨도 됨
+  club_b?: { name?: string | null } | null
+}
+const TIE_STATUS: Record<string, string> = { completed: 'FINISHED', in_progress: 'IN_PROGRESS' }
+export function tieGroupPlaceholders(ties: PlaceholderTie[]): Record<string, PlaceholderNames> {
+  return groupPlaceholders(ties
+    .filter(t => t.group_id && (t.round || 'group') === 'group')
+    .map(t => ({
+      id: t.id, group_id: t.group_id, status: TIE_STATUS[t.status] || 'PENDING',
+      court_order: t.court_order ?? null, slot: t.tie_order ?? null,
+      team_a_id: t.club_a_id, team_b_id: t.club_b_id,
+      team_a_name: t.club_a_name ?? t.club_a?.name ?? null, team_b_name: t.club_b_name ?? t.club_b?.name ?? null,
+    })))
+}
+
 // ============================================================
 // 본선 미리 생성(TBD) 대진의 부전승 자리 — 한쪽만 "A조 1위" 같은 자리이고 반대쪽은 비어 있음.
 // 조 경기가 끝나 슬롯이 채워지면 rpc_fill_tournament_slots 가 바로 BYE 로 끝내고 다음 라운드로 올리므로
