@@ -1,6 +1,7 @@
 // ============================================================
 // 실전 대회 리허설 (실서버) — 실제 대회를 그대로 복제한 테스트 대회로 첫 경기부터 결승까지 진행
 //   node scripts/sim-real-events.mjs run [이음|재성]   → 복제 + 전 경기 진행 + 검사
+//   node scripts/sim-real-events.mjs seed [이음|재성]  → 복제만 (화면 확인용, 상태는 .sim-state-real.json)
 //   node scripts/sim-real-events.mjs cleanup          → '__TEST_SIM_실전_' 대회 전부 삭제
 // 원본 대회는 읽기만 함. 복제본은 날짜를 2026-01-10 으로 (메인 화면에 안 뜨게), 앱A 연결 끔.
 // 점수 입력은 역할을 돌아가며: 관리자(대시보드 RPC) · 마스터 PIN · 경기장 PIN · 내 경기(선수 PIN / 주장 PIN)
@@ -583,6 +584,16 @@ async function team(label) {
 async function main() {
   const mode = process.argv[2]
   if (mode === 'cleanup') return cleanup()
+  if (mode === 'seed') {
+    // 복제만 하고 진행은 안 함 (화면 확인용) — node scripts/sim-real-events.mjs seed 재성
+    await cleanup()
+    const label = process.argv[3] || '재성'
+    const c = await cloneEvent(SOURCES[label], label)
+    const L = await logins(c)
+    writeFileSync(STATE, JSON.stringify({ [label]: { eventId: c.evId, master: '549999', venues: c.venues.map(v => ({ id: v.id, name: v.name, pin: v.pin, token: L.venueTok[v.id] })) } }, null, 2))
+    console.log('상태 저장:', STATE)
+    return
+  }
   if (mode === 'probe') {
     // 내 경기(선수 PIN) 점수 방향 확인: 로그인 팀(A/B) × 보내는 점수 × winner_id 유무
     await cleanup()
