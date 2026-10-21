@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { fetchPendingByeIds, groupPlaceholders } from '@/lib/tournament'
+import { fetchPendingByeIds, groupPlaceholders, isPendingByeTie } from '@/lib/tournament'
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import AdminBracketView from '@/components/AdminBracketView'
 import VenueTieScoreSheet from '@/components/VenueTieScoreSheet'
@@ -179,7 +179,7 @@ export default function VenueManagePage() {
         fetchPendingByeIds(session.event_id),   // 본선 TBD 부전승 자리 — 코트 필요 없음
         // RPC 는 대전 순서를 100 + 대전번호 로 보내서 코트 순서(court_order)와 다름 (토너먼트 대전은 전부 100 → 맨 앞)
         // → 마스터·대시보드가 정한 실제 court_order 로 바꿔 씀
-        supabase.from('ties').select('id, court_order').eq('event_id', session.event_id),
+        supabase.from('ties').select('id, court_order, round, status, is_bye, club_a_id, club_b_id, qualifier_label_a, qualifier_label_b').eq('event_id', session.event_id),
       ])
       if (error) {
         sessionStorage.removeItem('venue_session')
@@ -192,7 +192,9 @@ export default function VenueManagePage() {
         group_label: m.group_id ? (groupLabels[m.group_id] || null) : null,
       }))
       const tieOrder = new Map(((tieRows || []) as { id: string; court_order: number | null }[]).map(r => [r.id, r.court_order]))
-      const ties: VenueMatch[] = (data.ties || []).map((t: any) => ({
+      // 단체전 본선 부전승 자리 — 코트 필요 없음
+      const tieByeIds = new Set(((tieRows || []) as any[]).filter(isPendingByeTie).map(r => r.id))
+      const ties: VenueMatch[] = (data.ties || []).filter((t: any) => !tieByeIds.has(t.id)).map((t: any) => ({
         ...t, is_team_tie: true,
         court_order: tieOrder.get(t.id) ?? t.court_order,
         status: normalizeStatus(t.status),
