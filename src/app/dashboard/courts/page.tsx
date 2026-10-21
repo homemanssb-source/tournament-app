@@ -8,6 +8,7 @@ import { fillSlotsIfGroupComplete, groupPlaceholders, tieGroupPlaceholders, fetc
 import { requestSlotCheck } from '@/lib/slot-check'
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import type { TieWithClubs } from '@/types/team'
+import { roundKeyOf, zoneCourts, hasAnyZone, courtWindow, courtOpenAt, toMin, fromMin, ROUND_KEYS, type CourtZones } from '@/lib/court-zones'
 
 interface MatchSlim {
   id: string; match_num: string; stage: string; round: string
@@ -33,15 +34,16 @@ interface Venue {
   id: string; name: string; short_name: string
   court_count: number; courts: string[]; pin_plain: string
 }
-type CourtZones = Record<string, { group: string[]; finals: string[] }>
 // 자동 배정 미리보기: 묶음(조 하나 또는 경기 하나) 단위로 코트를 정하고, 확정할 때 저장
 interface PlanBundle {
   key: string; kind: 'match' | 'tie'; title: string; court: string
   note?: string                              // '홈 코트' 등
+  est?: string                               // 예상 시작 시각 (시작 시각을 알 때만)
+  late?: boolean                             // 코트 사용 시간 밖
   items: { id: string; text: string }[]      // 코트 안에서 이 순서대로 붙음
 }
 interface AutoPlan { title: string; bundles: PlanBundle[]; note?: string }
-type StageKey = 'GROUP' | 'R32' | 'R16' | 'QF' | 'SF' | 'F' | 'ALL_FINALS' | '128강' | '64강' | '32강' | '16강' | '8강' | '4강' | '결승'
+type StageKey = 'ALL_ROUNDS' | 'GROUP' | 'R32' | 'R16' | 'QF' | 'SF' | 'F' | 'ALL_FINALS' | '128강' | '64강' | '32강' | '16강' | '8강' | '4강' | '결승'
 
 const STAGE_TABS: { key: StageKey; label: string }[] = [
   { key: 'GROUP',      label: '예선' },
@@ -55,8 +57,6 @@ const STAGE_TABS: { key: StageKey; label: string }[] = [
   { key: 'ALL_FINALS', label: '전체본선' },
 ]
 const ROUND_TO_STAGE: Record<string, string> = { R32:'FINALS', R16:'FINALS', QF:'FINALS', SF:'FINALS', F:'FINALS', '128강':'FINALS', '64강':'FINALS', '32강':'FINALS', '16강':'FINALS', '8강':'FINALS', '4강':'FINALS', '결승':'FINALS' }
-// 코트 구역: 예선이 아니면 전부 '본선용' (128강·64강·32강… 어떤 라운드든)
-const zoneKeyOf = (round: string): 'group' | 'finals' => (round === 'group' || round === 'GROUP' || round === '조별') ? 'group' : 'finals'
 const FINALS_ROUND_ORDER = ['128강','R128','64강','R64','32강','R32','16강','R16','8강','QF','4강','SF','결승','F']
 const STAGE_LABEL: Record<string, string> = { GROUP:'예선', R32:'32강', R16:'16강', QF:'8강', SF:'4강', F:'결승', ALL_FINALS:'전체본선', '128강':'128강', '64강':'64강', '32강':'32강', '16강':'16강', '8강':'8강', '4강':'4강', '결승':'결승' }
 const TEAM_STAGE_TABS = [
@@ -209,7 +209,9 @@ export default function CourtsPage() {
   useEffect(() => { setPlan(null) }, [autoDiv, autoStage, autoCourts, preferHome, eventId])
 
   const [courtZones, setCourtZones] = useState<CourtZones>({})
-  const [zoneTab, setZoneTab]       = useState<'group' | 'finals'>('group')
+  const [zoneTab, setZoneTab]       = useState<string>('group')   // 'group' | 'finals' | 라운드 키 | 'avail'
+  const [availDate, setAvailDate]   = useState<string>('*')
+  const [matchMin, setMatchMin]     = useState<string>('')        // 경기 예상 시간(분) — 비우면 개인 30 · 단체 복식 수×30
   const [zoneOpen, setZoneOpen]     = useState(false)
   const [zoneSaving, setZoneSaving] = useState(false)
 
@@ -456,17 +458,32 @@ export default function CourtsPage() {
   function toggleZoneCourt(divId: string, court: string) {
     setCourtZones(prev => {
       const existing = prev[divId] || { group:[], finals:[] }
-      const cur = existing[zoneTab] || []
-      const updated = cur.includes(court) ? cur.filter(c => c !== court) : [...cur, court]
-      return { ...prev, [divId]: { ...existing, [zoneTab]: updated } }
+      const flip = (cur: string[] = []) => cur.includes(court) ? cur.filter(c => c !== court) : [...cur, court]
+      if (zoneTab === 'group' || zoneTab === 'finals') return { ...prev, [divId]: { ...existing, [zoneTab]: flip(existing[zoneTab]) } }
+      const rounds = { ...(existing.rounds || {}) }
+      rounds[zoneTab] = flip(rounds[zoneTab])
+      return { ...prev, [divId]: { ...existing, rounds } }
+    })
+  }
+  // 코트 사용 시간 (경기일별, '*' = 모든 날) — 비우면 제한 없음
+  function setCourtWindow(date: string, court: string, field: 'from' | 'until', value: string) {
+    setCourtZones(prev => {
+      const avail = { ...(prev._avail || {}) }
+      const day = { ...(avail[date] || {}) }
+      const w = { ...(day[court] || {}), [field]: value || undefined }
+      if (!w.from && !w.until) delete day[court]; else day[court] = w
+      if (Object.keys(day).length === 0) delete avail[date]; else avail[date] = day
+      return { ...prev, _avail: avail }
     })
   }
 
+  // 배정 코트 풀: 그 부서·라운드 구역(라운드별 → 본선 공통 / 예선) ∩ 선택한 코트.
+  //   코트를 하나도 안 골랐으면 구역 그대로 (구역도 없으면 빈 목록)
   function getCourtPool(divId: string, round: string): string[] {
-    const zoneKey    = zoneKeyOf(round)
-    const zoneCourts = courtZones[divId]?.[zoneKey] || []
-    const pool = zoneCourts.length > 0 ? autoCourts.filter(c => zoneCourts.includes(c)) : autoCourts
-    return sortByCourtList(pool.length > 0 ? pool : autoCourts)
+    const zc   = zoneCourts(courtZones, divId, roundKeyOf(null, round))
+    const base = autoCourts.length > 0 ? autoCourts : zc
+    const pool = zc.length > 0 ? base.filter(c => zc.includes(c)) : base
+    return sortByCourtList(pool.length > 0 ? pool : base)
   }
   // 코트 버튼 누른 순서가 아니라 코트 목록 순서(1번→N번)로 — 부하가 같으면 앞 코트부터 채움
   function sortByCourtList(pool: string[]): string[] {
@@ -495,39 +512,12 @@ export default function CourtsPage() {
     }
     return load
   }
-  function getLeastLoaded(pool: string[], load: Record<string, number>): string {
-    return pool.reduce((best, c) => (load[c] || 0) < (load[best] || 0) ? c : best, pool[0])
-  }
   // 조 이름 순 (1조→2조→…10조, 숫자 인식). 조 없음은 맨 뒤
   function compareGroupKey(a: string, b: string): number {
     if (a === b) return 0
     if (a === 'none') return 1
     if (b === 'none') return -1
     return a.localeCompare(b, 'ko', { numeric: true })
-  }
-
-  // ✅ 스마트 코트 선택: 1순위 빈코트, 2순위 대기 적은 코트
-  function getSmartCourt(pool: string[], matchList: MatchSlim[]): string {
-    const pendingCount: Record<string, number> = {}
-    for (const c of pool) pendingCount[c] = 0
-    for (const m of matchList) {
-      if (m.court && pool.includes(m.court) && m.status === 'PENDING' && m.score !== 'BYE' && isSameDate(m.division_id, autoDiv)) {
-        pendingCount[m.court] = (pendingCount[m.court] || 0) + 1
-      }
-    }
-    const hasLive: Record<string, boolean> = {}
-    for (const m of matchList) {
-      if (m.court && pool.includes(m.court) && m.status === 'IN_PROGRESS') {
-        hasLive[m.court] = true
-      }
-    }
-    // 1순위: 완전 빈 코트 (live 없고 pending 0)
-    const empty = pool.filter(c => !hasLive[c] && pendingCount[c] === 0)
-    if (empty.length > 0) return empty[0]
-    // 2순위: pending 가장 적은 코트
-    return pool.reduce((best, c) =>
-      (pendingCount[c] ?? 999) < (pendingCount[best] ?? 999) ? c : best
-    , pool[0])
   }
 
   // ── 자동 배정: ① 계획(미리보기)만 만들고 → ② 확인 후 [이대로 저장] ─────────────
@@ -552,10 +542,9 @@ export default function CourtsPage() {
     }
     return s
   }
-  // 본선 코트 풀: 구역이 지정돼 있으면 구역 그대로, 아니면 (선택 코트 중) 그 부서 예선 코트 우선
+  // 본선 코트 풀: 구역(라운드별 → 본선 공통)이 있으면 구역 그대로, 아니면 (선택 코트 중) 그 부서 예선 코트 우선
   function finalsPool(divId: string, round: string, pool: string[]): { pool: string[]; home: boolean } {
-    const zoneKey = zoneKeyOf(round)
-    if (!preferHome || (courtZones[divId]?.[zoneKey] || []).length > 0) return { pool, home: false }
+    if (!preferHome || zoneCourts(courtZones, divId, roundKeyOf(null, round)).length > 0) return { pool, home: false }
     const home = divisionHomeCourts(divId)
     const homePool = pool.filter(c => home.has(c))
     return homePool.length > 0 ? { pool: homePool, home: true } : { pool, home: false }
@@ -564,31 +553,75 @@ export default function CourtsPage() {
     return `${m.team_a_name || 'TBD'} vs ${m.team_b_name || 'TBD'}`
   }
 
-  function buildGroupPlan(divName: string): AutoPlan | string {
+  // ── 배정 진행 상태 (여러 라운드를 한 번에 짤 때 공유) ──
+  //    load: 코트별 남은 경기 수 / next: 코트별 다음 경기 예상 시작(분, 시작 시각을 모르면 null)
+  interface PlanCtx { load: Record<string, number>; next: Record<string, number | null>; date: string | null }
+  function courtVenueStart(court: string): number | null {
+    const v = venuesRef.current.find(v => venueCourts(v).includes(court))
+    return toMin((v && venueStartTimes[v.id]) || startTime || null)
+  }
+  function makePlanCtx(refDivId: string): PlanCtx {
+    const date = divMatchDates[refDivId] || null
+    const all = filteredCourtNames
+    const load = getPendingLoad(all, refDivId)
+    const kst = new Date(Date.now() + 9 * 3600 * 1000)
+    const today = kst.toISOString().slice(0, 10)
+    const nowMin = kst.getUTCHours() * 60 + kst.getUTCMinutes()
+    const next: Record<string, number | null> = {}
+    for (const c of all) {
+      const w = courtWindow(courtZones, date, c)
+      let base = toMin(w?.from) ?? courtVenueStart(c)
+      if (base != null && date === today) base = Math.max(base, nowMin)
+      next[c] = base == null ? null : base + (load[c] || 0) * defaultMinutes(false)
+    }
+    return { load, next, date }
+  }
+  // 경기 하나 예상 시간(분): 입력값 > 단체전(복식 수 × 30) > 30
+  function defaultMinutes(isTie: boolean, rubbers?: number | null): number {
+    const n = Number(matchMin)
+    if (n > 0) return n
+    return isTie ? (rubbers || 3) * 30 : 30
+  }
+  // 코트 고르기: 사용 시간 안인 코트 중 남은 경기가 가장 적은 코트 (시간 설정이 없으면 예전과 같음)
+  function pickCourt(ctx: PlanCtx, pool: string[]): string {
+    const open = pool.filter(c => ctx.next[c] == null || courtOpenAt(courtZones, ctx.date, c, ctx.next[c]!))
+    const cand = open.length > 0 ? open : pool
+    return cand.reduce((best, c) => (ctx.load[c] || 0) < (ctx.load[best] || 0) ? c : best, cand[0])
+  }
+  // 코트에 n경기를 붙이고 예상 시작 시각을 돌려줌 (late = 코트 사용 시간 밖)
+  function commitCourt(ctx: PlanCtx, court: string, n: number, minutes: number): { est?: string; late: boolean } {
+    const start = ctx.next[court] ?? null
+    const late = start != null && !courtOpenAt(courtZones, ctx.date, court, start)
+    ctx.load[court] = (ctx.load[court] || 0) + n
+    if (start != null) ctx.next[court] = start + n * minutes
+    return { est: start != null ? fromMin(start) : undefined, late }
+  }
+
+  function buildGroupPlan(divName: string, ctx: PlanCtx = makePlanCtx(autoDiv)): AutoPlan | string {
     const targets = matches.filter(m => m.division_id === autoDiv && m.stage === 'GROUP' && !m.court && m.status !== 'FINISHED')
     if (targets.length === 0) return '배정할 예선 경기가 없습니다.'
     const pool = getCourtPool(autoDiv, 'group')
+    if (pool.length === 0) return '예선에 쓸 코트가 없습니다 — 배정 코트를 고르거나 예선 구역을 설정해주세요.'
     const byGroup = new Map<string, MatchSlim[]>()
     for (const m of targets) { const k = m.group_label || 'none'; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k)!.push(m) }
     // 조 이름 순(1조→2조…)으로, 같은 날 남은 경기가 가장 적은 코트에 조째로
-    const load = getPendingLoad(pool, autoDiv)
     const bundles: PlanBundle[] = []
     for (const [label, list] of [...byGroup.entries()].sort((a, b) => compareGroupKey(a[0], b[0]))) {
       // ② 이 조 경기 중 이미 코트에 놓인 게 있으면 그 코트로 (남은 경기만 다시 배정해도 조가 안 쪼개짐)
       const home = label === 'none' ? null : mostCommonCourt(matchesRef.current
         .filter(m => m.division_id === autoDiv && m.stage === 'GROUP' && m.group_label === label && m.court).map(m => m.court!))
-      const court = home || getLeastLoaded(pool, load)
-      load[court] = (load[court] || 0) + list.length
-      bundles.push({ key:`g:${label}`, kind:'match', title: label === 'none' ? '조 없음' : label, court,
+      const court = home || pickCourt(ctx, pool)
+      const { est, late } = commitCourt(ctx, court, list.length, defaultMinutes(false))
+      bundles.push({ key:`g:${label}`, kind:'match', title: label === 'none' ? '조 없음' : label, court, est, late,
         note: home ? '홈 코트' : undefined, items: sortGroupMatches(list).map(m => ({ id:m.id, text:matchText(m) })) })
     }
     return { title:`[${divName}] 예선`, bundles }
   }
 
-  function buildFinalsPlan(divName: string, rounds: string[]): AutoPlan | string {
-    const currentMatches = [...matchesRef.current]
+  function buildFinalsPlan(divName: string, rounds: string[], ctx: PlanCtx = makePlanCtx(autoDiv)): AutoPlan | string {
     const bundles: PlanBundle[] = []
     let usedHome = false
+    const noPool: string[] = []   // 코트가 없어 건너뛴 라운드
     const byNum = (a: MatchSlim, b: MatchSlim) => (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
     for (const round of rounds) {
       const raw = matches.filter(m => m.division_id === autoDiv && m.stage === (ROUND_TO_STAGE[round] || 'FINALS') && m.round === round && !m.court && m.status !== 'FINISHED')
@@ -599,35 +632,36 @@ export default function CourtsPage() {
         ...raw.filter(m => !m.team_a_id || !m.team_b_id).sort(byNum),
       ]
       const { pool, home } = finalsPool(autoDiv, round, getCourtPool(autoDiv, round))
+      if (pool.length === 0) { noPool.push(STAGE_LABEL[round] || round); continue }
       usedHome = usedHome || home
       for (const m of targets) {
-        const court = getSmartCourt(pool, currentMatches)
-        // 스냅샷에 반영해서 다음 경기 배정 시 코트 상태 반영
-        currentMatches.push({ ...m, court, status:'PENDING' })
-        bundles.push({ key:`m:${m.id}`, kind:'match', title:`${STAGE_LABEL[round] || round} ${m.match_num}`, court, items:[{ id:m.id, text:matchText(m) }] })
+        const court = pickCourt(ctx, pool)
+        const { est, late } = commitCourt(ctx, court, 1, defaultMinutes(false))
+        bundles.push({ key:`m:${m.id}`, kind:'match', title:`${STAGE_LABEL[round] || round} ${m.match_num}`, court, est, late, items:[{ id:m.id, text:matchText(m) }] })
       }
     }
+    if (bundles.length === 0 && noPool.length > 0) return `${noPool.join('·')}에 쓸 코트가 없습니다 — 배정 코트를 고르거나 구역을 설정해주세요.`
     if (bundles.length === 0) return rounds.length > 1 ? '배정할 본선 경기가 없습니다.' : `배정할 ${STAGE_LABEL[rounds[0]] || rounds[0]} 경기가 없습니다.`
     const label = rounds.length > 1 ? '전체 본선' : (STAGE_LABEL[rounds[0]] || rounds[0])
     return { title:`[${divName}] ${label}`, bundles, note: usedHome ? '예선 치른 코트 우선' : undefined }
   }
 
-  function buildTiePlan(divName: string): AutoPlan | string {
-    const selectedRound = TEAM_STAGE_TABS.find(t => t.key === autoStage)?.round || 'group'
+  function buildTiePlan(divName: string, selectedRound: string, ctx: PlanCtx = makePlanCtx(autoDiv)): AutoPlan | string {
     const divTies = ties.filter(t =>
-      !t.is_bye && !(t as any).court_number && t.status !== 'completed' &&
+      !t.is_bye && !isPendingByeTie(t as any) && !(t as any).court_number && t.status !== 'completed' &&
       (autoDiv === 'TEAM' ? true : t.division_id === autoDiv) &&
       t.round === selectedRound
-    ).sort((a, b) => ((a as any).tie_order ?? 0) - ((b as any).tie_order ?? 0))
+    ).sort((a, b) => ((a as any).bracket_position ?? 0) - ((b as any).bracket_position ?? 0) || ((a as any).tie_order ?? 0) - ((b as any).tie_order ?? 0))
     if (divTies.length === 0) return '배정할 경기가 없습니다.'
     const allCN = venuesRef.current.flatMap(v => venueCourts(v))
     const tieText = (t: TieWithClubs) => `${t.club_a?.name || 'TBD'} vs ${t.club_b?.name || 'TBD'}`
     const groupKey = (t: TieWithClubs): string => (t as any)._group_label || (t as any).group_id || 'none'
-    // 본선은 그 부서 예선 코트 우선 (단체전은 구역 설정 미적용 — 기존과 동일)
+    // 구역(예선 / 라운드별 / 본선 공통) → 없으면 본선은 그 부서 예선 코트 우선
+    const zonePool = getCourtPool(autoDiv, selectedRound)
     const { pool, home: usedHome } = selectedRound === 'group'
-      ? { pool: sortByCourtList(autoCourts), home: false }
-      : finalsPool(autoDiv, 'finals', sortByCourtList(autoCourts))
-    const load = getPendingLoad(pool, autoDiv)
+      ? { pool: zonePool, home: false }
+      : finalsPool(autoDiv, selectedRound, zonePool)
+    if (pool.length === 0) return `${TEAM_STAGE_LABEL[selectedRound] || selectedRound}에 쓸 코트가 없습니다 — 배정 코트를 고르거나 구역을 설정해주세요.`
     const byGroup = new Map<string, TieWithClubs[]>()
     for (const t of divTies) {
       // 조 없는 경기(본선)는 한 경기씩 따로 — 예전처럼 전부 한 코트에 몰리지 않게
@@ -644,23 +678,46 @@ export default function CourtsPage() {
       const home = single ? null : mostCommonCourt(tiesRef.current
         .filter(t => groupKey(t) === k && (t as any).court_number && (autoDiv === 'TEAM' || t.division_id === autoDiv))
         .map(t => globalCourtNumToName((t as any).court_number, allCN, venuesRef.current)))
-      const court = home || getLeastLoaded(pool, load)
-      load[court] = (load[court] || 0) + list.length
-      bundles.push({ key:`t:${k}`, kind:'tie', court, note: home ? '홈 코트' : undefined,
-        title: single ? `${TEAM_STAGE_LABEL[selectedRound] || selectedRound} ${(list[0] as any).tie_order ?? ''}`.trim() : k,
+      const court = home || pickCourt(ctx, pool)
+      const { est, late } = commitCourt(ctx, court, list.length, defaultMinutes(true, (list[0] as any).rubber_count))
+      bundles.push({ key:`t:${k}`, kind:'tie', court, est, late, note: home ? '홈 코트' : undefined,
+        title: single ? `${TEAM_STAGE_LABEL[selectedRound] || selectedRound} ${(list[0] as any).bracket_position ?? (list[0] as any).tie_order ?? ''}`.trim() : k,
         items: list.map(t => ({ id:t.id, text:tieText(t) })) })
     }
     return { title:`[${divName}] ${TEAM_STAGE_LABEL[selectedRound] || selectedRound}`, bundles, note: usedHome ? '예선 치른 코트 우선' : undefined }
   }
 
+  // 부서 전체를 라운드 순서대로 (예선 → 32강 → 16강 …) — 각 라운드는 그 라운드 구역 코트로
+  function buildAllRoundsPlan(divName: string, isTeam: boolean): AutoPlan | string {
+    const ctx = makePlanCtx(autoDiv)
+    const parts: AutoPlan[] = []
+    if (isTeam) {
+      for (const tab of TEAM_STAGE_TABS) {
+        const r = buildTiePlan(divName, tab.round, ctx)
+        if (typeof r !== 'string') parts.push(r)
+      }
+    } else {
+      const g = buildGroupPlan(divName, ctx)
+      if (typeof g !== 'string') parts.push(g)
+      for (const round of ROUND_KEYS) {
+        const f = buildFinalsPlan(divName, [round], ctx)
+        if (typeof f !== 'string') parts.push(f)
+      }
+    }
+    if (parts.length === 0) return '배정할 경기가 없습니다.'
+    const notes = [...new Set(parts.map(p => p.note).filter(Boolean))] as string[]
+    return { title:`[${divName}] 전체 (라운드 순서)`, bundles: parts.flatMap(p => p.bundles), note: notes.join(' · ') || undefined }
+  }
+
   function autoAssignByDivision() {
     if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
-    if (autoCourts.length === 0) { setMsg('배정할 코트를 선택해주세요.'); return }
+    if (autoCourts.length === 0 && !hasAnyZone(courtZones, autoDiv)) { setMsg('배정할 코트를 선택하거나 코트 구역을 설정해주세요.'); return }
     const isTeam = autoDiv === 'TEAM' || ties.some(t => t.division_id === autoDiv && !t.is_bye)
     const divName = divisions.find(d => d.id === autoDiv)?.name || (isTeam ? '단체전' : '')
-    const r = isTeam                ? buildTiePlan(divName)
+    const r = autoStage === 'ALL_ROUNDS' ? buildAllRoundsPlan(divName, isTeam)
+      : isTeam                      ? buildTiePlan(divName, TEAM_STAGE_TABS.find(t => t.key === autoStage)?.round || 'group')
       : autoStage === 'GROUP'       ? buildGroupPlan(divName)
-      : autoStage === 'ALL_FINALS'  ? buildFinalsPlan(divName, ['128강','64강','32강','16강','8강','4강','결승'])
+      : autoStage === 'ALL_FINALS'  ? buildFinalsPlan(divName, [...ROUND_KEYS])
       :                               buildFinalsPlan(divName, [autoStage])
     if (typeof r === 'string') { setMsg(r); setPlan(null); return }
     setMsg(''); setPlan(r)
@@ -1013,15 +1070,15 @@ export default function CourtsPage() {
         </div>
       )}
 
-      {/* ④ 빈 코트 자동 이어 배정 (개인전) */}
+      {/* ④ 빈 코트 자동 이어 배정 (개인전 + 단체전, 037) */}
       {autoFill && (
         <div className={`rounded-xl border p-4 mb-4 ${autoFill.fill ? 'bg-sky-50 border-sky-300' : 'bg-white'}`}>
           <div className="flex items-start gap-3 flex-wrap">
             <div className="flex-1 min-w-[220px]">
-              <h3 className="font-bold text-sm">⚡ 빈 코트 자동 이어 배정 <span className="text-xs font-normal text-stone-400">(개인전 · 이 대회에만 적용)</span></h3>
+              <h3 className="font-bold text-sm">⚡ 빈 코트 자동 이어 배정 <span className="text-xs font-normal text-stone-400">(개인전·단체전 · 이 대회에만 적용)</span></h3>
               <p className="text-xs text-stone-500 mt-1">
                 경기가 끝났는데 그 코트에 대기 경기가 없으면, 아직 코트가 없는 경기 중 다음 경기를 데려와 <b>바로 시작</b>합니다.
-                같은 조 → 같은 부서 → 다른 부서 순, 같은 날·두 팀 확정·다른 코트에서 경기 중이 아닌 경기만. 코트 구역이 있으면 지킵니다.
+                같은 조 → 같은 부서 → 다른 부서 순, 같은 날·두 팀 확정·다른 코트에서 경기 중이 아닌 경기만. 코트 구역(라운드별 포함)과 코트 사용 시간을 지킵니다.<br />단체전은 대전이 끝나면 다음 대전을 그 코트에 <b>배정만</b> 합니다 (라인업 제출 후 진행).
               </p>
             </div>
             <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
@@ -1087,6 +1144,18 @@ export default function CourtsPage() {
                     </button>
                   ))
                 })()}
+                {(() => {
+                  // 부서 전체를 라운드 순서대로 (예선 → 32강 → … ) — 라운드가 2개 이상일 때
+                  const n = teamDivIds.has(autoDiv)
+                    ? new Set(ties.filter(t => t.division_id === autoDiv && !t.is_bye).map(t => t.round)).size
+                    : 1 + new Set(matches.filter(m => m.division_id === autoDiv && m.stage === 'FINALS').map(m => m.round)).size
+                  return n >= 2 ? (
+                    <button onClick={() => setAutoStage('ALL_ROUNDS')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${autoStage==='ALL_ROUNDS'?'bg-indigo-600 text-white border-indigo-600':'border-stone-300 hover:border-indigo-400'}`}>
+                      전체 (라운드 순서)
+                    </button>
+                  ) : null
+                })()}
               </div>
             </div>
           )}
@@ -1094,7 +1163,7 @@ export default function CourtsPage() {
 
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <label className="text-xs text-stone-500">배정 코트</label>
+            <label className="text-xs text-stone-500">배정 코트 <span className="text-stone-400">(구역을 설정했으면 안 골라도 구역대로)</span></label>
             <button onClick={() => setAutoCourts(autoCourts.length===filteredCourtNames.length ? [] : [...filteredCourtNames])}
               className="text-xs px-2 py-0.5 rounded border border-dashed border-stone-400 text-stone-500 hover:border-tennis-500 hover:text-tennis-600 transition-all">
               {autoCourts.length===filteredCourtNames.length ? '전체 해제' : '전체 선택'}
@@ -1111,13 +1180,19 @@ export default function CourtsPage() {
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={autoAssignByDivision} disabled={!autoDiv || autoCourts.length===0 || assigning}
+          <button onClick={autoAssignByDivision} disabled={!autoDiv || (autoCourts.length===0 && !hasAnyZone(courtZones, autoDiv)) || assigning}
             className="bg-tennis-600 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-tennis-700 disabled:opacity-50 flex items-center gap-2">
-            {`🎯 ${autoDiv ? (teamDivIds.has(autoDiv) ? TEAM_STAGE_LABEL[autoStage]||'' : STAGE_LABEL[autoStage]||'') : ''} 자동 배정 미리보기`}
+            {`🎯 ${autoDiv ? (autoStage === 'ALL_ROUNDS' ? '전체 (라운드 순서)' : teamDivIds.has(autoDiv) ? TEAM_STAGE_LABEL[autoStage]||'' : STAGE_LABEL[autoStage]||'') : ''} 자동 배정 미리보기`}
           </button>
           <label className="flex items-center gap-1.5 text-xs text-stone-600 cursor-pointer">
             <input type="checkbox" checked={preferHome} onChange={e => setPreferHome(e.target.checked)} />
             본선은 그 부서 예선 코트 우선 <span className="text-stone-400">(본선 구역 미지정 시)</span>
+          </label>
+          <label className="flex items-center gap-1.5 text-xs text-stone-600">
+            경기 예상
+            <input type="number" min={10} step={5} value={matchMin} onChange={e => setMatchMin(e.target.value)}
+              placeholder="자동" className="w-16 border rounded px-1.5 py-0.5 text-xs" />분
+            <span className="text-stone-400">(비우면 개인 30 · 단체 복식 수×30 — 예상 시각·사용 시간 계산용)</span>
           </label>
         </div>
 
@@ -1148,6 +1223,7 @@ export default function CourtsPage() {
                           <div className="flex items-center gap-1.5">
                             <span className="text-xs font-semibold">{b.title}</span>
                             {b.note && <span className="text-[10px] px-1 rounded bg-green-50 text-green-700 border border-green-200">{b.note}</span>}
+                            {b.est && <span className={`text-[10px] px-1 rounded border ${b.late ? 'bg-red-50 text-red-600 border-red-200' : 'bg-stone-50 text-stone-500 border-stone-200'}`}>{b.late ? '⚠ 사용 시간 밖 ' : '예상 '}{b.est}</span>}
                             <select value={b.court} onChange={e => movePlanBundle(b.key, e.target.value)}
                               className="ml-auto border rounded px-1 py-0.5 text-xs bg-white">
                               {[...new Set([...filteredCourtNames, b.court])].map(x => <option key={x} value={x}>{x}</option>)}
@@ -1174,28 +1250,79 @@ export default function CourtsPage() {
           )
         })()}
 
-        {/* 코트 구역 설정 (접기) */}
+        {/* 코트 구역 설정 (접기) — 예선 / 본선 공통 / 라운드별 / 코트 사용 시간 */}
         <div className="border-t pt-3">
           <button onClick={() => setZoneOpen(!zoneOpen)} className="flex items-center gap-2 text-xs font-medium text-stone-600 hover:text-stone-800 transition-all">
-            <span>{zoneOpen ? '▾' : '▸'}</span><span>부서별 코트 구역 설정</span><span className="text-stone-400 font-normal">(예선용 / 본선용)</span>
+            <span>{zoneOpen ? '▾' : '▸'}</span><span>부서별 코트 구역 설정</span><span className="text-stone-400 font-normal">(예선 / 본선 / 라운드별 / 코트 사용 시간)</span>
           </button>
-          {zoneOpen && (
+          {zoneOpen && (() => {
+            // 이 대회에 실제로 있는 본선 라운드 (부서별)
+            const divRoundKeys = (divId: string): Set<string> => {
+              const s = new Set<string>()
+              for (const m of matches) if (m.division_id === divId && m.stage === 'FINALS') { const k = roundKeyOf(m.stage, m.round); if (k && k !== 'group') s.add(k) }
+              for (const t of ties) if (t.division_id === divId && t.round !== 'group') { const k = roundKeyOf(null, t.round); if (k && k !== 'group') s.add(k) }
+              return s
+            }
+            const eventRounds = ROUND_KEYS.filter(k => filteredDivisions.some(d => divRoundKeys(d.id).has(k)))
+            const tabs: { key: string; label: string }[] = [
+              { key: 'group', label: '예선' }, { key: 'finals', label: '본선 공통' },
+              ...eventRounds.map(k => ({ key: k, label: k })), { key: 'avail', label: '⏰ 코트 사용 시간' },
+            ]
+            const isRoundTab = zoneTab !== 'group' && zoneTab !== 'finals' && zoneTab !== 'avail'
+            const dates = [...new Set(Object.values(divMatchDates))].sort()
+            return (
             <div className="mt-3 space-y-3">
-              <div className="flex gap-1">
-                {(['group','finals'] as const).map(t => (
-                  <button key={t} onClick={() => setZoneTab(t)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${zoneTab===t ? 'bg-stone-700 text-white border-stone-700' : 'border-stone-300 text-stone-500 hover:border-stone-500'}`}>
-                    {t==='group' ? '예선용 구역' : '본선용 구역 (본선 전체)'}
+              <div className="flex gap-1 flex-wrap">
+                {tabs.map(t => (
+                  <button key={t.key} onClick={() => setZoneTab(t.key)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${zoneTab===t.key ? 'bg-stone-700 text-white border-stone-700' : 'border-stone-300 text-stone-500 hover:border-stone-500'}`}>
+                    {t.label}
                   </button>
                 ))}
               </div>
               {zoneTab === 'finals' && (
-                <p className="text-xs text-stone-400">본선 첫 라운드(128강·64강·32강·16강 …)부터 결승까지 모두 이 구역에 배정됩니다.</p>
+                <p className="text-xs text-stone-400">본선 모든 라운드의 기본 코트입니다. 라운드 탭에 코트를 넣으면 그 라운드는 라운드 탭이 우선합니다.</p>
               )}
-              {filteredDivisions.map(div => {
-                const selected = courtZones[div.id]?.[zoneTab] || []
+              {isRoundTab && (
+                <p className="text-xs text-stone-400">{zoneTab} 경기만 이 코트로 보냅니다. 비워 두면 '본선 공통' 코트를 씁니다. (자동 배정 미리보기 · ⚡ 빈 코트 자동 이어 배정 모두 적용)</p>
+              )}
+
+              {zoneTab === 'avail' ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-stone-400">
+                    코트마다 경기를 <b>시작할 수 있는 시간</b>을 정합니다 (예: 회천 ~10:00 다른 대회, 블샌-4 11:00~). 비우면 제한 없음.
+                    자동 배정 미리보기는 예상 시각이 이 시간을 넘는 코트를 피하고, ⚡ 자동 이어 배정은 이 시간 밖에는 경기를 올리지 않습니다.
+                  </p>
+                  <div className="flex gap-1 flex-wrap">
+                    {['*', ...dates].map(d => (
+                      <button key={d} onClick={() => setAvailDate(d)} className={`px-2.5 py-1 rounded text-xs border ${availDate===d ? 'bg-sky-600 text-white border-sky-600' : 'border-stone-300 text-stone-500'}`}>
+                        {d === '*' ? '모든 날' : d}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                    {filteredCourtNames.map(c => {
+                      const w = (courtZones._avail?.[availDate] || {})[c] || {}
+                      const inherited = availDate !== '*' && !courtZones._avail?.[availDate]?.[c] ? courtZones._avail?.['*']?.[c] : null
+                      return (
+                        <div key={c} className="flex items-center gap-1.5 text-xs">
+                          <span className="w-16 font-medium text-stone-700 truncate">{c}</span>
+                          <input type="time" value={w.from || ''} onChange={e => setCourtWindow(availDate, c, 'from', e.target.value)} className="border rounded px-1 py-0.5" />
+                          <span className="text-stone-400">~</span>
+                          <input type="time" value={w.until || ''} onChange={e => setCourtWindow(availDate, c, 'until', e.target.value)} className="border rounded px-1 py-0.5" />
+                          {inherited && <span className="text-[10px] text-stone-400">(모든 날: {inherited.from || ''}~{inherited.until || ''})</span>}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : filteredDivisions.map(div => {
+                const z = courtZones[div.id] || {}
+                const selected: string[] = zoneTab === 'group' || zoneTab === 'finals' ? (z[zoneTab] || []) : (z.rounds?.[zoneTab] || [])
+                const rks = divRoundKeys(div.id)
+                if (isRoundTab && !rks.has(zoneTab)) return null   // 이 부서엔 없는 라운드
+                const fallback: string[] = isRoundTab && selected.length === 0 ? (z.finals || []) : []
                 // 본선 탭: 이 부서 본선이 실제로 몇 강부터인지 표시 (대진표 만들기 전이면 생략)
-                const divRounds = new Set(matches.filter(m => m.division_id === div.id && m.stage === 'FINALS').map(m => m.round))
-                const firstRound = FINALS_ROUND_ORDER.find(r => divRounds.has(r))
+                const firstRound = ROUND_KEYS.find(r => rks.has(r))
                 return (
                   <div key={div.id} className="flex items-start gap-3">
                     <div className="w-24 flex-shrink-0 pt-1">
@@ -1204,25 +1331,27 @@ export default function CourtsPage() {
                         <span className="text-xs font-medium text-stone-700 truncate">{div.name}</span>
                       </div>
                       {zoneTab === 'finals' && firstRound && (
-                        <span className="text-[10px] text-stone-400 ml-3.5">{STAGE_LABEL[firstRound] || firstRound}~결승</span>
+                        <span className="text-[10px] text-stone-400 ml-3.5">{firstRound}~결승</span>
                       )}
                     </div>
                     <div className="flex flex-wrap gap-1">
                       {filteredCourtNames.map(c => {
                         const inZone = selected.includes(c)
+                        const inherit = !inZone && fallback.includes(c)
                         return (
-                          <button key={c} onClick={() => toggleZoneCourt(div.id, c)}
+                          <button key={c} onClick={() => toggleZoneCourt(div.id, c)} title={inherit ? '본선 공통에서 따라옴' : undefined}
                             style={{ borderColor:inZone?divColors[div.id]:undefined, background:inZone?divColors[div.id]+'20':undefined }}
-                            className={`px-2 py-1 rounded text-xs font-medium border transition-all ${inZone?'text-stone-700':'border-stone-200 text-stone-400 hover:border-stone-400'}`}>{c}</button>
+                            className={`px-2 py-1 rounded text-xs font-medium border transition-all ${inZone?'text-stone-700':inherit?'border-dashed border-stone-400 text-stone-500':'border-stone-200 text-stone-400 hover:border-stone-400'}`}>{c}</button>
                         )
                       })}
                     </div>
                   </div>
                 )
               })}
-              <button onClick={saveCourtZones} disabled={zoneSaving} className="bg-stone-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-stone-800 disabled:opacity-50">{zoneSaving ? '저장 중...' : '💾 구역 설정 저장'}</button>
+              <button onClick={saveCourtZones} disabled={zoneSaving} className="bg-stone-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-stone-800 disabled:opacity-50">{zoneSaving ? '저장 중...' : '💾 구역·시간 설정 저장'}</button>
             </div>
-          )}
+            )
+          })()}
         </div>
       </div>
 
@@ -1285,8 +1414,10 @@ export default function CourtsPage() {
             const currentIdx = activeIdx>=0?activeIdx:pendingIdx
             const isLive     = activeIdx>=0
             const hasPending = courtItems.some(m=>m.status==='PENDING')
-            const zoneDiv = autoDiv && !teamDivIds.has(autoDiv) ? (() => {
+            const zoneDiv = autoDiv ? (() => {
               const z = courtZones[autoDiv]; if (!z) return null
+              const rs = Object.entries((z.rounds || {}) as Record<string, string[]>).filter(([, l]) => l?.includes(court)).map(([k]) => k)
+              if (rs.length > 0) return { label:rs.join('·'), color:divColors[autoDiv] }
               if (z.finals?.includes(court)) return { label:'본선', color:divColors[autoDiv] }
               if (z.group?.includes(court))  return { label:'예선', color:divColors[autoDiv]+'99' }
               return null
