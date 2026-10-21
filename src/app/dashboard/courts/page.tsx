@@ -206,11 +206,12 @@ export default function CourtsPage() {
   const [autoFillSaving, setAutoFillSaving] = useState(false)
   useEffect(() => { setAutoCourts([]) }, [selectedVenue])
   // 조건이 바뀌면 이전 미리보기는 버림 (다시 만들어야 함)
-  useEffect(() => { setPlan(null) }, [autoDiv, autoStage, autoCourts, preferHome, eventId])
+  useEffect(() => { setPlan(null); setPlanMsg('') }, [autoDiv, autoStage, autoCourts, preferHome, eventId])
 
   const [courtZones, setCourtZones] = useState<CourtZones>({})
   const [zoneTab, setZoneTab]       = useState<string>('group')   // 'group' | 'finals' | 라운드 키 | 'avail'
   const [availDate, setAvailDate]   = useState<string>('*')
+  const [planMsg, setPlanMsg]       = useState('')                // 미리보기를 못 만든 이유 (버튼 아래 표시)
   const [matchMin, setMatchMin]     = useState<string>('')        // 경기 예상 시간(분) — 비우면 개인 30 · 단체 복식 수×30
   const [zoneOpen, setZoneOpen]     = useState(false)
   const [zoneSaving, setZoneSaving] = useState(false)
@@ -709,9 +710,29 @@ export default function CourtsPage() {
     return { title:`[${divName}] 전체 (라운드 순서)`, bundles: parts.flatMap(p => p.bundles), note: notes.join(' · ') || undefined }
   }
 
+  // 스테이지별 코트 없는 경기 수 (부전승 자리·끝난 경기 제외)
+  function unassignedCount(divId: string, stageKey: string): number {
+    if (teamDivIds.has(divId)) {
+      const left = (round?: string) => ties.filter(t => t.division_id === divId && (!round || t.round === round) &&
+        !t.is_bye && !isPendingByeTie(t as any) && !(t as any).court_number && t.status !== 'completed').length
+      if (stageKey === 'ALL_ROUNDS') return left()
+      return left(TEAM_STAGE_TABS.find(t => t.key === stageKey)?.round)
+    }
+    const left = (pred: (m: MatchSlim) => boolean) => matches.filter(m => m.division_id === divId && !m.court && m.status !== 'FINISHED' && pred(m)).length
+    if (stageKey === 'ALL_ROUNDS' || stageKey === 'ALL_FINALS') return left(m => stageKey === 'ALL_ROUNDS' || m.stage === 'FINALS')
+    if (stageKey === 'GROUP') return left(m => m.stage === 'GROUP')
+    return left(m => m.stage === 'FINALS' && m.round === stageKey)
+  }
+  function firstStageWithWork(divId: string): string {
+    if (teamDivIds.has(divId)) return TEAM_STAGE_TABS.find(t => unassignedCount(divId, t.key) > 0)?.key || 'group'
+    if (unassignedCount(divId, 'GROUP') > 0) return 'GROUP'
+    return [...ROUND_KEYS].find(r => unassignedCount(divId, r) > 0) || 'GROUP'
+  }
+  const countBadge = (n: number) => <span className={`ml-1 text-[10px] ${n > 0 ? 'opacity-80' : 'opacity-40'}`}>{n}</span>
+
   function autoAssignByDivision() {
-    if (!autoDiv) { setMsg('부문을 선택해주세요.'); return }
-    if (autoCourts.length === 0 && !hasAnyZone(courtZones, autoDiv)) { setMsg('배정할 코트를 선택하거나 코트 구역을 설정해주세요.'); return }
+    if (!autoDiv) { setPlanMsg('부문을 선택해주세요.'); return }
+    if (autoCourts.length === 0 && !hasAnyZone(courtZones, autoDiv)) { setPlanMsg('배정할 코트를 선택하거나 코트 구역을 설정해주세요.'); return }
     const isTeam = autoDiv === 'TEAM' || ties.some(t => t.division_id === autoDiv && !t.is_bye)
     const divName = divisions.find(d => d.id === autoDiv)?.name || (isTeam ? '단체전' : '')
     const r = autoStage === 'ALL_ROUNDS' ? buildAllRoundsPlan(divName, isTeam)
@@ -719,8 +740,8 @@ export default function CourtsPage() {
       : autoStage === 'GROUP'       ? buildGroupPlan(divName)
       : autoStage === 'ALL_FINALS'  ? buildFinalsPlan(divName, [...ROUND_KEYS])
       :                               buildFinalsPlan(divName, [autoStage])
-    if (typeof r === 'string') { setMsg(r); setPlan(null); return }
-    setMsg(''); setPlan(r)
+    if (typeof r === 'string') { setPlanMsg(r); setPlan(null); return }
+    setPlanMsg(''); setMsg(''); setPlan(r)
   }
 
   function movePlanBundle(key: string, court: string) {
@@ -1109,8 +1130,8 @@ export default function CourtsPage() {
             <select value={autoDiv} onChange={e => {
               const divId = e.target.value
               setAutoDiv(divId)
-              const _isTeam = ties.some(t => t.division_id === divId && !t.is_bye)
-              setAutoStage(_isTeam ? 'group' : 'GROUP')
+              // 남은(코트 없는) 경기가 있는 첫 스테이지로 — 예선이 다 배정됐으면 다음 라운드
+              setAutoStage(divId ? firstStageWithWork(divId) : 'GROUP')
             }} className="border rounded-lg px-3 py-2 text-sm min-w-[140px]">
               <option value="">부문 선택</option>
               {filteredDivisions.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
@@ -1126,7 +1147,7 @@ export default function CourtsPage() {
                   ).map(tab => (
                     <button key={tab.key} onClick={() => setAutoStage(tab.key)}
                       className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${autoStage===tab.key?'bg-tennis-600 text-white border-tennis-600':'border-stone-300 hover:border-tennis-400'}`}>
-                      {tab.label}
+                      {tab.label}{countBadge(unassignedCount(autoDiv, tab.key))}
                     </button>
                   ))
                 ) : (() => {
@@ -1140,7 +1161,7 @@ export default function CourtsPage() {
                   }).map(tab => (
                     <button key={tab.key} onClick={() => setAutoStage(tab.key)}
                       className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${autoStage===tab.key?(tab.key==='ALL_FINALS'?'bg-purple-600 text-white border-purple-600':'bg-tennis-600 text-white border-tennis-600'):'border-stone-300 hover:border-tennis-400'}`}>
-                      {tab.label}
+                      {tab.label}{countBadge(unassignedCount(autoDiv, tab.key))}
                     </button>
                   ))
                 })()}
@@ -1152,7 +1173,7 @@ export default function CourtsPage() {
                   return n >= 2 ? (
                     <button onClick={() => setAutoStage('ALL_ROUNDS')}
                       className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${autoStage==='ALL_ROUNDS'?'bg-indigo-600 text-white border-indigo-600':'border-stone-300 hover:border-indigo-400'}`}>
-                      전체 (라운드 순서)
+                      전체 (라운드 순서){countBadge(unassignedCount(autoDiv, 'ALL_ROUNDS'))}
                     </button>
                   ) : null
                 })()}
@@ -1180,7 +1201,7 @@ export default function CourtsPage() {
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          <button onClick={autoAssignByDivision} disabled={!autoDiv || (autoCourts.length===0 && !hasAnyZone(courtZones, autoDiv)) || assigning}
+          <button onClick={autoAssignByDivision} disabled={assigning}
             className="bg-tennis-600 text-white px-5 py-2 rounded-lg text-sm font-bold hover:bg-tennis-700 disabled:opacity-50 flex items-center gap-2">
             {`🎯 ${autoDiv ? (autoStage === 'ALL_ROUNDS' ? '전체 (라운드 순서)' : teamDivIds.has(autoDiv) ? TEAM_STAGE_LABEL[autoStage]||'' : STAGE_LABEL[autoStage]||'') : ''} 자동 배정 미리보기`}
           </button>
@@ -1195,6 +1216,12 @@ export default function CourtsPage() {
             <span className="text-stone-400">(비우면 개인 30 · 단체 복식 수×30 — 예상 시각·사용 시간 계산용)</span>
           </label>
         </div>
+
+        {planMsg && !plan && (
+          <p className="text-sm px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-amber-800">ℹ️ {planMsg}
+            {autoDiv && planMsg.startsWith('배정할') && unassignedCount(autoDiv, 'ALL_ROUNDS') > 0 && <span className="text-xs text-amber-600"> — 숫자가 있는 스테이지를 고르거나 '전체 (라운드 순서)'를 눌러 보세요.</span>}
+          </p>
+        )}
 
         {/* ③ 미리보기 — 저장 전 코트별 배정 확인, 조/경기 단위로 코트 변경 가능 */}
         {plan && (() => {
