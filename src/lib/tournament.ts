@@ -170,6 +170,20 @@ export function isPendingByeSlot(m: {
 }
 
 // 반환: 경기 id → 부전승으로 올라갈 자리 이름 (예: "1조 1위")
+// 단체전 대전(ties) 버전 — 본선 대전에서 한쪽만 클럽/이름표가 있고 반대쪽이 비어 있으면 부전승 자리.
+// 조 경기가 끝나 자리가 채워지면 fn_team_resolve_tie(020)가 status='bye' 로 끝내고 다음 라운드로 올린다 → 코트 불필요.
+export function isPendingByeTie(t: {
+  round?: string | null; status?: string | null; is_bye?: boolean | null
+  club_a_id?: string | null; club_b_id?: string | null
+  qualifier_label_a?: string | null; qualifier_label_b?: string | null
+}): boolean {
+  if (!t.round || t.round === 'group' || t.round === 'full_league') return false
+  if (t.is_bye || t.status === 'completed' || t.status === 'bye') return false
+  const a = !!(t.club_a_id || t.qualifier_label_a)
+  const b = !!(t.club_b_id || t.qualifier_label_b)
+  return a !== b
+}
+
 export async function fetchPendingByeIds(eventId: string | null | undefined): Promise<Map<string, string>> {
   if (!eventId) return new Map()
   const { data } = await supabase

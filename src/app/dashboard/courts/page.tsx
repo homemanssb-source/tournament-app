@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import { withVenuePins } from '@/lib/pins'
 import { authHeaders } from '@/lib/auth-headers';
 import { useEventId, useDivisions } from '@/components/useDashboard'
-import { fillSlotsIfGroupComplete, groupPlaceholders, tieGroupPlaceholders, fetchPendingByeIds } from '@/lib/tournament'
+import { fillSlotsIfGroupComplete, groupPlaceholders, tieGroupPlaceholders, fetchPendingByeIds, isPendingByeTie } from '@/lib/tournament'
 import { requestSlotCheck } from '@/lib/slot-check'
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import type { TieWithClubs } from '@/types/team'
@@ -889,7 +889,8 @@ export default function CourtsPage() {
 
   // ✅ [FIX-①②⑤] tiesToMatchSlim: 글로벌 court_number → courtName, DB 실제 court_order 사용
   function tiesToMatchSlim(tieList: TieWithClubs[]): MatchSlim[] {
-    return tieList.filter(t => !t.is_bye).map(t => {
+    // 본선 부전승 자리(한쪽만 이름표)는 코트가 필요 없음 — 미배정·자동 배정에서 뺀다
+    return tieList.filter(t => !t.is_bye && !isPendingByeTie(t as any)).map(t => {
       const cn = (t as any).court_number
       let courtName: string | null = null
       if (cn != null) {
