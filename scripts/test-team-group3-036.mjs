@@ -1,5 +1,5 @@
 // ============================================================
-// 036 검증: 단체전 3팀 조 첫 대전이 끝나면 승자 대전이 앞으로 오는지
+// 036·038 검증: 단체전 3팀 조 첫 대전이 끝나면 승자 대전이 앞으로 오는지 (038: 라인업 미리 제출해도)
 //   node scripts/test-team-group3-036.mjs        → 임시 대회 만들고 시나리오 실행 후 삭제
 // 임시 대회 이름: '테스트_036_' 로 시작 (실패해도 다음 실행 때 먼저 지움)
 // ============================================================
@@ -89,6 +89,24 @@ try {
     must(await sb.from('ties').update({ status: 'completed', winning_club_id: c3.id }).eq('id', ties[2].id), '완료2');
     const after = await read(ties.map(t => t.id));
     check(after.find(t => t.id === ties[2].id).tie_order === 2 && after.find(t => t.id === ties[1].id).tie_order === 3, '④ 둘째 대전 완료 시 순서 유지');
+  }
+  // ⑤ (038) 남은 두 대전에 라인업을 미리 냄(lineup_ready / lineup_phase) → 그래도 승자 대전이 앞으로
+  {
+    const { c2, ties } = await setup('5');
+    must(await sb.from('ties').update({ status: 'lineup_ready', club_a_lineup_submitted: true, club_b_lineup_submitted: true, lineup_revealed: true }).eq('id', ties[1].id), '라인업1');
+    must(await sb.from('ties').update({ status: 'lineup_phase', club_a_lineup_submitted: true }).eq('id', ties[2].id), '라인업2');
+    must(await sb.from('ties').update({ status: 'completed', winning_club_id: c2.id }).eq('id', ties[0].id), '완료');
+    const after = await read(ties.map(t => t.id));
+    const t13 = after.find(t => t.id === ties[1].id), t23 = after.find(t => t.id === ties[2].id);
+    check(t23.tie_order === 2 && t13.tie_order === 3 && t23.court_order === 2 && t13.court_order === 3, `⑤ 라인업 제출 후에도 승자(나) 대전이 2번째 (나vs다=${t23.tie_order}/${t23.court_order}, 가vs다=${t13.tie_order}/${t13.court_order})`);
+  }
+  // ⑥ 남은 대전 하나가 이미 진행 중 → 순서 유지
+  {
+    const { c2, ties } = await setup('6');
+    must(await sb.from('ties').update({ status: 'in_progress' }).eq('id', ties[1].id), '진행');
+    must(await sb.from('ties').update({ status: 'completed', winning_club_id: c2.id }).eq('id', ties[0].id), '완료');
+    const after = await read(ties.map(t => t.id));
+    check(after.find(t => t.id === ties[1].id).tie_order === 2 && after.find(t => t.id === ties[2].id).tie_order === 3, '⑥ 진행 중인 대전이 있으면 순서 유지');
   }
 } finally {
   await cleanup();
