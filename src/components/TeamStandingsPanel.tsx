@@ -238,7 +238,8 @@ export default function TeamStandingsPanel({ eventId, selectedDiv, reloadKey = 0
                             </td>
                             <td className={cell}>
                               <span className={`font-medium ${rs.text} ${compact ? 'whitespace-nowrap' : ''}`}>{s.club?.name || '-'}</span>
-                              {s.club?.seed_number && (
+                              {/* 시드는 운영 대시보드(메인 관리자)에서만 — PIN 화면(adminToken)에는 숨김 */}
+                              {!adminToken && s.club?.seed_number && (
                                 <span className="ml-2 text-xs bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded">{s.club.seed_number}시드</span>
                               )}
                             </td>
