@@ -294,6 +294,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </>}
 
           <hr className="my-2" />
+          {/* 보조운영자: 대진표는 보기 전용 화면으로 (토너먼트 화면은 생성·삭제 버튼이 있어 메인 관리자만) */}
+          {isOperator && navLink('/dashboard/bracket-view', '대진표 보기', '🏆')}
           {navLink('/dashboard/courts',    '코트 배정',  '🏟')}
           {navLink('/dashboard/sync',      '앱A 연동',   '🔄')}
           {/* ✅ [FIX] label에서 이모지 제거 → emoji 파라미터와 중복 방지 */}
