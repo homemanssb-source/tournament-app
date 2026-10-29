@@ -1040,9 +1040,15 @@ export default function CourtsPage() {
   })
 
   const filteredAll = viewFilter==='ALL' ? dateFilteredItems : dateFilteredItems.filter(m=>m.division_id===viewFilter)
+  // 미배정은 라운드(조별→128강→…→결승) → 부서 → 경기번호 순 — 컬럼에서 라운드별 제목줄로 묶어 보여줌
+  const divOrder = new Map(divisions.map((d, i) => [d.id, i]))
   const unassigned  = filteredAll
     .filter(m => !m.court && m.status !== 'FINISHED')
     .sort((a,b) => {
+      const rd = unassignedRoundRank(a) - unassignedRoundRank(b)
+      if (rd !== 0) return rd
+      const dv = (divOrder.get(a.division_id) ?? 999) - (divOrder.get(b.division_id) ?? 999)
+      if (dv !== 0) return dv
       const nm = (a.match_num || '').localeCompare(b.match_num || '', undefined, { numeric: true })
       if (nm !== 0) return nm
       return a.id.localeCompare(b.id)
@@ -1760,6 +1766,18 @@ function MatchTeamRow({ raw, done, candidates }: { raw: string; done?: boolean; 
   )
 }
 
+// ── 미배정 라운드 묶음: 조별 → 128강 … 결승 → 본선(라운드 모름)
+function unassignedRoundLabel(m: MatchSlim): string {
+  const k = roundKeyOf(m.stage, m.round)
+  return k === 'group' ? '조별' : k || '본선'
+}
+function unassignedRoundRank(m: MatchSlim): number {
+  const label = unassignedRoundLabel(m)
+  if (label === '조별') return 0
+  const i = (ROUND_KEYS as readonly string[]).indexOf(label)
+  return i >= 0 ? i + 1 : ROUND_KEYS.length + 1
+}
+
 // ── 미배정 컬럼: 모바일 접기 가능
 function UnassignedColumn({ unassigned, divColors, touchOver, onDragOver, onDrop, onDragStart, onClickScore, onClickUnassign, onTouchStart, onTouchMove, onTouchEnd }: {
   unassigned: MatchSlim[]
@@ -1775,6 +1793,14 @@ function UnassignedColumn({ unassigned, divColors, touchOver, onDragOver, onDrop
   onTouchEnd: () => void
 }) {
   const [open, setOpen] = React.useState(true)
+  // 이미 라운드 순으로 정렬돼 들어옴 → 연속 구간을 라운드별로 묶음
+  const sections: { label: string; items: MatchSlim[] }[] = []
+  for (const m of unassigned) {
+    const label = unassignedRoundLabel(m)
+    const last = sections[sections.length - 1]
+    if (last && last.label === label) last.items.push(m)
+    else sections.push({ label, items: [m] })
+  }
   return (
     <div className="lg:col-span-1" data-unassigned onDragOver={onDragOver} onDrop={onDrop}>
       <div className={`bg-white rounded-xl border overflow-hidden transition-all ${touchOver === 'unassigned' ? 'ring-2 ring-stone-400' : ''}`}>
@@ -1787,10 +1813,17 @@ function UnassignedColumn({ unassigned, divColors, touchOver, onDragOver, onDrop
         </button>
         {open && (
           <div className="p-1.5 space-y-1 max-h-[400px] lg:max-h-[700px] overflow-y-auto">
-            {unassigned.map(m => (
-              <MatchChip key={m.id} m={m} divColor={divColors[m.division_id]}
-                onDragStart={onDragStart} onClickScore={() => onClickScore(m)}
-                onClickUnassign={() => onClickUnassign(m.id)} />
+            {sections.map(s => (
+              <React.Fragment key={s.label}>
+                <div className="sticky top-0 z-10 bg-stone-100 text-stone-600 text-[11px] font-bold rounded px-2 py-1 flex justify-between">
+                  <span>{s.label}</span><span className="text-stone-400">{s.items.length}</span>
+                </div>
+                {s.items.map(m => (
+                  <MatchChip key={m.id} m={m} divColor={divColors[m.division_id]}
+                    onDragStart={onDragStart} onClickScore={() => onClickScore(m)}
+                    onClickUnassign={() => onClickUnassign(m.id)} />
+                ))}
+              </React.Fragment>
             ))}
             {unassigned.length === 0 && <div className="text-xs text-stone-300 text-center py-6">없음</div>}
           </div>
