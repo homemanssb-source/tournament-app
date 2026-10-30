@@ -6,7 +6,7 @@ import ts from 'typescript'
 import { readFileSync, writeFileSync } from 'fs'
 const src = readFileSync(process.argv[2], 'utf8')
 writeFileSync('./ld.mjs', ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 } }).outputText)
-const { classifyPending, LINEUP_DEADLINE_MIN } = await import('./ld.mjs')
+const { classifyPending, LINEUP_DEADLINE_MIN, pickBoardDate, filterBoardDate, kstToday } = await import('./ld.mjs')
 let pass = 0, fail = 0
 const check = (ok, label, d) => { ok ? pass++ : fail++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${!ok ? '  → ' + JSON.stringify(d) : ''}`) }
 
@@ -59,6 +59,34 @@ r = classifyPending([
   T('early', { court_number: 3, court_order: 0, court_assigned_at: iso(t0) }),
 ], [M('m1', { status: 'IN_PROGRESS', court_order: 1 })], cn)
 check(r.items[0].tie.id === 'early' && r.items[1].tie.id === 'late' && r.items.at(-1).kind === 'waiting', '⑧ 마감 이른 순, 대기는 마지막', r.items.map(i => [i.tie.id, i.kind]))
+
+// ⑨ 현황판 날짜 — 오늘 경기일 → 오늘, 아니면 가장 가까운 날, 경기일 없으면 전부
+check(pickBoardDate(['2026-11-01', '2026-10-31', null], '2026-10-31') === '2026-10-31', '⑨ 오늘 경기일이면 오늘')
+check(pickBoardDate(['2026-11-01', '2026-10-31'], '2026-10-30') === '2026-10-31', '⑨ 대회 전날 → 첫날')
+check(pickBoardDate(['2026-11-01', '2026-10-31'], '2026-11-05') === '2026-11-01', '⑨ 대회 뒤 → 마지막 날')
+check(pickBoardDate([null, null], '2026-10-31') === null, '⑨ 경기일 없음 → null')
+check(kstToday(Date.parse('2026-10-31T23:30:00Z')) === '2026-11-01', '⑨ 한국 시간 오늘 (UTC 23:30 = 다음날 08:30)')
+
+// ⑩ 여러 날 대회: 같은 코트에 다음날 대전이 앞 순서 → 오늘 것만 보면 차례 (재성 10/31 회천-1 모양)
+const divDates = { d31: '2026-10-31', d01: '2026-11-01', dn: null }
+const ties10 = [
+  T('w01', { division_id: 'd01', court_number: 1, court_order: 1 }),
+  T('b01', { division_id: 'd01', court_number: 1, court_order: 6 }),
+  T('b31', { division_id: 'd31', court_number: 1, court_order: 7, court_assigned_at: iso(t0) }),
+  T('nd', { division_id: 'dn', court_number: 2, court_order: 1, court_assigned_at: iso(t0) }),
+]
+const ms10 = [M('m31', { court: '가-2', court_order: 0, status: 'FINISHED', ended_at: iso(t0 + 5 * min), match_date: '2026-10-31' }),
+  M('m01', { court: '가-2', court_order: 0, status: 'PENDING', match_date: '2026-11-01' })]
+r = classifyPending(ties10, ms10, cn)
+check(r.items.find(i => i.tie.id === 'b31').kind === 'waiting', '⑩ 날짜 안 가르면 다음날 대전 때문에 대기 (고치기 전)', r.items.map(i => [i.tie.id, i.kind]))
+const f = filterBoardDate(ties10, ms10, divDates, '2026-10-31')
+check(f.ties.map(t => t.id).join() === 'b31,nd' && f.matches.map(m => m.id).join() === 'm31', '⑩ 10/31 만 남김 (날짜 없는 부서는 유지)', [f.ties.map(t => t.id), f.matches.map(m => m.id)])
+r = classifyPending(f.ties, f.matches, cn)
+const b31 = r.items.find(i => i.tie.id === 'b31'), nd = r.items.find(i => i.tie.id === 'nd')
+check(b31.kind === 'turn' && b31.deadline === t0 + LINEUP_DEADLINE_MIN * min, '⑩ 오늘 대전은 차례, 마감 = 배정 + 10분', b31)
+check(nd.kind === 'turn' && nd.deadline === t0 + 15 * min, '⑩ 다른 날 개인전 빼고 오늘 개인전 종료 기준', nd)
+check(!r.items.some(i => i.tie.division_id === 'd01'), '⑩ 다음날 대전은 현황판에 없음')
+check(filterBoardDate(ties10, ms10, divDates, null).ties.length === 4, '⑩ 날짜 null → 전부')
 
 console.log(`\n${pass} pass / ${fail} fail`)
 process.exit(fail ? 1 : 0)

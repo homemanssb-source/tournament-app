@@ -2,7 +2,7 @@
 // 오더 마감 계산 (039) — LineupPendingBoard 가 씀
 // src/lib/lineup-deadline.ts
 //
-// 마감 = 차례가 된 시각 + 10분
+// 마감 = 차례가 된 시각 + 10분 (여러 날 대회는 오늘 경기일 부서만 — pickBoardDate)
 //   차례가 된 시각 = 같은 코트 앞 순서(개인전·단체전 섞임, court_order) 경기가 모두 끝난 시각과
 //                    이 대전의 코트 배정 시각(ties.court_assigned_at) 중 늦은 쪽
 // ============================================================
@@ -18,6 +18,30 @@ export type PendingInfo =
   | { kind: 'started'; tie: TieWithClubs; court: string };                       // 오더 없이 경기 시작됨
 
 const tieOrder = (t: TieWithClubs) => (t as any).court_order ?? (100 + (t.tie_order || 0));   // CourtBoard 와 같은 기준
+
+// 한국 시간 오늘 (YYYY-MM-DD)
+export const kstToday = (now = Date.now()) => new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+// 현황판이 볼 날짜 — 오늘 경기일이 있으면 오늘, 없으면 가장 가까운 경기일 (CourtBoard 와 같은 규칙), 경기일이 없으면 null(전부)
+export function pickBoardDate(dates: (string | null | undefined)[], today: string): string | null {
+  const ds = [...new Set(dates.filter((d): d is string => !!d))].sort();
+  if (ds.length === 0) return null;
+  if (ds.includes(today)) return today;
+  const t = Date.parse(today);
+  return ds.reduce((best, cur) => Math.abs(Date.parse(cur) - t) < Math.abs(Date.parse(best) - t) ? cur : best, ds[0]);
+}
+
+// 그 날짜 경기만 — 날짜 없는 부서·경기는 항상 포함
+//   여러 날 대회는 같은 코트에 다른 날 대전이 앞 순서로 들어 있어, 섞으면 차례·대기가 틀어짐
+export function filterBoardDate<T extends { division_id?: string | null }, M extends { match_date?: string | null }>(
+  ties: T[], matches: M[], divDates: Record<string, string | null | undefined>, date: string | null,
+): { ties: T[]; matches: M[] } {
+  if (!date) return { ties, matches };
+  return {
+    ties: ties.filter(t => { const d = t.division_id ? divDates[t.division_id] : null; return !d || d === date; }),
+    matches: matches.filter(m => !m.match_date || m.match_date === date),
+  };
+}
 
 // 공개 전인데 한 팀이라도 오더를 안 낸 대전
 function isPending(t: TieWithClubs) {

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { fetchTies } from '@/lib/team-api';
 import type { TieWithClubs } from '@/types/team';
-import { classifyPending, type PendingInfo } from '@/lib/lineup-deadline';
+import { classifyPending, filterBoardDate, kstToday, pickBoardDate, type PendingInfo } from '@/lib/lineup-deadline';
 
 const ROUND_LABEL: Record<string, string> = {
   group: '조별', full_league: '풀리그',
@@ -41,12 +41,17 @@ export default function LineupPendingBoard({ eventId, divisionNames, courtName, 
   const load = useCallback(async () => {
     if (!eventId) return;
     try {
-      const [ties, mRes] = await Promise.all([
+      const [allTies, mRes, dRes] = await Promise.all([
         fetchTies(eventId),
-        supabase.from('v_matches_with_teams').select('id, court, court_order, status, ended_at, score')
+        supabase.from('v_matches_with_teams').select('id, court, court_order, status, ended_at, score, match_date')
           .eq('event_id', eventId).not('court', 'is', null),
+        supabase.from('divisions').select('id, match_date').eq('event_id', eventId),
       ]);
-      const matches = ((mRes.data || []) as any[]).filter(m => m.score !== 'BYE');
+      // 여러 날 대회: 오늘 경기일 부서만 (다른 날 대전이 같은 코트 앞 순서에 있어도 대기로 잡히지 않게)
+      const divDates: Record<string, string | null> = {};
+      for (const d of (dRes.data || []) as { id: string; match_date: string | null }[]) divDates[d.id] = d.match_date;
+      const date = pickBoardDate(Object.values(divDates), kstToday());
+      const { ties, matches } = filterBoardDate(allTies, ((mRes.data || []) as any[]).filter(m => m.score !== 'BYE'), divDates, date);
       setRaw({ ties, matches });
       setNow(Date.now());
     } catch {}
