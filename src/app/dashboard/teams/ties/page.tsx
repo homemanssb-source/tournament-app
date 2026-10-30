@@ -11,8 +11,11 @@ import { tieGroupPlaceholders } from '@/lib/tournament';
 import { useEventIdWithParam } from '@/components/useDashboard';
 import {
   fetchTies, fetchRubbers, fetchEventTeamConfig,
-  fetchClubMembers, recordRubberScore, correctRubberScore, calculateStandings,
+  fetchClubMembers, recordRubberScore, correctRubberScore, calculateStandings, adminSubmitLineup,
 } from '@/lib/team-api';
+import LineupPendingBoard, { type LineupNotifyBody } from '@/components/LineupPendingBoard';
+import { authHeaders } from '@/lib/auth-headers';
+import LineupProxyForm from '@/components/LineupProxyForm';
 import { supabase } from '@/lib/supabase';
 import {
   getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority,
@@ -47,6 +50,9 @@ export default function TiesPage() {
   const [courtInput, setCourtInput]     = useState('');
   // ✅ venues 기반 코트 이름 목록
   const [courtNames, setCourtNames]     = useState<string[]>([]);
+  // 오더 대리입력 (039)
+  const [proxy, setProxy] = useState<{ tie: TieWithClubs; side: 'a' | 'b'; lineups: TeamLineup[] } | null>(null);
+  const [boardKey, setBoardKey] = useState(0);
 
   const loadData = useCallback(async () => {
     if (!eventId) return;
@@ -236,6 +242,27 @@ export default function TiesPage() {
     }
   }
 
+  async function openProxy(tie: TieWithClubs, side: 'a' | 'b') {
+    const { data } = await supabase.from('team_lineups').select('*').eq('tie_id', tie.id).order('rubber_number');
+    setProxy({ tie, side, lineups: (data as TeamLineup[]) || [] });
+  }
+
+  async function handleProxyDone(revealed: boolean) {
+    const name = proxy?.side === 'a' ? proxy.tie.club_a?.name : proxy?.tie.club_b?.name;
+    setProxy(null);
+    setSelectedTie(null); setRubbers([]); setTieLineups([]);
+    await loadData();
+    setBoardKey(k => k + 1);
+    alert(`✅ ${name} 오더 대리입력 완료` + (revealed ? ' — 양 팀 오더가 공개되었습니다.' : ''));
+  }
+
+  async function notifyLineup(body: LineupNotifyBody) {
+    const res = await fetch('/api/notify/lineup', {
+      method: 'POST', headers: await authHeaders(), body: JSON.stringify({ event_id: eventId, ...body }),
+    });
+    return res.json();
+  }
+
   function copyLineupUrl(tieId: string) {
     navigator.clipboard.writeText(`${window.location.origin}/lineup/${tieId}`);
     setCopiedTieId(tieId); setTimeout(() => setCopiedTieId(null), 2000);
@@ -333,6 +360,15 @@ export default function TiesPage() {
           ))}
         </div>
       )}
+
+      <LineupPendingBoard
+        eventId={eventId}
+        reloadKey={boardKey}
+        divisionNames={Object.fromEntries(divisions.map(d => [d.id, d.name]))}
+        courtName={n => (n ? courtNames[n - 1] || null : null)}
+        onProxy={openProxy}
+        notify={notifyLineup}
+      />
 
       {tieGroups.map(group => (
         <div key={group.groupName} className="space-y-3">
@@ -447,6 +483,15 @@ export default function TiesPage() {
                         </button>
                       )}
 
+                      {/* 오더 대리입력 (039) — 공개 전, 양 팀 확정된 대전 */}
+                      {!tie.lineup_revealed && !tie.is_bye && tie.club_a_id && tie.club_b_id && tie.status !== 'completed' &&
+                        (['a', 'b'] as const).map(side => (
+                          <button key={side} onClick={e => { e.stopPropagation(); openProxy(tie, side); }}
+                            className="text-xs bg-orange-100 text-orange-700 px-3 py-1.5 rounded-lg hover:bg-orange-200">
+                            📝 {(side === 'a' ? tie.club_a?.name : tie.club_b?.name)?.slice(0, 6)} 오더 대리입력
+                          </button>
+                        ))}
+
                       {!isEditingThisCourt ? (
                         <button onClick={e => { e.stopPropagation(); setEditingCourt(tie.id); setCourtInput(tie.court_number?.toString() || ''); }}
                           className="text-xs bg-green-100 text-green-700 px-3 py-1.5 rounded-lg hover:bg-green-200">
@@ -503,13 +548,13 @@ export default function TiesPage() {
                                 <div className="grid grid-cols-5 items-center gap-1 mb-3 text-xs">
                                   <div className={`col-span-2 text-right rounded p-1 ${rubberWinA ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}>
                                     <div>{laA && !laA.player1_id && !laA.player2_id ? '공오더' : <>{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</>}</div>
-                                    <div className="text-gray-400">{tie.club_a?.name}</div>
+                                    <div className="text-gray-400">{tie.club_a?.name}{laA?.submitted_by === 'admin' && ' · 운영자입력'}</div>
                                     {!laA?.is_revealed && <div className="text-orange-400 text-[10px]">미공개</div>}
                                   </div>
                                   <div className="text-center text-gray-400 font-bold">vs</div>
                                   <div className={`col-span-2 text-left rounded p-1 ${rubberWinB ? 'bg-blue-50 text-blue-700 font-bold' : ''}`}>
                                     <div>{laB && !laB.player1_id && !laB.player2_id ? '공오더' : <>{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</>}</div>
-                                    <div className="text-gray-400">{tie.club_b?.name}</div>
+                                    <div className="text-gray-400">{tie.club_b?.name}{laB?.submitted_by === 'admin' && ' · 운영자입력'}</div>
                                     {!laB?.is_revealed && <div className="text-orange-400 text-[10px]">미공개</div>}
                                   </div>
                                 </div>
@@ -584,6 +629,17 @@ export default function TiesPage() {
           })}
         </div>
       ))}
+
+      {proxy && (
+        <LineupProxyForm
+          tie={proxy.tie}
+          side={proxy.side}
+          existing={proxy.lineups}
+          submit={entries => adminSubmitLineup(proxy.tie.id, (proxy.side === 'a' ? proxy.tie.club_a_id : proxy.tie.club_b_id) as string, entries)}
+          onClose={() => setProxy(null)}
+          onDone={r => handleProxyDone(!!r.revealed)}
+        />
+      )}
     </div>
   );
 }

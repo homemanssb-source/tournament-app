@@ -281,6 +281,21 @@ export async function fetchAllLineupsForTie(tieId: string): Promise<TeamLineup[]
   return data || [];
 }
 
+// 직전 오더 — 같은 클럽이 이 대회에서 마지막으로 공개된 대전의 라인업 (오더 미제출 대리입력용)
+export async function fetchPrevLineup(tieId: string, clubId: string): Promise<TeamLineup[]> {
+  const { data: last, error } = await supabase
+    .from('team_lineups')
+    .select('tie_id')
+    .eq('club_id', clubId)
+    .eq('is_revealed', true)
+    .neq('tie_id', tieId)
+    .order('submitted_at', { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  if (!last || last.length === 0) return [];
+  return (await fetchLineups(last[0].tie_id, clubId)).filter(l => l.is_revealed);
+}
+
 // ========================================
 // RPC 호출
 // ========================================
@@ -292,6 +307,33 @@ export async function submitLineup(
     p_tie_id: tieId,
     p_club_id: clubId,
     p_captain_pin: captainPin,
+    p_lineups: lineups,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+// 운영자 대리입력 (039) — 대시보드 로그인
+export async function adminSubmitLineup(
+  tieId: string, clubId: string, lineups: LineupEntry[],
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_admin_submit_lineup', {
+    p_tie_id: tieId,
+    p_club_id: clubId,
+    p_lineups: lineups,
+  });
+  if (error) throw error;
+  return data as RpcResult;
+}
+
+// 운영자 대리입력 (039) — 현장 마스터 PIN 세션
+export async function adminPinSubmitLineup(
+  token: string, tieId: string, clubId: string, lineups: LineupEntry[],
+): Promise<RpcResult> {
+  const { data, error } = await supabase.rpc('rpc_admin_pin_submit_lineup', {
+    p_token: token,
+    p_tie_id: tieId,
+    p_club_id: clubId,
     p_lineups: lineups,
   });
   if (error) throw error;
