@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { tieGroupPlaceholders } from '@/lib/tournament'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { notifyIfTieFinished } from '@/lib/tie-finished-notify'
 import { fetchTies, fetchClubMembers, adminPinSubmitLineup } from '@/lib/team-api'
 import { getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority } from '@/lib/team-utils'
 import type { TieWithClubs, TeamLineup, ClubMember } from '@/types/team'
@@ -651,6 +652,7 @@ export default function AdminPinManagePage() {
       if (err) { if (!checkExpired(err.message)) setScoreError(err.message); return }
       if (data && !data.success) { if (!checkExpired(data.error)) setScoreError(data.error || '저장 실패'); return }
       if (data?.reseat?.success === false && data.reseat.reseat_skipped) alert('⚠️ ' + data.reseat.error)
+      notifyIfTieFinished(selectedTie!.id, selectedTie?.status)   // 대전이 끝났으면 다음 대전 주장들에게 알림
 
       const [rubberData, tieData] = await Promise.all([
         supabase.from('tie_rubbers').select('*').eq('tie_id', selectedTie!.id).order('rubber_number'),

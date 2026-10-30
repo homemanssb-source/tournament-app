@@ -4,6 +4,7 @@
 // · 서버 rpc_venue_rubber_score 가 이 경기장 코트 대전인지 한 번 더 확인 (031)
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
+import { notifyIfTieFinished } from '@/lib/tie-finished-notify'
 import { fetchRevealedLineups, fetchClubMembers } from '@/lib/team-api'
 import { formatSetScore } from '@/lib/team-utils'
 
@@ -83,6 +84,7 @@ export default function VenueTieScoreSheet({ tieId, token, court, onClose, onSav
       })
       if (error) { setErr(error.message); return }
       if ((data as any)?.success === false) { setErr((data as any).error || '저장 실패'); return }
+      notifyIfTieFinished(tieId, tie?.status)   // 대전이 끝났으면 다음 대전 주장들에게 알림
       setScoring(null)
       await load()
       onSaved()
