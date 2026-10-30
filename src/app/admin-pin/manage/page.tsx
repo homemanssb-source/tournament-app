@@ -3,12 +3,14 @@ import { useState, useEffect, useMemo } from 'react'
 import { tieGroupPlaceholders } from '@/lib/tournament'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { fetchTies, fetchClubMembers } from '@/lib/team-api'
+import { fetchTies, fetchClubMembers, adminPinSubmitLineup } from '@/lib/team-api'
 import { getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority } from '@/lib/team-utils'
 import type { TieWithClubs, TeamLineup, ClubMember } from '@/types/team'
 import AdminBracketView from '@/components/AdminBracketView'
 import CourtBoard from '@/components/CourtBoard'
 import TeamStandingsPanel from '@/components/TeamStandingsPanel'
+import LineupPendingBoard, { type LineupNotifyBody } from '@/components/LineupPendingBoard'
+import LineupProxyForm from '@/components/LineupProxyForm'
 import { normalizeAdminScore, isWalkoverScore } from '@/lib/score'
 
 type Tab = 'individual' | 'team' | 'standings' | 'bracket' | 'courts' | 'pins' | 'locks'
@@ -71,6 +73,9 @@ export default function AdminPinManagePage() {
   const [scoreError, setScoreError] = useState('')
   const [scoreSaving, setScoreSaving] = useState(false)
   const [tieMsg, setTieMsg] = useState('')
+  // 오더 대리입력 (039)
+  const [proxy, setProxy] = useState<{ tie: TieWithClubs; side: 'a' | 'b'; lineups: TeamLineup[] } | null>(null)
+  const [boardKey, setBoardKey] = useState(0)
 
   // ── PIN 잠금 해제 ──
   const [pinLocks, setPinLocks] = useState<PinLock[]>([])
@@ -557,6 +562,32 @@ export default function AdminPinManagePage() {
     setMemberMap(mm)
   }
 
+  // 오더 대리입력 열기 — 공개 전 라인업은 관리자 세션 토큰으로 조회
+  async function openProxy(tie: TieWithClubs, side: 'a' | 'b') {
+    const { data, error } = await supabase.rpc('rpc_admin_pin_tie_lineups', { p_token: session.token, p_tie_id: tie.id })
+    if (error) { if (!checkExpired(error.message)) setTieMsg('❌ ' + error.message); return }
+    if ((data as any)?.success === false) { if (!checkExpired((data as any).error)) setTieMsg('❌ ' + (data as any).error); return }
+    setProxy({ tie, side, lineups: ((data as any)?.lineups || []) as TeamLineup[] })
+  }
+
+  async function handleProxyDone(revealed: boolean) {
+    if (!proxy) return
+    const name = proxy.side === 'a' ? proxy.tie.club_a?.name : proxy.tie.club_b?.name
+    setProxy(null); setSelectedTie(null); setScoringRubber(null)
+    await loadTiesData(session.event_id)
+    setBoardKey(k => k + 1)
+    setTieMsg(`✅ ${name} 오더 대리입력 완료` + (revealed ? ' — 양 팀 오더 공개됨' : ''))
+  }
+
+  // 주장 오더 알림 — 관리자 PIN 세션 토큰으로 호출
+  async function notifyLineup(body: LineupNotifyBody) {
+    const res = await fetch('/api/notify/lineup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event_id: session.event_id, admin_pin_token: session.token, ...body }),
+    })
+    return res.json()
+  }
+
   function startScoring(rubber: any) {
     setScoringRubber(rubber.id); setScoreError('')
     setSet1a(rubber.set1_a?.toString()||''); setSet1b(rubber.set1_b?.toString()||'')
@@ -907,6 +938,15 @@ export default function AdminPinManagePage() {
                 {tieMsg}
               </div>
             )}
+            <LineupPendingBoard
+              eventId={session.event_id}
+              reloadKey={boardKey}
+              divisionNames={Object.fromEntries(divisions.map(d => [d.id, d.name]))}
+              courtName={courtNumToName}
+              onProxy={openProxy}
+              notify={notifyLineup}
+            />
+
             {/* 부서 탭 */}
             {divisions.length > 0 && (
               <div className="flex gap-1 overflow-x-auto pb-1">
@@ -1009,6 +1049,24 @@ export default function AdminPinManagePage() {
 
                     {isSelected && (
                       <div className="border-t bg-gray-50 p-4 space-y-3">
+                        {!tie.lineup_revealed && !tie.is_bye && tie.status !== 'completed' && tie.club_a_id && tie.club_b_id && (
+                          <div className="bg-white rounded-lg border border-blue-200 p-3">
+                            <p className="text-sm font-bold mb-1">📝 오더 대리입력</p>
+                            <p className="text-xs text-gray-500 mb-2">주장이 오더를 못 낼 때 종이·구두로 받은 오더를 대신 넣습니다.</p>
+                            <div className="flex gap-2">
+                              {(['a', 'b'] as const).map(side => {
+                                const submitted = side === 'a' ? tie.club_a_lineup_submitted : tie.club_b_lineup_submitted
+                                return (
+                                  <button key={side} onClick={() => openProxy(tie, side)}
+                                    className="flex-1 py-2 rounded-lg text-xs font-medium border border-gray-300 hover:border-blue-400">
+                                    {side === 'a' ? tie.club_a?.name : tie.club_b?.name}
+                                    <span className={submitted ? 'text-green-600' : 'text-orange-600'}>{submitted ? ' (제출됨)' : ' (미제출)'}</span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        )}
                         {tie.status !== 'completed' && tie.club_a_id && tie.club_b_id && (
                           <div className="bg-white rounded-lg border border-orange-200 p-3">
                             <p className="text-sm font-bold mb-1">🚫 클럽 불참</p>
@@ -1043,12 +1101,12 @@ export default function AdminPinManagePage() {
                                 <div className="grid grid-cols-5 items-center gap-1 text-xs mb-2">
                                   <div className="col-span-2 text-right">
                                     <div className="font-medium">{laA && !laA.player1_id && !laA.player2_id ? '공오더' : <>{getMemberName(laA?.player1_id)} / {getMemberName(laA?.player2_id)}</>}</div>
-                                    <div className="text-gray-400">{tie.club_a?.name}</div>
+                                    <div className="text-gray-400">{tie.club_a?.name}{laA?.submitted_by === 'admin' && ' · 운영자입력'}</div>
                                   </div>
                                   <div className="text-center text-gray-400 font-bold">vs</div>
                                   <div className="col-span-2">
                                     <div className="font-medium">{laB && !laB.player1_id && !laB.player2_id ? '공오더' : <>{getMemberName(laB?.player1_id)} / {getMemberName(laB?.player2_id)}</>}</div>
-                                    <div className="text-gray-400">{tie.club_b?.name}</div>
+                                    <div className="text-gray-400">{tie.club_b?.name}{laB?.submitted_by === 'admin' && ' · 운영자입력'}</div>
                                   </div>
                                 </div>
                               )}
@@ -1279,6 +1337,17 @@ export default function AdminPinManagePage() {
           </>
         )}
       </main>
+
+      {proxy && (
+        <LineupProxyForm
+          tie={proxy.tie}
+          side={proxy.side}
+          existing={proxy.lineups}
+          submit={entries => adminPinSubmitLineup(session.token, proxy.tie.id, (proxy.side === 'a' ? proxy.tie.club_a_id : proxy.tie.club_b_id) as string, entries)}
+          onClose={() => setProxy(null)}
+          onDone={r => handleProxyDone(!!r.revealed)}
+        />
+      )}
     </div>
   )
 }
