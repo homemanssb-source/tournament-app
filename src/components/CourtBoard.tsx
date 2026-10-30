@@ -160,7 +160,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
   useEffect(() => {
     const dates = [...new Set(Object.values(divMatchDates))].sort()
     if (dates.length > 1 && dateFilter === 'ALL' && !initialDate) {
-      const today = new Date().toISOString().split('T')[0]
+      const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().split('T')[0]   // 한국 시간 (UTC 면 아침 9시 전엔 어제)
       const picked = dates.includes(today)
         ? today
         : dates.reduce((best, cur) => {
