@@ -21,6 +21,8 @@ interface VenueMatch {
   winner_team_id: string | null; division_name: string; division_id: string
   group_id?: string | null; group_label?: string | null
   is_team_tie?: boolean
+  // 단체전 오더 제출 여부 (ties 직접 조회, 보기 전용)
+  lineup_a?: boolean; lineup_b?: boolean; lineup_revealed?: boolean
 }
 
 // 자동 배정 미리보기: 묶음(조 하나 또는 본선 경기 하나) 단위로 코트를 정하고, 확정할 때 저장
@@ -179,7 +181,7 @@ export default function VenueManagePage() {
         fetchPendingByeIds(session.event_id),   // 본선 TBD 부전승 자리 — 코트 필요 없음
         // RPC 는 대전 순서를 100 + 대전번호 로 보내서 코트 순서(court_order)와 다름 (토너먼트 대전은 전부 100 → 맨 앞)
         // → 마스터·대시보드가 정한 실제 court_order 로 바꿔 씀
-        supabase.from('ties').select('id, court_order, round, status, is_bye, club_a_id, club_b_id, qualifier_label_a, qualifier_label_b').eq('event_id', session.event_id),
+        supabase.from('ties').select('id, court_order, round, status, is_bye, club_a_id, club_b_id, qualifier_label_a, qualifier_label_b, club_a_lineup_submitted, club_b_lineup_submitted, lineup_revealed').eq('event_id', session.event_id),
       ])
       if (error) {
         sessionStorage.removeItem('venue_session')
@@ -192,11 +194,15 @@ export default function VenueManagePage() {
         group_label: m.group_id ? (groupLabels[m.group_id] || null) : null,
       }))
       const tieOrder = new Map(((tieRows || []) as { id: string; court_order: number | null }[]).map(r => [r.id, r.court_order]))
+      const tieRow = new Map(((tieRows || []) as any[]).map(r => [r.id, r]))
       // 단체전 본선 부전승 자리 — 코트 필요 없음
       const tieByeIds = new Set(((tieRows || []) as any[]).filter(isPendingByeTie).map(r => r.id))
       const ties: VenueMatch[] = (data.ties || []).filter((t: any) => !tieByeIds.has(t.id)).map((t: any) => ({
         ...t, is_team_tie: true,
         court_order: tieOrder.get(t.id) ?? t.court_order,
+        lineup_a: !!tieRow.get(t.id)?.club_a_lineup_submitted,
+        lineup_b: !!tieRow.get(t.id)?.club_b_lineup_submitted,
+        lineup_revealed: !!tieRow.get(t.id)?.lineup_revealed,
         status: normalizeStatus(t.status),
         group_label: t.group_id ? (groupLabels[t.group_id] || null) : null,
       }))
@@ -1154,6 +1160,15 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
   const [showMove, setShowMove] = useState(false)
   const rLabel = roundLabelKR(m.round)
   const roundText = m.group_label ? `${rLabel} ${m.group_label}` : rLabel
+  // 단체전 시작 전: 팀별 오더 제출 표시 (양 팀 다 정해진 대전만)
+  const showLineup = !!m.is_team_tie && m.status === 'PENDING' && !!m.team_a_id && !!m.team_b_id
+  const lineupMark = (done?: boolean) => (
+    <span className={`ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded align-middle ${
+      done ? 'bg-green-100 text-green-700' : 'bg-red-50 text-red-500'
+    }`}>
+      {done ? '오더 ✓' : '오더 미제출'}
+    </span>
+  )
   return (
     <div className={`rounded-xl border-2 p-3 transition-all ${badgeStyle}`}>
       <div className="flex items-center justify-between mb-2 gap-1">
@@ -1177,6 +1192,13 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
           <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${m.is_team_tie ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-700'}`}>
             {roundText}
           </span>
+          {showLineup && (
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+              m.lineup_revealed ? 'bg-green-600 text-white' : 'bg-amber-100 text-amber-700'
+            }`}>
+              {m.lineup_revealed ? '오더 완료' : `오더 ${(m.lineup_a ? 1 : 0) + (m.lineup_b ? 1 : 0)}/2`}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0 ml-1">
           {canStart && (
@@ -1223,12 +1245,14 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
           m.winner_team_id === m.team_a_id ? 'text-green-700' : 'text-stone-800'
         }`}>
           {m.team_a_name || 'TBD'}
+          {showLineup && lineupMark(m.lineup_a)}
         </div>
         <div className="text-[10px] text-stone-300">vs</div>
         <div className={`text-sm font-semibold leading-tight ${
           m.winner_team_id === m.team_b_id ? 'text-green-700' : 'text-stone-800'
         }`}>
           {m.team_b_name || 'TBD'}
+          {showLineup && lineupMark(m.lineup_b)}
         </div>
       </div>
       {isInProgress && m.score && (
