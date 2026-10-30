@@ -12,6 +12,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { notifyIfTieFinished } from '@/lib/tie-finished-notify';
 import { fetchClubMembers, fetchAllLineupsForTie, submitLineup, fetchRubbers } from '@/lib/team-api';
 import { getGenderLabel, formatSetScore, getMatchTypeShort } from '@/lib/team-utils';
 import type { Tie, Club, ClubMember, TeamLineup, LineupEntry, TieRubber } from '@/types/team';
@@ -308,6 +309,7 @@ export default function LineupPage() {
       });
       if (err) { setScoreError(err.message); return; }
       if (data && !data.success) { setScoreError(data.error || '저장 실패'); return; }
+      notifyIfTieFinished(tieId, tie?.status);   // 대전이 끝났으면 다음 대전 주장들에게 알림
       await loadRubbers(tieId);
       const { data: ut } = await supabase.from('ties').select('*').eq('id', tieId).single();
       if (ut) setTie(ut);

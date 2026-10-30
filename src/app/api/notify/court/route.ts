@@ -8,6 +8,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServiceClient } from '@/lib/supabase'
 import { callerForEvent } from '@/lib/api-auth'
 import { findFilledSlotTargets, type SlotMatch, type SlotLog } from '@/lib/slot-filled-notify'
+import { pickNextTie, courtNameOf, type NextTieRow } from '@/lib/tie-next'
+import { LINEUP_DEADLINE_MIN } from '@/lib/lineup-deadline'
 
 type SubRow = { endpoint: string; p256dh: string; auth: string; team_id: string }
 
@@ -174,7 +176,101 @@ async function notifyAutoAssigned(
   }
 }
 
+// ✅ 단체전 대전 종료 → 같은 코트·같은 날 다음 대전 두 클럽 주장에게 '다음 대전 준비' 1회
+//    주장 화면(클럽 PIN — 세션 없음)도 부르므로 인증 대신: 끝난 대전만, 대전마다 1번(push_logs 'after_tie:<id>'),
+//    ended_at 이 찍혀 있으면 30분 안만 (지금 점수 RPC 는 ended_at 을 안 찍음)
+//    다음 대전 오더가 아직이면 같은 알림에 마감 시각을 넣고 lineup_alerted_at 을 찍어 현황판 자동 오더 알림과 겹치지 않게
+async function handleTieFinished(body: any) {
+  const svc = getServiceClient()
+  const { event_id, finished_tie_id } = body
+  if (!event_id || typeof finished_tie_id !== 'string') {
+    return NextResponse.json({ error: 'event_id, finished_tie_id 필수' }, { status: 400 })
+  }
+  const cols = 'id, status, is_bye, court_number, court_order, tie_order, division_id, club_a_id, club_b_id, ended_at, ' +
+    'club_a_lineup_submitted, club_b_lineup_submitted, lineup_revealed, lineup_alerted_at, court_assigned_at'
+  const { data: fin } = await svc.from('ties').select(cols).eq('id', finished_tie_id).eq('event_id', event_id).maybeSingle()
+  const f = fin as any
+  if (!f || f.status !== 'completed') return NextResponse.json({ sent: 0, skipped: true, message: '끝난 대전이 아닙니다' })
+  if (f.court_number == null) return NextResponse.json({ sent: 0, skipped: true, message: '코트 없는 대전' })
+  if (f.ended_at && Date.now() - Date.parse(f.ended_at) > 30 * 60 * 1000) {
+    return NextResponse.json({ sent: 0, skipped: true, message: '30분 넘게 지난 대전' })
+  }
+  const mark = `after_tie:${f.id}`
+  const { data: done } = await svc.from('push_logs').select('id').eq('event_id', event_id).like('error_msg', mark + '%').limit(1)
+  if (done?.length) return NextResponse.json({ sent: 0, skipped: true, message: '이미 보냈습니다' })
+
+  const [{ data: ties }, { data: divs }, { data: venues }] = await Promise.all([
+    svc.from('ties').select(cols).eq('event_id', event_id).eq('court_number', f.court_number),
+    svc.from('divisions').select('id, name, match_date').eq('event_id', event_id),
+    svc.from('venues').select('name, short_name, court_count, courts').eq('event_id', event_id).order('created_at'),
+  ])
+  const divDates: Record<string, string | null> = {}, divNames: Record<string, string> = {}
+  for (const d of (divs || []) as any[]) { divDates[d.id] = d.match_date; divNames[d.id] = d.name }
+  const court = courtNameOf(f.court_number, (venues || []) as any[])
+  const next = pickNextTie((ties || []) as unknown as NextTieRow[], f as NextTieRow, divDates) as any
+  const logRow: Record<string, any> = { event_id, court, trigger: 'finished' }
+  if (!next) {
+    await svc.from('push_logs').insert({ ...logRow, sent: 0, failed: 0, no_sub: true, error_msg: `${mark} | 다음 대전 없음` })
+    return NextResponse.json({ sent: 0, message: '대기 중인 대전이 없습니다' })
+  }
+
+  const clubIds = [next.club_a_id, next.club_b_id].filter(Boolean) as string[]
+  const [{ data: clubs }, { data: subs }] = await Promise.all([
+    svc.from('clubs').select('id, name').in('id', clubIds),
+    svc.from('push_subscriptions').select('endpoint, p256dh, auth, team_id').in('team_id', clubIds),
+  ])
+  const nameOf = (id: string | null) => (clubs || []).find((c: any) => c.id === id)?.name || 'TBD'
+  const divisionName = (next.division_id && divNames[next.division_id]) || '단체전'
+  Object.assign(logRow, { team_a_name: nameOf(next.club_a_id), team_b_name: nameOf(next.club_b_id), division_name: divisionName })
+
+  // 오더 미제출 쪽 → 마감(끝난 시각·배정 시각 중 늦은 쪽 + 10분) 안내, 현황판 자동 알림 선점
+  const missing = new Set((['a', 'b'] as const).filter(s => !next.lineup_revealed && !next[`club_${s}_lineup_submitted`])
+    .map(s => next[`club_${s}_id`]).filter(Boolean))
+  let until = ''
+  if (missing.size > 0) {
+    const base = Math.max(f.ended_at ? Date.parse(f.ended_at) : Date.now(), next.court_assigned_at ? Date.parse(next.court_assigned_at) : 0)
+    until = new Date(base + LINEUP_DEADLINE_MIN * 60000).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Seoul' })
+    await svc.from('ties').update({ lineup_alerted_at: new Date().toISOString() }).eq('id', next.id).is('lineup_alerted_at', null)
+  }
+
+  if (!subs?.length) {
+    await svc.from('push_logs').insert({ ...logRow, sent: 0, failed: 0, no_sub: true, error_msg: mark })
+    return NextResponse.json({ sent: 0, message: '구독자가 없습니다', next_tie_id: next.id })
+  }
+  if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+    return NextResponse.json({ sent: 0, message: 'VAPID not configured' })
+  }
+  const webpush = (await import('web-push')).default
+  webpush.setVapidDetails('mailto:admin@jeju-tournament.com', process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY)
+
+  let sent = 0, failed = 0
+  const expired: string[] = []
+  const reasons: string[] = []
+  await Promise.all((subs as SubRow[]).map(async (sub) => {
+    const payload = JSON.stringify({
+      title: `🎾 ${court} - 다음 대전 준비하세요!`,
+      body: `${nameOf(next.club_a_id)} vs ${nameOf(next.club_b_id)} (${divisionName} #${next.tie_order ?? ''})`
+        + (missing.has(sub.team_id) ? ` · ${until}까지 오더 제출` : ''),
+      icon: '/icon-192x192.png',
+      tag: `tie-next-${next.id}-${Date.now()}`,
+      url: `/lineup/${next.id}`,
+      data: { court, tie_id: next.id },
+    })
+    const r = await sendOne(webpush, sub, payload, { urgency: 'high' as const, TTL: 300 })
+    if (r.kind === 'ok') sent++
+    else { failed++; reasons.push(r.kind + ': ' + r.reason); if (r.kind === 'expired') expired.push(sub.endpoint) }
+  }))
+  if (expired.length) await svc.from('push_subscriptions').delete().in('endpoint', expired)
+  await svc.from('push_logs').insert({ ...logRow, sent, failed, no_sub: false, error_msg: [mark, ...reasons.slice(0, 5)].join(' | ').slice(0, 500) })
+  return NextResponse.json({ sent, failed, next_tie_id: next.id })
+}
+
 export async function POST(req: NextRequest) {
+  const peek = await req.clone().json().catch(() => null)
+  if (peek?.finished_tie_id) {
+    try { return await handleTieFinished(peek) }
+    catch (e: any) { console.error('[notify/court] tie_finished', e); return NextResponse.json({ error: e.message }, { status: 500 }) }
+  }
   const after: { eventId?: string; webpush?: any } = {}
   const res = await handleCourtNotify(req, after)
   if (after.eventId && after.webpush) {
@@ -314,8 +410,9 @@ async function handleCourtNotify(req: NextRequest, after: { eventId?: string; we
         })
         const candidates = sameDateTies.length > 0 ? sameDateTies : tieList
 
-        // 다음 진행 대상: 진행중 > 첫 pending/lineup_ready
-        const activeTie: any = (candidates as any[]).find((t: any) => t.status === 'in_progress') || candidates[0]
+        // 다음 진행 대상: 진행 중이 아닌 첫 대전 (진행 중인 팀은 이미 코트에 있음 —
+        //   예전엔 진행 중 대전을 골라, 그 뒤에 새로 배정된 대전 팀은 알림을 못 받았음)
+        const activeTie: any = (candidates as any[]).find((t: any) => t.status !== 'in_progress')
         if (activeTie) {
           teamAId = activeTie.club_a_id; teamBId = activeTie.club_b_id
           targetId = activeTie.id

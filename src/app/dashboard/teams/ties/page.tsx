@@ -17,6 +17,7 @@ import LineupPendingBoard, { type LineupNotifyBody } from '@/components/LineupPe
 import { authHeaders } from '@/lib/auth-headers';
 import LineupProxyForm from '@/components/LineupProxyForm';
 import { supabase } from '@/lib/supabase';
+import { notifyIfTieFinished } from '@/lib/tie-finished-notify';
 import {
   getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority,
 } from '@/lib/team-utils';
@@ -183,6 +184,7 @@ export default function TiesPage() {
       if (!result.success) { setSaveError(result.error || '저장 실패'); return; }
       const reseat = (result as any).reseat;
       if (reseat && reseat.success === false && reseat.reseat_skipped) alert('⚠️ ' + reseat.error);
+      notifyIfTieFinished(selectedTie!.id, selectedTie?.status);   // 대전이 끝났으면 다음 대전 주장들에게 알림
 
       const updatedRubbers = await fetchRubbers(selectedTie!.id);
       setRubbers(updatedRubbers);
