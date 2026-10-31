@@ -1,5 +1,5 @@
 ﻿'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
@@ -58,7 +58,8 @@ export default function PinPage() {
         }
       }
     }
-    if (raw) router.replace('/pin/matches')
+    // 대전 화면 '← 내 대전 목록'(?team=1)으로 온 주장은 개인전 화면으로 보내지 않음
+    if (raw && new URLSearchParams(window.location.search).get('team') !== '1') router.replace('/pin/matches')
   }, [])
 
   // (대회 자동 선택·다른 탭 동기화는 useEventSelect 훅이 담당)
@@ -149,15 +150,48 @@ export default function PinPage() {
     } catch {}
   }
 
-  async function handleTeamSubmit() {
-    if (pin.length !== 6) { setError('팀 PIN 6자리를 입력해주세요.'); return }
+  // 저장된 주장 PIN (대전 화면에서 넣은 것 포함, 12시간) — 목록으로 돌아올 때 PIN 다시 안 넣게
+  function readCaptainPin(): string | null {
+    const s = sessionStorage.getItem('captain_pin')
+    if (s && s.length === 6) return s
+    try {
+      const parsed = JSON.parse(localStorage.getItem('captain_pin_session') || 'null')
+      if (parsed?.pin && parsed._savedAt && Date.now() - parsed._savedAt < 12 * 60 * 60 * 1000) return parsed.pin
+    } catch {}
+    return null
+  }
+
+  function forgetCaptain() {
+    sessionStorage.removeItem('captain_pin'); sessionStorage.removeItem('captain_div')
+    try { localStorage.removeItem('captain_pin_session') } catch {}
+    resetMode(); setMode('team')
+  }
+
+  // /pin?team=1 (대전 화면 '← 내 대전 목록') 또는 [단체전] 누름 → 저장된 PIN 있으면 바로 목록
+  const autoTeamTried = useRef(false)
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('team') === '1') setMode('team')
+  }, [])
+  useEffect(() => {
+    if (mode !== 'team' || !selectedEvent || autoTeamTried.current) return
+    autoTeamTried.current = true
+    const saved = readCaptainPin()
+    if (saved) { setPin(saved); handleTeamSubmit(saved, true) }
+  }, [mode, selectedEvent])   // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleTeamSubmit(p: string = pin, auto = false) {
+    if (p.length !== 6) { setError('팀 PIN 6자리를 입력해주세요.'); return }
     if (!selectedEvent) { setError('대회 정보를 불러오는 중입니다. 잠시 후 다시 시도해주세요.'); return }
     setError(''); setLoading(true)
     try {
       // 주장 PIN 확인은 서버에서 (PIN 은 외부에서 조회 불가, 연속 실패 시 잠금)
       // 같은 팀이 여러 부서로 신청한 경우 부서별 클럽이 모두 돌아온다
-      const { data: res, error: rpcErr } = await supabase.rpc('rpc_captain_login', { p_event_id: selectedEvent, p_pin: pin })
-      if (rpcErr || !res?.success) { setError(res?.error || rpcErr?.message || '팀 PIN에 해당하는 클럽을 찾을 수 없습니다.'); setLoading(false); return }
+      const { data: res, error: rpcErr } = await supabase.rpc('rpc_captain_login', { p_event_id: selectedEvent, p_pin: p })
+      if (rpcErr || !res?.success) {
+        // 자동 복원 실패(다른 대회 PIN·만료 등)는 조용히 PIN 입력 화면으로
+        if (auto) { setPin(''); setLoading(false); return }
+        setError(res?.error || rpcErr?.message || '팀 PIN에 해당하는 클럽을 찾을 수 없습니다.'); setLoading(false); return
+      }
       const clubs = (res.clubs || []) as { id: string; name: string; event_id: string; division_id: string | null; division_name: string | null }[]
       const divNameMap: Record<string, string> = {}
       for (const c of clubs) if (c.division_id && c.division_name) divNameMap[c.division_id] = c.division_name
@@ -171,21 +205,27 @@ export default function PinPage() {
         divMap.get(key)!.clubs.push({ id: c.id, name: c.name })
       }
 
-      sessionStorage.setItem('captain_pin', pin)
-      setLoginPin(pin)
+      sessionStorage.setItem('captain_pin', p)
+      try { localStorage.setItem('captain_pin_session', JSON.stringify({ pin: p, _savedAt: Date.now() })) } catch {}
+      setLoginPin(p)
 
       const allChoices = [...divMap.values()]
       const allClubIds = clubs.map(c => c.id)
 
-      // 이미 알림 등록한 PIN이면 바로 다음 단계로
-      let alreadyDone = false
+      // 이미 알림 등록한 PIN이면 바로 다음 단계로 (저장된 PIN 으로 돌아온 경우도 — 알림 안내는 처음 한 번만)
+      let alreadyDone = auto
       try {
         const donePins = JSON.parse(localStorage.getItem(NOTIF_DONE_KEY) || '[]') as string[]
-        alreadyDone = donePins.includes(pin)
+        alreadyDone = alreadyDone || donePins.includes(p)
       } catch {}
 
       if (alreadyDone) {
-        if (divMap.size > 1) { setDivisionChoices(allChoices); setLoading(false); return }
+        if (divMap.size > 1) {
+          // 돌아온 경우 마지막에 고른 부서 목록으로 바로
+          const last = auto ? allChoices.find(c => (c.division_id || '_nodiv') === sessionStorage.getItem('captain_div')) : undefined
+          if (last) { await loadTiesForClubs(last.clubs.map(c => c.id), last.division_name); return }
+          setDivisionChoices(allChoices); setLoading(false); return
+        }
         await loadTiesForClubs(allClubIds)
         return
       }
@@ -269,6 +309,7 @@ export default function PinPage() {
   }
 
   async function pickDivision(choice: DivisionChoice) {
+    sessionStorage.setItem('captain_div', choice.division_id || '_nodiv')
     setDivisionChoices([])
     await loadTiesForClubs(choice.clubs.map(c => c.id), choice.division_name)
   }
@@ -285,6 +326,7 @@ export default function PinPage() {
   }
 
   function resetMode() {
+    autoTeamTried.current = false
     setMode('select'); setPin(''); setError('')
     setTeamTies([]); setDivisionChoices([]); setSelectedDivName('')
     setTeamNotifPrompt(false); setTeamNextState(null)
@@ -434,7 +476,7 @@ export default function PinPage() {
               placeholder="000000"
               className="w-full text-center text-3xl tracking-[0.5em] border-2 rounded-xl py-4 focus:border-blue-500 outline-none" autoFocus />
             {error && <p className="text-red-500 text-sm text-center">{error}</p>}
-            <button onClick={handleTeamSubmit} disabled={loading || pin.length !== 6}
+            <button onClick={() => handleTeamSubmit()} disabled={loading || pin.length !== 6}
               className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-all">
               {loading ? '확인 중...' : '확인'}
             </button>
@@ -507,6 +549,11 @@ export default function PinPage() {
                   )
                 })
               })()}
+            </div>
+            <div className="flex justify-center gap-4 text-xs">
+              {selectedDivName && <button onClick={() => { sessionStorage.removeItem('captain_div'); setTeamTies([]); handleTeamSubmit(pin, true) }}
+                className="text-blue-500 hover:text-blue-700 py-1">부서 바꾸기</button>}
+              <button onClick={forgetCaptain} className="text-stone-400 hover:text-stone-600 py-1">다른 PIN으로 로그인</button>
             </div>
             <button onClick={resetMode} className="w-full text-stone-400 text-sm py-2 hover:text-stone-600">← 뒤로가기</button>
           </>
