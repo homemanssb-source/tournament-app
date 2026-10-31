@@ -17,14 +17,16 @@ import { fetchClubMembers, fetchAllLineupsForTie, submitLineup, fetchRubbers } f
 import { getGenderLabel, formatSetScore, getMatchTypeShort } from '@/lib/team-utils';
 import type { Tie, Club, ClubMember, TeamLineup, LineupEntry, TieRubber } from '@/types/team';
 import PinSubscribeButton from '@/components/PinSubscribeButton'
+import Link from 'next/link';
 
 type Step = 'pin' | 'edit' | 'submitted' | 'revealed';
 
 // 서버(rpc_captain_tie)가 확인한 주장 정보 — PIN 비교는 서버에서만 (PIN 은 외부에서 조회 불가)
-type CaptainCheck = { success: boolean; error?: string; side?: 'a' | 'b'; my_lineups?: { rubber_number: number; player1_id: string; player2_id: string }[] };
+// both_sides: 같은 클럽 A·B 팀끼리 붙어 PIN 이 양쪽 다 맞음 → 주장이 어느 팀으로 입력할지 고름 (041)
+type CaptainCheck = { success: boolean; error?: string; side?: 'a' | 'b'; both_sides?: boolean; my_lineups?: { rubber_number: number; player1_id: string; player2_id: string }[] };
 
-async function verifyCaptain(tieId: string, pin: string): Promise<CaptainCheck> {
-  const { data, error } = await supabase.rpc('rpc_captain_tie', { p_tie_id: tieId, p_pin: pin });
+async function verifyCaptain(tieId: string, pin: string, side?: 'a' | 'b' | null): Promise<CaptainCheck> {
+  const { data, error } = await supabase.rpc('rpc_captain_tie', { p_tie_id: tieId, p_pin: pin, p_side: side ?? null });
   if (error) return { success: false, error: error.message };
   return data as CaptainCheck;
 }
@@ -66,6 +68,10 @@ export default function LineupPage() {
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clubARef = useRef<Club | null>(null);
   const clubBRef = useRef<Club | null>(null);
+  const [bothSides, setBothSides] = useState(false);     // 같은 PIN 으로 양 팀 다 입력 가능
+  const [sideChoice, setSideChoice] = useState(false);   // 팀 고르기 화면
+  const sideKey = `captain_side_${tieId}`;
+  const readSide = (): 'a' | 'b' | null => { const s = sessionStorage.getItem(sideKey); return s === 'a' || s === 'b' ? s : null; };
 
   useEffect(() => {
     (async () => {
@@ -101,8 +107,8 @@ export default function LineupPage() {
         await loadRubbers(tieId);
         // 점수 입력용: 저장된 PIN 이 이 대전 주장 것이면 조용히 복원
         if (savedPin && ca && cb) {
-          const res = await verifyCaptain(tieId, savedPin);
-          if (res.success) { setPinInput(savedPin); setMyClub(res.side === 'a' ? ca : cb); setOpponentClub(res.side === 'a' ? cb : ca); }
+          const res = await verifyCaptain(tieId, savedPin, readSide());
+          if (res.success) { setPinInput(savedPin); setBothSides(!!res.both_sides); setMyClub(res.side === 'a' ? ca : cb); setOpponentClub(res.side === 'a' ? cb : ca); }
         }
         setLoading(false); return;
       }
@@ -158,8 +164,11 @@ export default function LineupPage() {
   }, [step, tieId]);
 
   async function tryAutoLogin(savedPin: string, ca: Club, cb: Club, t: Tie): Promise<boolean> {
-    const res = await verifyCaptain(tieId, savedPin);
+    const res = await verifyCaptain(tieId, savedPin, readSide());
     if (!res.success) return false;
+    setBothSides(!!res.both_sides);
+    if (res.both_sides && !readSide()) { setPinInput(savedPin); setSideChoice(true); setStep('pin'); return true; }
+    setSideChoice(false);
     const club = res.side === 'a' ? ca : cb;
     const opponent = res.side === 'a' ? cb : ca;
     setPinInput(savedPin); setMyClub(club); setOpponentClub(opponent);
@@ -196,21 +205,30 @@ export default function LineupPage() {
   async function handlePinSubmit() {
     if (pinInput.length !== 6) { setError('PIN 6자리를 입력하세요.'); return; }
     setError('');
-    const res = await verifyCaptain(tieId, pinInput);
-    if (!res.success || !clubA || !clubB) { setError(res.error || 'PIN이 일치하지 않습니다.'); return; }
-    const club = res.side === 'a' ? clubA : clubB;
-    setMyClub(club); setOpponentClub(res.side === 'a' ? clubB : clubA);
-    sessionStorage.setItem(`captain_pin_${tieId}`, pinInput);
-    sessionStorage.setItem('captain_pin', pinInput);
+    if (!clubA || !clubB || !tie) return;
+    const res = await verifyCaptain(tieId, pinInput, readSide());
+    if (!res.success) { setError(res.error || 'PIN이 일치하지 않습니다.'); return; }
+    savePin(pinInput);
+    await tryAutoLogin(pinInput, clubA, clubB, tie);
+  }
+
+  function savePin(p: string) {
+    sessionStorage.setItem(`captain_pin_${tieId}`, p);
+    sessionStorage.setItem('captain_pin', p);
     try {
-      localStorage.setItem('captain_pin_session', JSON.stringify({ pin: pinInput, _savedAt: Date.now() }));
+      localStorage.setItem('captain_pin_session', JSON.stringify({ pin: p, _savedAt: Date.now() }));
     } catch {}
-    const ml = await fetchClubMembers(club.id); setMembers(ml);
-    const existing = res.my_lineups || [];
-    if (existing.length > 0 && tie) {
-      if (tie.lineup_revealed || tie.status === 'in_progress' || tie.status === 'completed') { setStep('revealed'); await loadRevealedData(tieId, clubA, clubB); await loadRubbers(tieId); }
-      else { setLineups(Array.from({ length: tie.rubber_count }, (_, i) => { const l = existing.find(e => e.rubber_number === i + 1); return { player1_id: l?.player1_id || '', player2_id: l?.player2_id || '', empty: !!l && !l.player1_id && !l.player2_id }; })); setStep('submitted'); }
-    } else if (tie) { setLineups(Array.from({ length: tie.rubber_count }, () => ({ player1_id: '', player2_id: '' }))); setStep('edit'); }
+  }
+
+  // 같은 클럽 팀끼리 붙은 대전 — 고른 팀으로 다시 들어감 (오더 화면에서 다른 팀으로 바꾸기도 이걸로)
+  async function pickSide(side: 'a' | 'b') {
+    if (!clubA || !clubB) return;
+    sessionStorage.setItem(sideKey, side);
+    setError(''); setLoading(true);
+    try {
+      const { data: t } = await supabase.from('ties').select('*').eq('id', tieId).single();
+      if (t) { setTie(t); await tryAutoLogin(pinInput, clubA, clubB, t); }
+    } finally { setLoading(false); }
   }
 
   async function handleSubmit() {
@@ -246,10 +264,11 @@ export default function LineupPage() {
   async function handleScorePin() {
     if (pinInput.length !== 6) { setScoreError('PIN 6자리를 입력하세요.'); return; }
     setScoreError('');
-    const res = await verifyCaptain(tieId, pinInput);
+    const res = await verifyCaptain(tieId, pinInput, readSide());
     if (!res.success || !clubA || !clubB) { setScoreError(res.error || 'PIN이 일치하지 않습니다.'); return; }
+    setBothSides(!!res.both_sides);
     setMyClub(res.side === 'a' ? clubA : clubB); setOpponentClub(res.side === 'a' ? clubB : clubA);
-    sessionStorage.setItem(`captain_pin_${tieId}`, pinInput);
+    savePin(pinInput);
   }
 
   function getMemberName(id: string): string { return allMembers[id]?.name || members.find(m => m.id === id)?.name || '-'; }
@@ -326,6 +345,8 @@ export default function LineupPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-lg mx-auto p-6 space-y-6">
+        {/* 내 대전 목록 — /pin 이 저장된 주장 PIN 으로 바로 목록을 보여 줌 (PIN 다시 안 넣음) */}
+        <Link href="/pin?team=1" className="inline-block text-sm text-gray-500 hover:text-gray-700">← 내 대전 목록</Link>
         <div className="text-center">
           <h1 className="text-xl font-bold">단체전</h1>
           {/* ★ 라운드 배지를 크게 표시 — 같은 팀이 여러 라운드에 있을 때 혼동 방지 */}
@@ -359,7 +380,19 @@ export default function LineupPage() {
           )}
         </div>
 
-        {step === 'pin' && (
+        {step === 'pin' && sideChoice && clubA && clubB && (
+          <div className="bg-white rounded-xl border p-6 space-y-3">
+            <h2 className="font-semibold text-center">어느 팀 오더를 입력할까요?</h2>
+            <p className="text-sm text-gray-500 text-center">같은 클럽 팀끼리 붙은 대전이라 PIN 이 두 팀 다 맞습니다.</p>
+            {([['a', clubA], ['b', clubB]] as const).map(([s, c]) => (
+              <button key={s} onClick={() => pickSide(s)}
+                className="w-full border-2 border-blue-200 rounded-xl py-3 font-bold text-blue-700 hover:border-blue-500">{c.name}</button>
+            ))}
+            <p className="text-xs text-gray-400 text-center">한 팀 제출 뒤 화면 아래에서 다른 팀으로 바꿀 수 있습니다.</p>
+          </div>
+        )}
+
+        {step === 'pin' && !sideChoice && (
           <div className="bg-white rounded-xl border p-6 space-y-4">
             <h2 className="font-semibold text-center">주장 인증</h2>
             <p className="text-sm text-gray-500 text-center">주장 PIN 6자리를 입력하세요.</p>
@@ -423,6 +456,13 @@ export default function LineupPage() {
             <button onClick={handleSubmit} disabled={submitting} className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold text-lg hover:bg-blue-700 disabled:opacity-50">
               {submitting ? '제출중...' : '🔒 라인업 봉인 제출'}</button>
           </div>
+        )}
+
+        {bothSides && (step === 'edit' || step === 'submitted') && myClub && opponentClub && clubA && (
+          <button onClick={() => pickSide(opponentClub.id === clubA.id ? 'a' : 'b')}
+            className="w-full border-2 border-dashed border-amber-300 bg-amber-50 text-amber-800 rounded-xl py-3 text-sm font-medium">
+            ↔ {opponentClub.name} 오더 입력하기 (같은 PIN)
+          </button>
         )}
 
         {step === 'submitted' && myClub && (
@@ -538,7 +578,7 @@ export default function LineupPage() {
               <div className="bg-white rounded-xl border p-4 space-y-2">
                 <p className="text-sm text-gray-600 text-center">점수 입력은 이 대전 주장 PIN 확인 후 가능합니다.</p>
                 <div className="flex gap-2">
-                  <input type="tel" maxLength={6} value={pinInput} onChange={e => setPinInput(e.target.value.replace(/D/g, ''))} placeholder="주장 PIN 6자리"
+                  <input type="tel" maxLength={6} value={pinInput} onChange={e => setPinInput(e.target.value.replace(/\D/g, ''))} placeholder="주장 PIN 6자리"
                     className="flex-1 text-center tracking-widest border-2 rounded-lg py-2 focus:border-blue-500 outline-none" onKeyDown={e => e.key === 'Enter' && handleScorePin()} />
                   <button onClick={handleScorePin} className="bg-blue-600 text-white px-4 rounded-lg text-sm font-medium">확인</button>
                 </div>
