@@ -3,8 +3,10 @@
 // src/lib/lineup-deadline.ts
 //
 // 마감 = 차례가 된 시각 + 10분 (여러 날 대회는 오늘 경기일 부서만 — pickBoardDate)
-//   차례가 된 시각 = 같은 코트 앞 순서(개인전·단체전 섞임, court_order) 경기가 모두 끝난 시각과
-//                    이 대전의 코트 배정 시각(ties.court_assigned_at) 중 늦은 쪽
+//   차례가 된 시각 = 같은 코트 앞 순서(개인전·단체전 섞임, court_order) 경기가 모두 끝난 시각,
+//                    이 대전의 코트 배정 시각(ties.court_assigned_at),
+//                    두 팀이 직전 대전을 끝낸 시각(ties.ended_at, 040) 중 가장 늦은 쪽
+//   (상대가 정해지기 전에 코트를 미리 잡으면 배정 시각이 한참 앞이라, 상대를 정한 다른 코트 대전 종료가 기준)
 // ============================================================
 import type { TieWithClubs } from '@/types/team';
 
@@ -69,7 +71,10 @@ export function classifyPending(
     const ahead = queue.filter(q => q.court === court && q.key !== 't' + t.id && q.order < tieOrder(t));
     const left = ahead.filter(q => !q.finished).length;
     if (left > 0) { items.push({ kind: 'waiting', tie: t, court, ahead: left }); continue; }
-    const times = [...ahead.map(q => q.endedAt), (t as any).court_assigned_at as string | null]
+    const teamsDone = ties.filter(o => o.id !== t.id && o.status === 'completed'
+      && [o.club_a_id, o.club_b_id].some(c => !!c && (c === t.club_a_id || c === t.club_b_id)))
+      .map(o => (o as any).ended_at as string | null);
+    const times = [...ahead.map(q => q.endedAt), (t as any).court_assigned_at as string | null, ...teamsDone]
       .filter((x): x is string => !!x).map(x => new Date(x).getTime());
     items.push({ kind: 'turn', tie: t, court, deadline: times.length ? Math.max(...times) + LINEUP_DEADLINE_MIN * 60000 : null });
   }

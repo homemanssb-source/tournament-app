@@ -88,5 +88,20 @@ check(nd.kind === 'turn' && nd.deadline === t0 + 15 * min, '⑩ 다른 날 개�
 check(!r.items.some(i => i.tie.division_id === 'd01'), '⑩ 다음날 대전은 현황판에 없음')
 check(filterBoardDate(ties10, ms10, divDates, null).ties.length === 4, '⑩ 날짜 null → 전부')
 
+// ⑪ 상대 미정일 때 코트를 미리 잡은 대전 (재성 10/31 3부 4강·결승 모양, 040)
+//   4강 자유시대 vs 라온: 13:34 회천-5 배정, 자유시대는 15:41 다른 코트(회천-7) 8강 종료 → 마감 15:51
+const ties11 = [
+  T('q7', { court_number: 2, court_order: 3, club_a_id: 'JY', club_b_id: 'HR', status: 'completed', lineup_revealed: true, ended_at: iso(t0 + 121 * min) }),
+  T('q5', { court_number: 1, court_order: 1, club_a_id: 'LB', club_b_id: 'LO', status: 'completed', lineup_revealed: true, ended_at: iso(t0 + 30 * min) }),
+  T('s5', { court_number: 1, court_order: 3, club_a_id: 'JY', club_b_id: 'LO', court_assigned_at: iso(t0 - 6 * min) }),
+]
+r = classifyPending(ties11, [], cn)
+check(r.items.length === 1 && r.items[0].deadline === t0 + 131 * min, '⑪ 두 팀 직전 대전 종료(다른 코트 포함) + 10분', r.items)
+r = classifyPending(ties11.map(t => ({ ...t, ended_at: null })), [], cn)
+check(r.items[0].deadline === t0 + 4 * min, '⑪ 종료 시각이 없던 때(040 전) → 배정 + 10분 (오늘 증상)', r.items)
+const other = T('x', { court_number: 3, club_a_id: 'ZZ', club_b_id: 'YY', status: 'completed', lineup_revealed: true, ended_at: iso(t0 + 300 * min) })
+r = classifyPending([...ties11, other], [], cn)
+check(r.items[0].deadline === t0 + 131 * min, '⑪ 다른 팀 대전 종료는 무관', r.items)
+
 console.log(`\n${pass} pass / ${fail} fail`)
 process.exit(fail ? 1 : 0)

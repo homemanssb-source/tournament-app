@@ -224,7 +224,9 @@ async function handleTieFinished(body: any) {
   Object.assign(logRow, { team_a_name: nameOf(next.club_a_id), team_b_name: nameOf(next.club_b_id), division_name: divisionName })
 
   // 오더 미제출 쪽 → 마감(끝난 시각·배정 시각 중 늦은 쪽 + 10분) 안내, 현황판 자동 알림 선점
-  const missing = new Set((['a', 'b'] as const).filter(s => !next.lineup_revealed && !next[`club_${s}_lineup_submitted`])
+  //   상대가 아직 TBD 면 차례가 아님 → 마감 없이 준비 알림만 (현황판이 상대가 정해진 뒤 자동 알림)
+  const bothKnown = !!next.club_a_id && !!next.club_b_id
+  const missing = new Set((['a', 'b'] as const).filter(s => bothKnown && !next.lineup_revealed && !next[`club_${s}_lineup_submitted`])
     .map(s => next[`club_${s}_id`]).filter(Boolean))
   let until = ''
   if (missing.size > 0) {
