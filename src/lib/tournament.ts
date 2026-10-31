@@ -181,7 +181,8 @@ export function isPendingByeTie(t: {
   if (t.is_bye || t.status === 'completed' || t.status === 'bye') return false
   const a = !!(t.club_a_id || t.qualifier_label_a)
   const b = !!(t.club_b_id || t.qualifier_label_b)
-  return a !== b
+  // 이름표("A조 1위")가 있어야 부전승 자리 — 8강 이후 '승자 vs TBD'(앞 대전 진행 중)는 숨기지 않음
+  return a !== b && !!(t.qualifier_label_a || t.qualifier_label_b)
 }
 
 export async function fetchPendingByeIds(eventId: string | null | undefined): Promise<Map<string, string>> {
