@@ -1,5 +1,6 @@
 'use client'
 import { useRef, useEffect } from 'react'
+import { PlayerName } from '@/components/PlayerDetailSheet'
 
 // ============================================================
 // src/components/TournamentBracket.tsx
@@ -386,11 +387,9 @@ function TeamRow({ raw, won, muted, tbd, candidates }: {
         <div key={i} className="flex items-start gap-0.5 min-w-0 flex-1">
           {i > 0 && <span className="text-stone-300 text-[10px] flex-shrink-0 pt-px">/</span>}
           <div className="min-w-0 flex-1">
-            <div className={`text-xs font-bold leading-tight whitespace-nowrap ${
+            <PlayerName name={p.name} club={p.club} className={`block text-xs font-bold leading-tight whitespace-nowrap ${
               won ? 'text-green-800' : muted ? 'text-stone-300' : 'text-stone-800'
-            }`}>
-              {p.name}
-            </div>
+            }`} />
             {p.club && (
               <div className={`text-[10px] leading-tight truncate ${
                 won ? 'text-green-600' : muted ? 'text-stone-200' : 'text-stone-400'

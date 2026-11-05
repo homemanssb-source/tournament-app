@@ -14,6 +14,7 @@ import Link from 'next/link'
 import { supabase, Division, Match } from '@/lib/supabase'
 import TournamentBracket from '@/components/TournamentBracket'
 import CourtBoard from '@/components/CourtBoard'
+import { PlayerDetailProvider, PlayerName } from '@/components/PlayerDetailSheet'
 import { parseScorePair, isWalkoverScore } from '@/lib/score'
 import { fetchClubs, fetchTies, fetchStandings, fetchEventTeamConfig } from '@/lib/team-api'
 import { getFormatLabel, getRoundLabel, getTieStatusLabel, getTieStatusColor, getMajority } from '@/lib/team-utils'
@@ -67,7 +68,8 @@ function PlayerPair({ raw, winner, trophy, align = 'left' }: { raw: string; winn
         <React.Fragment key={i}>
           {i > 0 && <span className={`text-stone-300 font-normal flex-shrink-0 text-sm leading-tight ${winner ? 'text-[#2d5016]' : ''}`}>/</span>}
           <div className={`min-w-0 ${align === 'right' ? 'text-right' : ''}`}>
-            <div className={`text-sm font-bold leading-tight truncate ${winner ? 'text-[#2d5016]' : 'text-stone-700'}`}>{p.name}</div>
+            <PlayerName name={p.name} club={p.club}
+              className={`block text-sm font-bold leading-tight truncate ${winner ? 'text-[#2d5016]' : 'text-stone-700'}`} />
             {p.club && (
               <div className={`text-[10px] text-stone-400 leading-tight truncate ${align === 'right' ? 'text-right' : ''}`} title={p.club}>
                 {shortClub(p.club)}
@@ -240,6 +242,7 @@ export default function EventDetailPage() {
   const liveTies = ties.filter(t => t.status === 'in_progress')
 
   return (
+    <PlayerDetailProvider>
     <div className="min-h-screen">
       <header className="bg-[#2d5016] text-white sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
@@ -385,6 +388,7 @@ export default function EventDetailPage() {
         </>)}
       </main>
     </div>
+    </PlayerDetailProvider>
   )
 }
 
