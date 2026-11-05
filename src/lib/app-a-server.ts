@@ -14,6 +14,17 @@ export function getAppAClient() {
   return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
 }
 
+// 앱A 공개(anon) 접속 — 누구나 부르는 공개 API 용.
+// 앱A 가 공개로 열어 둔 것(members_public 뷰, get_member_history 등)만 읽히므로 PIN·전화번호는 원천적으로 안 나온다.
+export function getAppAPublicClient() {
+  const url = process.env.APP_A_SUPABASE_URL
+  // anon 키가 없으면 서비스 키로 대신 (호출하는 쪽이 공개 열만 골라 읽으므로 내보내는 정보는 같다)
+  const key = process.env.APP_A_ANON_KEY || process.env.APP_A_SERVICE_ROLE_KEY
+  if (!url) throw new Error('APP_A_SUPABASE_URL not set')
+  if (!key) throw new Error('APP_A_ANON_KEY not set')
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
+}
+
 // 앱A 서비스 키가 설정돼 있는지 (키 값은 노출하지 않음)
 export function hasAppAServiceKey(): boolean {
   return !!process.env.APP_A_SERVICE_ROLE_KEY
