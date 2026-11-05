@@ -54,6 +54,7 @@ export async function GET(req: NextRequest) {
 
   // ── 1. 회원 찾기 ──
   let memberId = memberIdParam
+  let division: string | null = null   // 알면 랭킹을 상세 조회와 동시에 부른다
   let clubMismatch = false
   if (!memberId) {
     const { data: found, error } = await appA.from('members_public')
@@ -64,8 +65,8 @@ export async function GET(req: NextRequest) {
     if (error) return json({ ok: false, error: '앱A 회원 조회 실패' }, 502)
     const list = (found || []) as any[]
     const byClub = list.filter(m => clubMatches(m.club, club))
-    if (byClub.length === 1) memberId = byClub[0].member_id
-    else if (byClub.length === 0 && list.length === 1) { memberId = list[0].member_id; clubMismatch = !!club }
+    if (byClub.length === 1) { memberId = byClub[0].member_id; division = byClub[0].division }
+    else if (byClub.length === 0 && list.length === 1) { memberId = list[0].member_id; division = list[0].division; clubMismatch = !!club }
     else if (list.length === 0) return json({ ok: true, found: false, candidates: [] })
     else {
       const pool = byClub.length > 1 ? byClub : list
@@ -77,19 +78,23 @@ export async function GET(req: NextRequest) {
   }
 
   // ── 2. 상세 (앱A PlayerDetail 과 같은 조회) ──
-  const [hist, ext] = await Promise.all([
+  const fetchRankings = (div: string) => appA.rpc('get_rankings', {
+    p_division: div, p_season_year: year, p_limit: 100, p_offset: 0,
+  })
+  const [hist, ext, early] = await Promise.all([
     appA.rpc('get_member_history', { p_member_id: memberId, p_season_year: year }),
     appA.from('external_report_log').select(REPORT_COLS).eq('member_id', memberId)
       .order('tournament_date', { ascending: false }),
+    division ? fetchRankings(division) : Promise.resolve(null),
   ])
   const h: any = hist.data
   if (hist.error || !h?.ok || !h.member) return json({ ok: true, found: false, candidates: [] })
 
   let rank: number | null = null
   if (h.member.division) {
-    const { data: rankings } = await appA.rpc('get_rankings', {
-      p_division: h.member.division, p_season_year: year, p_limit: 100, p_offset: 0,
-    })
+    // 미리 부른 부서가 상세의 부서와 같으면 그대로 쓰고, 아니면(후보 선택 등) 지금 부른다
+    const rk = early && division === h.member.division ? early : await fetchRankings(h.member.division)
+    const rankings = rk?.data
     if (Array.isArray(rankings)) {
       const idx = rankings.filter((p: any) => p.total_points > 0).findIndex((p: any) => p.member_id === memberId)
       if (idx >= 0) rank = idx + 1
