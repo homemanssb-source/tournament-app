@@ -117,7 +117,11 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     }
 
     const indivMatches: CourtMatch[] = ((matchRes.data as any[]) || [])
-      .filter(m => m.score !== 'BYE').map(m => ({ ...m, is_team_tie: false }))
+      .filter(m => m.score !== 'BYE').map(m => ({
+        ...m, is_team_tie: false,
+        // 본선 미정 경기는 이름이 null → 검색(.toLowerCase) 오류 방지. 단체전과 같이 'TBD'
+        team_a_name: m.team_a_name || 'TBD', team_b_name: m.team_b_name || 'TBD',
+      }))
 
     const tieMatches: CourtMatch[] = ((tieRes.data as any[]) || []).filter(t => !t.is_bye).map(t => ({
       id: 'tie_' + t.id, match_num: 'T#' + t.tie_order,
