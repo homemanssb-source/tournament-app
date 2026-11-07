@@ -9,6 +9,7 @@ import { getTieStatusLabel, getTieStatusColor, formatSetScore, getMajority } fro
 import type { TieWithClubs, TeamLineup, ClubMember } from '@/types/team'
 import AdminBracketView from '@/components/AdminBracketView'
 import CourtBoard from '@/components/CourtBoard'
+import { useRefreshOnWake } from '@/hooks/useRefreshOnWake'
 import TeamStandingsPanel from '@/components/TeamStandingsPanel'
 import LineupPendingBoard, { type LineupNotifyBody } from '@/components/LineupPendingBoard'
 import LineupProxyForm from '@/components/LineupProxyForm'
@@ -114,6 +115,12 @@ export default function AdminPinManagePage() {
     }, 30000)
     return () => clearInterval(iv)
   }, [])
+  // 폰 화면을 껐다 켜면 바로 다시 불러오기
+  useRefreshOnWake(() => {
+    if (!session?.event_id) return
+    loadAllMatches(session.event_id)
+    loadTiesData(session.event_id)
+  })
 
   // 마스터 PIN 로그인 만료(12시간 또는 PIN 변경) → 로그인 화면으로
   function checkExpired(message?: string | null): boolean {
@@ -181,8 +188,10 @@ export default function AdminPinManagePage() {
   }
 
   async function loadAllMatches(eventId: string) {
-    const { data } = await supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId).order('slot')
-    setAllMatches(data || [])
+    const { data, error } = await supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId).order('slot')
+    // 불러오기 실패(폰 화면을 켠 직후 인터넷이 아직 안 붙은 경우 등) → 빈 목록으로 덮지 않고 이전 목록 유지
+    if (error || !data) return
+    setAllMatches(data)
   }
 
   async function loadTiesData(eventId: string) {

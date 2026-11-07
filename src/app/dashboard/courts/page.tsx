@@ -6,6 +6,7 @@ import { authHeaders } from '@/lib/auth-headers';
 import { useEventId, useDivisions } from '@/components/useDashboard'
 import { fillSlotsIfGroupComplete, groupPlaceholders, tieGroupPlaceholders, fetchPendingByeIds, isPendingByeTie } from '@/lib/tournament'
 import { requestSlotCheck } from '@/lib/slot-check'
+import { planLiveMove } from '@/lib/court-move'
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import type { TieWithClubs } from '@/types/team'
 import { roundKeyOf, zoneCourts, hasAnyZone, courtWindow, courtOpenAt, toMin, fromMin, ROUND_KEYS, type CourtZones } from '@/lib/court-zones'
@@ -789,6 +790,19 @@ export default function CourtsPage() {
       await supabase.from('ties').update({ court_number:courtNum, court_order:nextOrder }).eq('id', itemId.replace('tie_',''))
       sendCourtNotify(court, 'court_changed'); loadTies()
     } else {
+      // 진행 중 경기 이동: 새 코트에 진행 중 경기가 있으면 막고, 없으면 그 코트 맨 앞(지금 경기)으로
+      const cur = matches.find(m => m.id === itemId)
+      if (cur && cur.court !== court) {
+        const live = await planLiveMove(eventId, itemId, cur.status, court)
+        if (live?.error) { setMsg('❌ ' + live.error); return }
+        if (live) {
+          for (const s of live.shifts || []) await supabase.from('matches').update({ court_order: s.order }).eq('id', s.id)
+          await supabase.from('matches').update({ court, court_order: live.order }).eq('id', itemId)
+          courtOrderRef.current[court] = Math.max(courtOrderRef.current[court] || 0, live.order!, ...(live.shifts || []).map(s => s.order))
+          sendCourtNotify(court, 'court_changed', itemId); loadMatches()
+          return
+        }
+      }
       const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
       await supabase.from('matches').update({ court, court_order:nextOrder }).eq('id', itemId)
       sendCourtNotify(court, 'court_changed', itemId); loadMatches()

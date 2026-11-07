@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { groupPlaceholders } from '@/lib/tournament'
+import { useRefreshOnWake } from '@/hooks/useRefreshOnWake'
 
 interface CourtMatch {
   id: string; match_num: string; court: string; court_order: number
@@ -76,6 +77,8 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
       supabase.from('groups').select('id, group_label').eq('event_id', eventId),
       supabase.from('events').select('start_time').eq('id', eventId).maybeSingle(),
     ])
+    // 불러오기 실패(폰 화면을 켠 직후 인터넷이 아직 안 붙은 경우 등) → 빈 화면으로 덮지 않고 이전 화면 유지
+    if (matchRes.error || tieRes.error || venueRes.error) return
     {
       const byVenue: Record<string, string> = {}
       for (const v of (venueRes.data || []) as any[]) {
@@ -159,6 +162,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
     const i = setInterval(loadData, 15000)
     return () => clearInterval(i)
   }, [loadData])
+  useRefreshOnWake(loadData)
 
   // ✅ 오늘 기준 자동 선택 (없으면 가장 가까운 날짜)
   useEffect(() => {

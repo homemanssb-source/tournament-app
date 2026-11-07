@@ -6,6 +6,8 @@ import { fetchPendingByeIds, groupPlaceholders, isPendingByeTie } from '@/lib/to
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import AdminBracketView from '@/components/AdminBracketView'
 import VenueTieScoreSheet from '@/components/VenueTieScoreSheet'
+import { useRefreshOnWake } from '@/hooks/useRefreshOnWake'
+import { planLiveMove } from '@/lib/court-move'
 
 // ──────────────────────────────────────────────────────────
 // 현장관리 (경기장 PIN): 코트·대진표 조회 + 시작 + 점수입력 (끝난 경기 정정 불가, 단체전 복식 포함 — 031)
@@ -184,6 +186,8 @@ export default function VenueManagePage() {
         supabase.from('ties').select('id, court_order, round, status, is_bye, club_a_id, club_b_id, qualifier_label_a, qualifier_label_b, club_a_lineup_submitted, club_b_lineup_submitted, lineup_revealed').eq('event_id', session.event_id),
       ])
       if (error) {
+        // 인터넷 끊김(폰 화면을 켠 직후 등)은 서버 오류 코드가 없음 → 로그아웃하지 않고 이전 화면 유지, 다음 새로고침에 다시 시도
+        if (!error.code) return
         sessionStorage.removeItem('venue_session')
         router.push(session.is_admin ? '/admin-pin' : '/venue')
         return
@@ -211,12 +215,16 @@ export default function VenueManagePage() {
       const tiesShown = ties.map(t => tph[t.id] ? { ...t, team_a_name: tph[t.id].a ?? t.team_a_name, team_b_name: tph[t.id].b ?? t.team_b_name } : t)
       setMatches([...individual, ...tiesShown])
       setLastUpdate(new Date())
+    } catch {
+      // 불러오기 실패 → 이전 화면 유지 (다음 새로고침에 다시 시도)
     } finally {
       setLoading(false)
     }
   }, [session, router, groupLabels])
 
   useEffect(() => { loadData() }, [loadData])
+  // 폰 화면을 껐다 켜면 바로 다시 불러오기
+  useRefreshOnWake(loadData)
   // 필터가 바뀌면 이전 미리보기는 버림
   useEffect(() => { setPlan(null) }, [filterDiv, filterRound, dateFilter])
   // 미리보기 시트가 열려 있는 동안 뒤 화면 스크롤 막기 (모바일)
@@ -428,6 +436,18 @@ export default function VenueManagePage() {
       return null
     } else {
       // matches 는 직접 수정 불가(025b) — 경기장 세션 토큰으로 서버에서 처리
+      // 진행 중 경기 이동: 새 코트에 진행 중 경기가 있으면 막고, 없으면 그 코트 맨 앞(지금 경기)으로
+      if (courtName !== null && courtName !== item.court) {
+        const live = await planLiveMove(session.event_id, item.id, item.status, courtName)
+        if (live?.error) return live.error
+        if (live) {
+          for (const s of live.shifts || []) {
+            const e = await setMatchCourt(s.id, courtName, s.order)
+            if (e) return e
+          }
+          return await setMatchCourt(item.id, courtName, live.order!)
+        }
+      }
       const nextOrd = courtName === null ? null : await nextCourtOrderForMatches(courtName)
       return await setMatchCourt(item.id, courtName, nextOrd)
     }
