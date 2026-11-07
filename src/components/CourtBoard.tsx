@@ -40,7 +40,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
   const [query, setQuery]           = useState('')
   const [suggestions, setSugg]      = useState<string[]>([])
   const [showSugg, setShowSugg]     = useState(false)
-  const [searchResult, setResult]   = useState<{ name: string; court: string; idx: number } | null>(null)
+  const [searchName, setSearchName] = useState<string | null>(null)
   const [dateFilter, setDateFilter] = useState<string>(initialDate || 'ALL')
   const [venueFilter, setVenueFilter] = useState<string>('ALL')
   const [divMatchDates, setDivMatchDates] = useState<Record<string, string>>({})
@@ -225,7 +225,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
   )).sort()
 
   function handleQuery(v: string) {
-    setQuery(v); setResult(null)
+    setQuery(v); setSearchName(null)
     if (!v.trim()) { setSugg([]); setShowSugg(false); return }
     const filtered = allTeams.filter(t => t.toLowerCase().includes(v.toLowerCase()))
     setSugg(filtered.slice(0, 6)); setShowSugg(filtered.length > 0)
@@ -234,51 +234,51 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
   function doSearch(name?: string) {
     const target = (name ?? query).trim()
     setQuery(target); setSugg([]); setShowSugg(false)
-    if (!target) return
+    setSearchName(target || null)
+  }
+
+  // 검색한 팀의 위치 — 화면이 새로고침될 때마다 다시 계산 (예전엔 검색한 순간의 순서를 그대로 들고 있었음)
+  //   · 끝난 경기는 빼고 셈: 지금 경기 = 1번째, 그다음 = 2번째 … (예전엔 끝난 경기까지 세서 계속 '9번째')
+  //   · 그 팀 경기가 여러 개면 아직 안 끝난 경기 중 가장 빠른 것 (모두 끝났으면 '경기 완료')
+  const searchResult = searchName ? (() => {
+    const t = searchName.toLowerCase()
+    const hit = (m: CourtMatch) => m.team_a_name.toLowerCase().includes(t) || m.team_b_name.toLowerCase().includes(t)
+    let best: { court: string; ahead: number; isLive: boolean } | null = null
+    let doneCourt = ''
     for (const [court, cms] of byCourt) {
       const sorted = [...cms].sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
-      const idx = sorted.findIndex(m =>
-        m.team_a_name.toLowerCase().includes(target.toLowerCase()) ||
-        m.team_b_name.toLowerCase().includes(target.toLowerCase())
-      )
-      if (idx >= 0) { setResult({ name: target, court, idx }); return }
+      const open = sorted.filter(m => m.status !== 'FINISHED')
+      const live = open.find(m => m.status === 'IN_PROGRESS')
+      // 지금 경기(진행 중 → 없으면 첫 대기)를 맨 앞으로, 나머지는 순서대로
+      const queue = live ? [live, ...open.filter(m => m !== live)] : open
+      const i = queue.findIndex(hit)
+      if (i >= 0) {
+        const cand = { court, ahead: i, isLive: queue[i].status === 'IN_PROGRESS' }
+        if (!best || cand.isLive || (!best.isLive && cand.ahead < best.ahead)) best = cand
+      } else if (!doneCourt && sorted.some(hit)) {
+        doneCourt = court
+      }
     }
-    setResult({ name: target, court: '', idx: -1 })
-  }
+    if (best) return { name: searchName, court: best.court, ahead: best.ahead, isLive: best.isLive, allDone: false }
+    if (doneCourt) return { name: searchName, court: doneCourt, ahead: -1, isLive: false, allDone: true }
+    return { name: searchName, court: '', ahead: -1, isLive: false, allDone: false }
+  })() : null
 
   // 검색한 팀의 대기 상태
   const searchInfo = searchResult?.court ? (() => {
-    const cms     = (byCourt.get(searchResult.court) || []).sort((a,b) => (a.court_order||0)-(b.court_order||0))
-    const liveIdx = cms.findIndex(m => m.status === 'IN_PROGRESS')
-    const pendIdx = cms.findIndex(m => m.status === 'PENDING')
-    const curIdx  = liveIdx >= 0 ? liveIdx : pendIdx
-    const idx     = searchResult.idx
-
-    const isLive  = idx === liveIdx && liveIdx >= 0
-    const hasLive = liveIdx >= 0
-    const waitNum = idx > curIdx ? idx - curIdx : 0
-
+    const { ahead, isLive, allDone } = searchResult
     let posLabel = ''
     let urgency  = 0
-    if (isLive) {
+    if (allDone) {
+      posLabel = '경기 완료'; urgency = 0
+    } else if (isLive) {
       posLabel = '현재 경기 중'; urgency = 2
-    } else if (idx === curIdx && !hasLive) {
+    } else if (ahead === 0) {
       posLabel = '지금 내 차례'; urgency = 2
-    } else if (idx === curIdx && hasLive) {
-      posLabel = `${idx + 1}번째 경기`; urgency = 1
-    } else if (waitNum === 1) {
-      posLabel = `${idx + 1}번째 경기`; urgency = 1
     } else {
-      posLabel = `${idx + 1}번째 경기`; urgency = 0
+      posLabel = `${ahead + 1}번째 경기 · 앞에 ${ahead}경기`; urgency = ahead === 1 ? 1 : 0
     }
-
-    return {
-      isLive, hasLive,
-      wait: waitNum - 1 < 0 ? 0 : waitNum - 1,
-      urgency, posLabel,
-      total: cms.length,
-      done: cms.filter(m => m.status === 'FINISHED').length,
-    }
+    return { isLive, allDone, urgency, posLabel }
   })() : null
 
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
@@ -363,7 +363,7 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
             </div>
             <button onClick={() => doSearch()} className="px-4 py-2.5 bg-[#2d5016] text-white rounded-xl text-sm font-bold hover:bg-[#1e3a0f] transition-colors">검색</button>
             {query && (
-              <button onClick={() => { setQuery(''); setSugg([]); setResult(null); setShowSugg(false) }}
+              <button onClick={() => { setQuery(''); setSugg([]); setSearchName(null); setShowSugg(false) }}
                 className="px-3 py-2.5 border border-stone-300 rounded-xl text-sm text-stone-400 hover:text-stone-600">✕</button>
             )}
           </div>
@@ -388,7 +388,9 @@ export default function CourtBoard({ eventId, initialDate }: { eventId: string; 
                     searchInfo.urgency === 1 ? 'bg-amber-100 text-amber-700' :
                                                'bg-green-100 text-green-700'
                   }`}>
-                    {searchInfo.isLive
+                    {searchInfo.allDone
+                      ? '✅ 경기 완료'
+                      : searchInfo.isLive
                       ? '🔴 지금 경기 중!'
                       : searchInfo.urgency === 2
                         ? '⚡ 지금 내 차례!'
