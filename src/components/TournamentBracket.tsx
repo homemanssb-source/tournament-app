@@ -1,6 +1,7 @@
 'use client'
 import { useRef, useEffect } from 'react'
 import { PlayerName } from '@/components/PlayerDetailSheet'
+import { useNameSearch, hitSearch } from '@/lib/name-search'
 
 // ============================================================
 // src/components/TournamentBracket.tsx
@@ -76,6 +77,17 @@ export default function TournamentBracket({ matches }: { matches: BracketMatch[]
     body.addEventListener('scroll', onBodyScroll)
     return () => body.removeEventListener('scroll', onBodyScroll)
   }, [])
+
+  // 이름 검색: 검색한 팀이 가장 멀리 올라간 칸(= 지금 위치)으로 자동 이동
+  const q = useNameSearch()
+  useEffect(() => {
+    if (!q) return
+    const t = setTimeout(() => {
+      const hits = scrollRef.current?.querySelectorAll('[data-search-hit="1"]')
+      if (hits && hits.length) hits[hits.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' })
+    }, 50)
+    return () => clearTimeout(t)
+  }, [q, matches.length])
 
   const byRound = new Map<string, BracketMatch[]>()
   for (const m of matches) {
@@ -193,6 +205,8 @@ function MatchCard({ m, byRound, roundIdx, rounds }: {
   roundIdx?: number
   rounds?: string[]
 }) {
+  const q          = useNameSearch()
+  const isHit      = hitSearch(m.team_a_name, q) || hitSearch(m.team_b_name, q)
   const isBye      = m.score === 'BYE'
   const done       = m.status === 'FINISHED'
   const inProgress = m.status === 'IN_PROGRESS'
@@ -238,7 +252,8 @@ function MatchCard({ m, byRound, roundIdx, rounds }: {
   return (
     <div
       style={{ height: CARD_H }}
-      className={`rounded-lg border overflow-hidden shadow-sm flex flex-col ${
+      data-search-hit={isHit ? '1' : undefined}
+      className={`rounded-lg border overflow-hidden shadow-sm flex flex-col ${isHit ? 'ring-2 ring-yellow-400 ' : ''}${
         inProgress       ? 'border-red-300'
         : done && !isBye ? 'border-green-300'
         : isBye          ? 'border-amber-200'

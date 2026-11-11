@@ -6,6 +6,7 @@
 // - 데이터는 /api/player-detail (앱A 공개 정보만) 에서 가져온다.
 // ============================================================
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import { useNameSearch, hitSearch, HIT_CLASS } from '@/lib/name-search'
 
 type Target = { name: string; club: string; memberId?: string }
 const Ctx = createContext<((t: Target) => void) | null>(null)
@@ -21,6 +22,9 @@ export function PlayerName({ name, club, className, children }: {
   name: string; club?: string; className?: string; children?: React.ReactNode
 }) {
   const open = useContext(Ctx)
+  // 대회보기 이름 검색: 이름이나 클럽이 검색어와 맞으면 노란 바탕으로 강조
+  const q = useNameSearch()
+  if (q && (hitSearch(name, q) || hitSearch(club, q))) className = `${className || ''} ${HIT_CLASS}`
   if (!open || !name || name === 'TBD' || name === 'BYE') return <span className={className}>{children ?? name}</span>
   return (
     <button

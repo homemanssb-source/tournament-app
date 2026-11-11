@@ -19,6 +19,7 @@ import { parseScorePair, isWalkoverScore } from '@/lib/score'
 import { fetchClubs, fetchTies, fetchStandings, fetchEventTeamConfig } from '@/lib/team-api'
 import { getFormatLabel, getRoundLabel, getTieStatusLabel, getTieStatusColor, getMajority } from '@/lib/team-utils'
 import type { Club, TieWithClubs, StandingWithClub, EventTeamConfig } from '@/types/team'
+import { NameSearchContext, useNameSearch, normSearch, hitSearch } from '@/lib/name-search'
 import { computeLeagueStandings, leagueAllFinished, leaguePlacement, divisionTeamFormat, type LeagueRow } from '@/lib/league'
 
 type Mode = 'individual' | 'team'
@@ -113,6 +114,34 @@ export default function EventDetailPage() {
   const [selectedTeamDiv, setSelectedTeamDiv] = useState<string>('')
   // ✅ [FIX] venues — 코트명 변환에 필요
   const [venues, setVenues] = useState<Venue[]>([])
+
+  // 이름 검색 (개인전 조편성·토너먼트·경기결과 공용). nameIndex = 부서별 팀 이름 — 다른 부서에 있는지 알려주기 위함
+  const [searchInput, setSearchInput] = useState('')
+  const [nameIndex, setNameIndex] = useState<Record<string, string[]> | null>(null)
+  const q = normSearch(searchInput)
+  const searching = q.length > 0
+  useEffect(() => {
+    if (!searching || nameIndex) return
+    let off = false
+    ;(async () => {
+      const [g, m] = await Promise.all([
+        supabase.from('v_group_board').select('division_id, team_name').eq('event_id', eventId),
+        supabase.from('v_matches_with_teams').select('division_id, team_a_name, team_b_name').eq('event_id', eventId),
+      ])
+      if (off || (g.error && m.error)) return
+      const sets: Record<string, Set<string>> = {}
+      const add = (d?: string | null, n?: string | null) => {
+        if (!d || !n || n === 'TBD' || n === 'BYE') return
+        ;(sets[d] ||= new Set()).add(n)
+      }
+      for (const r of (g.data || []) as any[]) add(r.division_id, r.team_name)
+      for (const r of (m.data || []) as any[]) { add(r.division_id, r.team_a_name); add(r.division_id, r.team_b_name) }
+      const idx: Record<string, string[]> = {}
+      for (const d of Object.keys(sets)) idx[d] = Array.from(sets[d])
+      setNameIndex(idx)
+    })()
+    return () => { off = true }
+  }, [searching, nameIndex, eventId])
 
   useEffect(() => {
     (async () => {
@@ -241,6 +270,15 @@ export default function EventDetailPage() {
 
   const liveTies = ties.filter(t => t.status === 'in_progress')
 
+  // 이름 검색: 부서별로 몇 팀이 맞는지 (dateFilter 가 있으면 그 날짜 부서만)
+  const searchOn = mode === 'individual' && iTab !== 'courts'
+  const searchDivs = dateFilter ? divisions.filter((d: any) => d.match_date === dateFilter) : divisions
+  const hitCount = (divId: string) => (nameIndex?.[divId] || []).filter(n => hitSearch(n, q)).length
+  const hitsHere = searching && nameIndex ? hitCount(activeDivision) : 0
+  const hitsElsewhere = searching && nameIndex
+    ? searchDivs.filter(d => d.id !== activeDivision).map(d => ({ d, n: hitCount(d.id) })).filter(x => x.n > 0)
+    : []
+
   return (
     <PlayerDetailProvider>
     <div className="min-h-screen">
@@ -333,6 +371,39 @@ export default function EventDetailPage() {
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-6">
+        <NameSearchContext.Provider value={searchOn ? q : ''}>
+        {searchOn && (
+          <div className="bg-white rounded-xl border p-3 mb-4">
+            <div className="flex gap-2">
+              <input type="text" value={searchInput} onChange={e => setSearchInput(e.target.value)}
+                placeholder="🔍 이름 검색 (선수 이름 또는 클럽)" enterKeyHint="search"
+                onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+                className="flex-1 min-w-0 border border-stone-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[#2d5016]" />
+              {searchInput && (
+                <button onClick={() => setSearchInput('')} aria-label="검색 지우기"
+                  className="px-3 py-2.5 border border-stone-300 rounded-xl text-sm text-stone-400 hover:text-stone-600">✕</button>
+              )}
+            </div>
+            {searching && nameIndex && (
+              <div className="mt-2 flex items-center gap-1.5 flex-wrap text-xs">
+                {hitsHere === 0 && hitsElsewhere.length === 0 ? (
+                  <span className="text-red-600">검색한 이름을 찾지 못했습니다.</span>
+                ) : (<>
+                  <span className={hitsHere > 0 ? 'text-[#2d5016] font-bold' : 'text-stone-400'}>
+                    {hitsHere > 0 ? `이 부서 ${hitsHere}팀` : '이 부서에는 없음'}
+                  </span>
+                  {hitsElsewhere.length > 0 && <span className="text-stone-400 ml-1">다른 부서 →</span>}
+                  {hitsElsewhere.map(({ d, n }) => (
+                    <button key={d.id} onClick={() => setActiveDivision(d.id)}
+                      className="px-2.5 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 font-medium hover:bg-blue-100">
+                      {d.name} {n}팀
+                    </button>
+                  ))}
+                </>)}
+              </div>
+            )}
+          </div>
+        )}
         {mode === 'individual' && (<>
           {iTab === 'groups'     && <GroupsView eventId={eventId} divisionId={activeDivision} />}
           {iTab === 'tournament' && <TournamentView eventId={eventId} divisionId={activeDivision} />}
@@ -386,6 +457,7 @@ export default function EventDetailPage() {
             <p className="text-xs text-gray-300 mt-1">30초마다 자동 갱신</p>
           </div>
         </>)}
+        </NameSearchContext.Provider>
       </main>
     </div>
     </PlayerDetailProvider>
@@ -398,6 +470,7 @@ export default function EventDetailPage() {
 function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: string }) {
   const [data, setData] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const q = useNameSearch()
   useEffect(() => {
     setLoading(true)
     Promise.all([
@@ -425,9 +498,12 @@ function GroupsView({ eventId, divisionId }: { eventId: string; divisionId: stri
   }, [eventId, divisionId])
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
   if (!data.length) return <p className="text-center py-10 text-stone-400">아직 조편성이 없습니다.</p>
+  // 이름 검색: 그 이름이 있는 조만
+  const shown = q ? data.filter(g => g.teams.some((t: any) => hitSearch(t.team_name, q))) : data
+  if (!shown.length) return <p className="text-center py-10 text-stone-400">이 부서 조편성에 검색한 이름이 없습니다.</p>
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {data.map(g => (
+      {shown.map(g => (
         <div key={g.label} className="bg-white rounded-xl border overflow-hidden">
           <div className="bg-tennis-600 text-white px-4 py-2 font-bold text-sm">{g.label}</div>
           <div className="p-3">
@@ -448,6 +524,7 @@ function TournamentView({ eventId, divisionId }: { eventId: string; divisionId: 
   const [matches, setMatches] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [isLeague, setIsLeague] = useState(false)
+  const q = useNameSearch()
   useEffect(() => {
     setLoading(true)
     supabase.from('divisions').select('*').eq('id', divisionId).single()
@@ -472,7 +549,15 @@ function TournamentView({ eventId, divisionId }: { eventId: string; divisionId: 
       {isLeague ? '🔁 풀리그 부서입니다 — 본선 없이 리그 순위로 입상이 정해집니다. (경기결과 탭의 순위)' : '아직 토너먼트가 없습니다.'}
     </p>
   )
-  return <TournamentBracket matches={matches} />
+  const noHit = !!q && !matches.some(m => hitSearch(m.team_a_name, q) || hitSearch(m.team_b_name, q))
+  return (<>
+    {noHit && (
+      <p className="text-center text-xs text-stone-500 bg-stone-100 rounded-xl px-3 py-2 mb-3">
+        이 부서 본선 대진표에 검색한 이름이 없습니다. (본선 자리가 아직 안 정해졌거나 예선 탈락)
+      </p>
+    )}
+    <TournamentBracket matches={matches} />
+  </>)
 }
 
 // ✅ ResultsView — 조별 순위 + 경기결과 목록
@@ -483,6 +568,7 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
   const [league, setLeague] = useState<Record<string, LeagueBoard> | null>(null)
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState<'standings' | 'matches'>('standings')
+  const q = useNameSearch()
 
   useEffect(() => {
     if (!divisionId) return
@@ -552,8 +638,11 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
     })()
   }, [eventId, divisionId])
 
-  const groupMatches  = matches.filter(m => m.stage === 'GROUP')
-  const finalsMatches = matches.filter(m => m.stage === 'FINALS')
+  // 이름 검색: 그 이름이 나온 경기 / 그 이름이 있는 조만
+  const shownMatches  = q ? matches.filter(m => hitSearch(m.team_a_name, q) || hitSearch(m.team_b_name, q)) : matches
+  const groupMatches  = shownMatches.filter(m => m.stage === 'GROUP')
+  const finalsMatches = shownMatches.filter(m => m.stage === 'FINALS')
+  const shownGroups   = q ? groups.filter(g => (standings[g.id] || []).some(t => hitSearch(t.name, q))) : groups
 
   if (loading) return <p className="text-center py-10 text-stone-400">불러오는 중...</p>
 
@@ -567,7 +656,7 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
         </button>
         <button onClick={() => setView('matches')}
           className={`px-4 py-2 text-sm font-medium border-b-2 transition-all ${view === 'matches' ? 'border-[#2d5016] text-[#2d5016]' : 'border-transparent text-stone-400'}`}>
-          🎾 경기 결과 ({matches.length})
+          🎾 경기 결과 ({shownMatches.length})
         </button>
       </div>
 
@@ -580,7 +669,10 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
       {view === 'standings' && !league && (
         <div className="space-y-3">
           {groups.length === 0 && <p className="text-center py-8 text-stone-400">조편성 데이터가 없습니다.</p>}
-          {groups.map(g => {
+          {q && groups.length > 0 && shownGroups.length === 0 && (
+            <p className="text-center py-8 text-stone-400">이 부서 조별 순위에 검색한 이름이 없습니다. (아직 끝난 경기가 없을 수 있어요)</p>
+          )}
+          {shownGroups.map(g => {
             const ranked = standings[g.id] || []
             if (ranked.length === 0) return null
             return (
@@ -660,8 +752,8 @@ function ResultsView({ eventId, divisionId }: { eventId: string; divisionId: str
               </div>
             </div>
           )}
-          {matches.length === 0 && (
-            <p className="text-center py-8 text-stone-400">완료된 경기가 없습니다.</p>
+          {shownMatches.length === 0 && (
+            <p className="text-center py-8 text-stone-400">{q && matches.length > 0 ? '검색한 이름의 완료된 경기가 없습니다.' : '완료된 경기가 없습니다.'}</p>
           )}
         </div>
       )}
