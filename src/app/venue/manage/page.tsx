@@ -8,6 +8,7 @@ import AdminBracketView from '@/components/AdminBracketView'
 import VenueTieScoreSheet from '@/components/VenueTieScoreSheet'
 import { useRefreshOnWake } from '@/hooks/useRefreshOnWake'
 import { planLiveMove } from '@/lib/court-move'
+import { normSearch, hitSearch, HIT_CLASS } from '@/lib/name-search'
 
 // ──────────────────────────────────────────────────────────
 // 현장관리 (경기장 PIN): 코트·대진표 조회 + 시작 + 점수입력 (끝난 경기 정정 불가, 단체전 복식 포함 — 031)
@@ -96,6 +97,7 @@ export default function VenueManagePage() {
 
   // ── 화면: 코트 / 대진표 ──
   const [view, setView] = useState<'courts' | 'bracket'>('courts')
+  const [nameQuery, setNameQuery] = useState('')   // 코트 화면 이름 검색
 
   // ── 세션 로드
   useEffect(() => {
@@ -275,6 +277,19 @@ export default function VenueManagePage() {
       byCourt.get(m.court)!.push(m)
     }
   }
+
+  // ── 이름 검색: 선수·팀·클럽 이름이 들어간 경기와 그 코트·순서 (날짜 필터 기준)
+  const nameQ = normSearch(nameQuery)
+  const isNameHit = (m: VenueMatch) => hitSearch(m.team_a_name, nameQ) || hitSearch(m.team_b_name, nameQ)
+  const nameHits = !nameQ ? [] : dateFilteredMatches.filter(isNameHit).map(m => {
+    // 같은 코트에서 이 경기보다 앞선, 아직 안 끝난 경기 수
+    const ahead = m.court && m.status === 'PENDING'
+      ? (byCourt.get(m.court) || []).filter(o =>
+          o.id !== m.id && o.status !== 'FINISHED' && (o.court_order || 0) < (m.court_order || 0)).length
+      : 0
+    const rank = m.status === 'IN_PROGRESS' ? 0 : m.status === 'FINISHED' ? 3 : m.court ? 1 : 2
+    return { m, ahead, rank }
+  }).sort((a, b) => a.rank - b.rank || a.ahead - b.ahead || (a.m.court_order || 0) - (b.m.court_order || 0))
 
   // 코트별 "지금 경기"에 같은 선수가 두 코트 이상 걸린 경우
   const courtConflicts = findCourtConflicts(dateFilteredMatches)
@@ -761,6 +776,63 @@ export default function VenueManagePage() {
         ) : (
           <div className="space-y-4">
 
+            {/* 이름 검색 — 선수가 물어볼 때 코트·순서 바로 안내 */}
+            <div className="bg-white border border-stone-200 rounded-xl p-3">
+              <div className="flex items-center gap-2">
+                <input
+                  type="search" value={nameQuery} onChange={e => setNameQuery(e.target.value)}
+                  placeholder="🔍 이름·클럽 검색 (어느 코트, 몇 번째인지)"
+                  className="flex-1 min-w-0 border border-stone-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-orange-400" />
+                {nameQuery && (
+                  <button onClick={() => setNameQuery('')}
+                    className="text-xs text-stone-500 px-3 py-2 rounded-lg border border-stone-200 hover:bg-stone-50 whitespace-nowrap">
+                    지우기
+                  </button>
+                )}
+              </div>
+              {nameQ && (
+                nameHits.length === 0 ? (
+                  <p className="mt-2 text-sm text-stone-400 text-center py-2">찾는 이름의 경기가 없습니다.</p>
+                ) : (
+                  <div className="mt-2 space-y-1.5 max-h-[45vh] overflow-y-auto">
+                    <p className="text-xs text-stone-400">{nameHits.length}경기</p>
+                    {nameHits.map(({ m, ahead }) => {
+                      const rl = roundLabelKR(m.round)
+                      const statusText =
+                        m.status === 'FINISHED' ? `완료${m.score ? ' ' + m.score : ''}` :
+                        m.status === 'IN_PROGRESS' ? '🔴 진행중' :
+                        !m.court ? '코트 미배정' :
+                        ahead === 0 ? '▶ 다음 차례' : `앞에 ${ahead}경기`
+                      const statusStyle =
+                        m.status === 'FINISHED' ? 'bg-stone-100 text-stone-500' :
+                        m.status === 'IN_PROGRESS' ? 'bg-red-100 text-red-700' :
+                        !m.court ? 'bg-amber-100 text-amber-700' :
+                        ahead === 0 ? 'bg-orange-100 text-orange-700' : 'bg-blue-50 text-blue-700'
+                      return (
+                        <div key={m.id} className="border border-stone-200 rounded-lg px-3 py-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 text-xs text-stone-500">
+                              <span className="font-bold text-sm text-[#2d5016]">📍 {m.court || '미배정'}</span>
+                              {m.court && <span className="ml-1 font-mono">#{m.court_order}</span>}
+                              <span className="ml-2">{m.division_name || '-'} · {m.group_label ? `${rl} ${m.group_label}` : rl}</span>
+                            </div>
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${statusStyle}`}>
+                              {statusText}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-sm font-semibold text-stone-800 leading-snug">
+                            <span className={hitSearch(m.team_a_name, nameQ) ? HIT_CLASS : ''}>{m.team_a_name || 'TBD'}</span>
+                            <span className="mx-1.5 text-xs font-normal text-stone-400">vs</span>
+                            <span className={hitSearch(m.team_b_name, nameQ) ? HIT_CLASS : ''}>{m.team_b_name || 'TBD'}</span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              )}
+            </div>
+
             {/* 배정 메시지 */}
             {assignMsg && (
               <div className={`p-2.5 rounded-xl text-sm font-medium ${
@@ -896,6 +968,7 @@ export default function VenueManagePage() {
                             m={inProgressMatch}
                             badge="🔴 진행중"
                             badgeStyle="bg-red-50 border-red-300"
+                            hit={!!nameQ && isNameHit(inProgressMatch)}
                             conflicts={courtConflicts.get(inProgressMatch.id)}
                             canStart={false}
                             onStart={() => {}}
@@ -926,6 +999,7 @@ export default function VenueManagePage() {
                               m={m}
                               badge={badge}
                               badgeStyle={badgeStyle}
+                              hit={!!nameQ && isNameHit(m)}
                               conflicts={courtConflicts.get(m.id)}
                               canStart={canStart}
                               onStart={() => startMatch(m.id)}
@@ -1162,10 +1236,11 @@ export default function VenueManagePage() {
 }
 
 // ── 코트 경기 카드 (재배정 드롭다운 포함)
-function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, onScore, onTieScore, courts, onAssign, onMoveUp, onMoveDown }: {
+function CourtMatchCard({ m, badge, badgeStyle, hit, conflicts, canStart, onStart, onScore, onTieScore, courts, onAssign, onMoveUp, onMoveDown }: {
   m: VenueMatch
   badge: string
   badgeStyle: string
+  hit?: boolean   // 이름 검색에 걸린 경기 (파란 테두리)
   conflicts?: PlayerConflict[]
   canStart: boolean
   onStart: () => void
@@ -1198,7 +1273,7 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
   }
   return (
     <div onClick={handleTap}
-      className={`rounded-xl border-2 p-3 transition-all ${badgeStyle} ${canTapScore ? 'cursor-pointer active:brightness-95' : ''}`}>
+      className={`rounded-xl border-2 p-3 transition-all ${badgeStyle} ${canTapScore ? 'cursor-pointer active:brightness-95' : ''} ${hit ? 'ring-2 ring-blue-500' : ''}`}>
       <div className="flex items-center justify-between mb-2 gap-1">
         <div className="flex items-center gap-1.5 min-w-0 flex-1 flex-wrap">
           <span className="text-xs font-mono text-stone-400 flex-shrink-0">#{m.court_order}</span>
