@@ -1189,8 +1189,16 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
       {done ? '오더 ✓' : '오더 미제출'}
     </span>
   )
+  // 칸 전체를 누르면 점수 입력 (상대 미정이면 열지 않음). 안쪽 버튼들은 전파를 막아 각자 동작.
+  const canTapScore = !!m.team_a_id && !!m.team_b_id && (m.is_team_tie ? !!onTieScore : true)
+  const handleTap = () => {
+    if (!canTapScore) return
+    if (m.is_team_tie) onTieScore?.()
+    else onScore()
+  }
   return (
-    <div className={`rounded-xl border-2 p-3 transition-all ${badgeStyle}`}>
+    <div onClick={handleTap}
+      className={`rounded-xl border-2 p-3 transition-all ${badgeStyle} ${canTapScore ? 'cursor-pointer active:brightness-95' : ''}`}>
       <div className="flex items-center justify-between mb-2 gap-1">
         <div className="flex items-center gap-1.5 min-w-0 flex-1 flex-wrap">
           <span className="text-xs font-mono text-stone-400 flex-shrink-0">#{m.court_order}</span>
@@ -1220,7 +1228,7 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1 flex-shrink-0 ml-1">
+        <div className="flex items-center gap-1 flex-shrink-0 ml-1" onClick={e => e.stopPropagation()}>
           {canStart && (
             <button onClick={onStart}
               className="text-xs bg-red-500 text-white px-2.5 py-1 rounded-lg hover:bg-red-600 font-bold transition-all shadow-sm">
@@ -1286,7 +1294,7 @@ function CourtMatchCard({ m, badge, badgeStyle, conflicts, canStart, onStart, on
 
       {/* 코트 이동/해제 드롭다운 */}
       {showMove && onAssign && (
-        <div className="mt-2 pt-2 border-t border-stone-100 flex items-center gap-2">
+        <div className="mt-2 pt-2 border-t border-stone-100 flex items-center gap-2" onClick={e => e.stopPropagation()}>
           <select
             defaultValue={m.court || ''}
             onChange={e => {
