@@ -5,6 +5,7 @@ import { requestSlotCheck } from '@/lib/slot-check'
 import { useEventId, useDivisions, DivisionTabs } from '@/components/useDashboard'
 import SeedPanel, { type SeedCandidate } from '@/components/SeedPanel'
 import { calcGroupDistribution, saveSeeds } from '@/lib/seed'
+import { authHeaders } from '@/lib/auth-headers'
 import { parseScorePair } from '@/lib/score'
 import DivisionOverview from '@/components/DivisionOverview'
 import { computeLeagueStandings, fullLeagueMatchCount, leaguePlacement } from '@/lib/league'
@@ -247,7 +248,8 @@ export default function GroupsPage() {
   async function generateGroups() {
     const seedCount = divTeams.filter(t => t.seed != null).length
     const groupCount = calcGroupDistribution(divTeams.length, groupSize).length
-    if (seedCount > groupCount) {
+    // 전체 랭킹제(전 팀 시드)는 허용 — 서버가 순위대로 지그재그 배치
+    if (seedCount > groupCount && seedCount !== divTeams.length) {
       setMsg(`❌ 시드(${seedCount}팀)가 조 수(${groupCount}개)보다 많습니다. 시드 수를 줄이거나 조당 인원을 줄여주세요.`)
       return
     }
@@ -447,6 +449,13 @@ export default function GroupsPage() {
           maxSeeds={calcGroupDistribution(divTeams.length, groupSize).length}
           unit="팀"
           onSave={async ids => { await saveSeeds('teams', eventId, selected, ids); await loadGroups() }}
+          loadRanking={async () => {
+            const res = await fetch('/api/seed-ranking', {
+              method: 'POST', headers: await authHeaders(),
+              body: JSON.stringify({ event_id: eventId, division_id: selected }),
+            })
+            return res.json()
+          }}
         />
       )}
 
@@ -500,7 +509,9 @@ export default function GroupsPage() {
         </div>
         <p className="text-xs text-stone-400 mt-2">
           * 1팀 조 방지 보정 자동 적용 (2+1→3, 3+1→2+2, 4+1→3+2)
-          {divTeams.some(t => t.seed != null) && ' · 시드는 서로 다른 조 첫 자리에 배치'}
+          {divTeams.some(t => t.seed != null) && (divTeams.every(t => t.seed != null)
+            ? ' · 전체 랭킹제: 순위대로 지그재그 배치 (추첨 없음)'
+            : ' · 시드는 서로 다른 조 첫 자리에 배치')}
         </p>
       </div>}
 
