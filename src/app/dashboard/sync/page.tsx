@@ -290,7 +290,7 @@ function SyncDashboardInner() {
                   <p key={`w${i}`} className="text-orange-600 text-xs">⚠️ {w}</p>
                 ))}
                 {syncResult.unmatched?.map((u: string, i: number) => (
-                  <p key={`u${i}`} className="text-orange-600 text-xs">⚠️ 부서매핑 실패: {u}</p>
+                  <p key={`u${i}`} className="text-orange-600 text-xs">⚠️ 회원 매칭 실패(동명이인·클럽 불일치): {u}</p>
                 ))}
                 {syncResult.errors?.map((e: string, i: number) => (
                   <p key={i} className="text-red-600 text-xs">❌ {e}</p>
