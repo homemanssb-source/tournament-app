@@ -457,6 +457,15 @@ export default function PinMatchesPage() {
     if (loserN > maxLoser) { setMsg(`패자 점수는 ${maxLoser}점 이하여야 합니다.`); return }
     const winScore = tiebreakAt === 6 ? (loserN >= 5 ? 7 : 6) : 6
     const score = winner === 'A' ? `${winScore}:${loser}` : `${loser}:${winScore}`
+    // ✅ 저장 전 확인 — 어느 경기에 넣는지(라운드·상대) 보여 줌 (앞 경기 점수를 다음 경기에 한 번 더 넣는 실수 방지)
+    const oppName = (winner === 'A' ? match.team_b_name : match.team_a_name) || '상대 미정'
+    const roundName = match.group_label ? `예선 ${match.group_label}` : (ROUND_LABEL[match.round] || match.round)
+    if (!window.confirm(`${match.division_name} ${roundName}
+상대: ${oppName}
+
+우리 팀 ${winScore} : ${loser} 승리로 저장할까요?
+
+방금 끝난 경기가 맞는지 확인해 주세요.`)) return
     setSubmitting(matchId); setMsg('')
 
     const { error } = await supabase.rpc('rpc_pin_submit_score', {
@@ -649,7 +658,8 @@ export default function PinMatchesPage() {
                     const isCourtTurn = !isLive && !isDone && !!m.team_a_id && !!m.team_b_id
                       && !rawQueue.some(q => q.status === 'IN_PROGRESS')
                       && rawQueue.find(q => q.status !== 'FINISHED')?.id === m.id
-                    const canInput = (isLive || isCourtTurn) && !m.locked_by_participant
+                    // 상대가 아직 안 정해진 경기는 '진행 중'으로 표시돼 있어도 점수 입력칸을 열지 않음
+                    const canInput = (isLive || isCourtTurn) && !m.locked_by_participant && !!m.team_a_id && !!m.team_b_id
                     const queue    = rawQueue.map(decoQueue)
                     const showQueue = m.court && queue.length > 0 && !isDone
                     const loser    = loserScores[m.id] || ''

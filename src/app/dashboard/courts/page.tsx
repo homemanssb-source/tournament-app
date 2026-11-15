@@ -7,6 +7,7 @@ import { useEventId, useDivisions } from '@/components/useDashboard'
 import { fillSlotsIfGroupComplete, groupPlaceholders, tieGroupPlaceholders, fetchPendingByeIds, isPendingByeTie } from '@/lib/tournament'
 import { requestSlotCheck } from '@/lib/slot-check'
 import { planLiveMove } from '@/lib/court-move'
+import PlaceMatchSheet, { type PlaceQueueItem } from '@/components/PlaceMatchSheet'
 import { findCourtConflicts, busyElsewhere, describeConflicts, type PlayerConflict } from '@/lib/player-conflicts'
 import type { TieWithClubs } from '@/types/team'
 import { roundKeyOf, zoneCourts, hasAnyZone, courtWindow, courtOpenAt, toMin, fromMin, ROUND_KEYS, type CourtZones } from '@/lib/court-zones'
@@ -225,6 +226,10 @@ export default function CourtsPage() {
 
   const [viewFilter, setViewFilter] = useState('ALL')
   const [editMatch, setEditMatch]   = useState<MatchSlim | null>(null)
+  // 코트·순서 지정 창 (개인전 경기)
+  const [placeItem, setPlaceItem]   = useState<MatchSlim | null>(null)
+  const [placeBusy, setPlaceBusy]   = useState(false)
+  const [placeErr, setPlaceErr]     = useState('')
   const [editScore, setEditScore]   = useState('')
   const [editWinner, setEditWinner] = useState<'A' | 'B' | ''>('')
   const [submitting, setSubmitting] = useState(false)
@@ -794,7 +799,13 @@ export default function CourtsPage() {
       const cur = matches.find(m => m.id === itemId)
       if (cur && cur.court !== court) {
         const live = await planLiveMove(eventId, itemId, cur.status, court)
-        if (live?.error) { setMsg('❌ ' + live.error); return }
+        if (live?.error) {
+          // 옮길 코트에 진행 중 경기가 있음 → 잘못 켜진 '진행 중'일 수 있으니 대기로 바꿔서 옮길지 물어봄
+          if (!confirm(`${court}에 이미 진행 중인 경기가 있습니다.\n\n이 경기를 '대기' 상태로 바꿔서 ${court} 맨 뒤로 옮길까요?\n(자리를 골라 넣으려면 취소하고 📍 를 누르세요)`)) { setMsg('❌ ' + live.error); return }
+          const e = await placeMatch(itemId, court, null, true)
+          if (e) setMsg('❌ ' + e)
+          return
+        }
         if (live) {
           for (const s of live.shifts || []) await supabase.from('matches').update({ court_order: s.order }).eq('id', s.id)
           await supabase.from('matches').update({ court, court_order: live.order }).eq('id', itemId)
@@ -807,6 +818,67 @@ export default function CourtsPage() {
       await supabase.from('matches').update({ court, court_order:nextOrder }).eq('id', itemId)
       sendCourtNotify(court, 'court_changed', itemId); loadMatches()
     }
+  }
+  // ── 코트·순서 지정: 그 코트의 beforeId 경기 '앞'에 넣음 (null = 맨 뒤). 뒤 경기는 한 칸씩 밀림.
+  //    setPending: 진행 중 경기를 대기로 바꿔서 옮김. 오류 문구를 돌려줌 (없으면 null).
+  async function placeMatch(itemId: string, court: string, beforeId: string | null, setPending: boolean): Promise<string | null> {
+    const cur = matchesRef.current.find(m => m.id === itemId)
+    if (!cur) return '경기를 찾지 못했습니다.'
+    if (cur.status === 'FINISHED') return '끝난 경기는 옮길 수 없습니다.'
+    const { data, error } = await supabase.from('matches').select('id, status, court_order').eq('event_id', eventId).eq('court', court)
+    if (error) return '코트 경기 목록을 못 불러왔습니다. 잠시 뒤 다시 해 주세요.'
+    const rows = ((data || []) as { id: string; status: string; court_order: number | null }[]).filter(r => r.id !== itemId)
+    if (cur.status === 'IN_PROGRESS' && !setPending && rows.some(r => r.status === 'IN_PROGRESS'))
+      return `${court}에 이미 진행 중인 경기가 있습니다. 이 경기를 대기 상태로 바꿔서 옮기세요.`
+    let order: number
+    if (beforeId) {
+      const b = rows.find(r => r.id === beforeId)
+      if (!b || b.court_order == null) return '넣을 자리를 찾지 못했습니다. 새로고침한 뒤 다시 해 주세요.'
+      if (b.status === 'FINISHED') return '끝난 경기 앞에는 넣을 수 없습니다.'
+      order = b.court_order
+      const shift = rows.filter(r => (r.court_order ?? -1) >= order).sort((x, y) => (y.court_order ?? 0) - (x.court_order ?? 0))
+      for (const r of shift) {
+        const u = await supabase.from('matches').update({ court_order: (r.court_order ?? 0) + 1 }).eq('id', r.id)
+        if (u.error) return '순서를 미는 중 오류: ' + u.error.message
+      }
+    } else {
+      order = rows.reduce((n, r) => Math.max(n, r.court_order ?? 0), 0) + 1
+    }
+    const patch: Record<string, any> = { court, court_order: order }
+    if (setPending && cur.status === 'IN_PROGRESS') { patch.status = 'PENDING'; patch.started_at = null }
+    const u = await supabase.from('matches').update(patch).eq('id', itemId)
+    if (u.error) return u.error.message
+    courtOrderRef.current[court] = Math.max(courtOrderRef.current[court] || 0, order, ...rows.map(r => (r.court_order ?? 0) + 1))
+    sendCourtNotify(court, 'court_changed', itemId)
+    if (cur.court && cur.court !== court) sendCourtNotify(cur.court, 'court_changed')
+    loadMatches()
+    return null
+  }
+  function placeQueueOf(court: string): PlaceQueueItem[] {
+    return matches
+      .filter(x => x.court === court && x.status !== 'FINISHED' && x.id !== placeItem?.id)
+      .sort((a, b) => (a.court_order ?? 9999) - (b.court_order ?? 9999))
+      .map(x => ({
+        id: x.id, status: x.status, court_order: x.court_order,
+        label: `${x.division_name || ''} ${getRoundBadge(x.round, x.group_label, x.division_name).round} · ${x.team_a_name || 'TBD'} vs ${x.team_b_name || 'TBD'}`,
+      }))
+  }
+  async function handlePlace(court: string, beforeId: string | null, setPending: boolean) {
+    if (!placeItem) return
+    setPlaceBusy(true); setPlaceErr('')
+    try {
+      const e = await placeMatch(placeItem.id, court, beforeId, setPending)
+      if (e) { setPlaceErr(e); return }
+      setPlaceItem(null)
+      setMsg(`✅ ${court}에 넣었습니다${setPending ? ' (대기 상태로 바꿈)' : ''}`)
+    } finally { setPlaceBusy(false) }
+  }
+  // 잘못 켜진 '진행 중' → 대기 (자리는 그대로, 점수 없는 경기만)
+  async function setMatchPending(itemId: string) {
+    const u = await supabase.from('matches').update({ status: 'PENDING', started_at: null })
+      .eq('id', itemId).eq('status', 'IN_PROGRESS').is('score', null).is('winner_team_id', null)
+    if (u.error) { setMsg('❌ ' + u.error.message); return }
+    setPlaceItem(null); setMsg('✅ 대기 상태로 되돌렸습니다'); loadMatches()
   }
   async function unassignItem(itemId: string) {
     if (itemId.startsWith('tie_')) { await supabase.from('ties').update({ court_number:null, court_order:null }).eq('id', itemId.replace('tie_','')); loadTies() }
@@ -1504,6 +1576,8 @@ export default function CourtsPage() {
                     }
                     const firstPendingIdx = courtItems.findIndex(mm => mm.status === 'PENDING')
                     const canStart = !m.is_team_tie && m.status === 'PENDING' && allIdx === firstPendingIdx
+                    // 한 코트에 '진행 중'이 겹치면(첫 번째 말고) 대기로 되돌리는 버튼
+                    const dupLive = !m.is_team_tie && m.status === 'IN_PROGRESS' && allIdx !== activeIdx
                     return (
                       <MatchChip key={m.id} m={decorate(m)} badge={badge}
                         isCurrentSlot={m.status==='PENDING'&&allIdx===currentIdx}
@@ -1513,6 +1587,8 @@ export default function CourtsPage() {
                         onDragStart={setDragMatch} onClickScore={() => openScoreEdit(m)}
                         onClickStart={canStart?()=>startMatch(m.id):undefined}
                         onClickUnassign={() => unassignItem(m.id)}
+                        onClickPlace={!m.is_team_tie ? () => { setPlaceErr(''); setPlaceItem(m) } : undefined}
+                        onClickPending={dupLive ? () => setMatchPending(m.id) : undefined}
                         onMoveUp={allIdx>0?()=>moveMatchOrder(m.id,'up'):undefined}
                         onMoveDown={allIdx<courtItems.length-1?()=>moveMatchOrder(m.id,'down'):undefined} />
                     )
@@ -1537,6 +1613,23 @@ export default function CourtsPage() {
           })}
         </div>
       </div>
+
+      {/* 코트·순서 지정 창 */}
+      {placeItem && (
+        <PlaceMatchSheet
+          title={`${placeItem.division_name || ''} ${getRoundBadge(placeItem.round, placeItem.group_label, placeItem.division_name).round} · ${placeItem.team_a_name || 'TBD'} vs ${placeItem.team_b_name || 'TBD'}`}
+          status={placeItem.status}
+          currentCourt={placeItem.court}
+          courts={allCourtNames}
+          queueOf={placeQueueOf}
+          busy={placeBusy}
+          error={placeErr}
+          onPlace={handlePlace}
+          onUnassign={() => { const id = placeItem.id; setPlaceItem(null); unassignItem(id) }}
+          onSetPending={() => setMatchPending(placeItem.id)}
+          onClose={() => setPlaceItem(null)}
+        />
+      )}
 
       {/* 점수 입력 모달 */}
       {editMatch && (
@@ -1626,12 +1719,14 @@ function FinishedCourtItems({ items, onClickScore, onClickUnassign, divColors }:
 }
 
 // ── MatchChip 컴포넌트
-function MatchChip({ m, badge, divColor, isCurrentSlot, conflicts, allMatches, onDragStart, onClickScore, onClickStart, onClickUnassign, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
+function MatchChip({ m, badge, divColor, isCurrentSlot, conflicts, allMatches, onDragStart, onClickScore, onClickStart, onClickUnassign, onClickPlace, onClickPending, onMoveUp, onMoveDown, onTouchStart, onTouchMove, onTouchEnd }: {
   m: MatchSlim; badge?: string; divColor?: string; isCurrentSlot?: boolean
   conflicts?: PlayerConflict[]
   allMatches?: MatchSlim[]
   onDragStart: (id: string) => void; onClickScore: () => void
   onClickStart?: () => void; onClickUnassign?: () => void
+  onClickPlace?: () => void     // 📍 코트·순서 지정 창
+  onClickPending?: () => void   // ⏸ 겹쳐 켜진 '진행 중'을 대기로
   onMoveUp?: () => void; onMoveDown?: () => void
   onTouchStart?: () => void; onTouchMove?: (e: React.TouchEvent) => void; onTouchEnd?: () => void
 }) {
@@ -1695,6 +1790,8 @@ function MatchChip({ m, badge, divColor, isCurrentSlot, conflicts, allMatches, o
           {onMoveUp    && <button onClick={e=>{e.stopPropagation();onMoveUp()}}    className="text-stone-300 hover:text-stone-600 px-0.5">▲</button>}
           {onMoveDown  && <button onClick={e=>{e.stopPropagation();onMoveDown()}}  className="text-stone-300 hover:text-stone-600 px-0.5">▼</button>}
           {onClickStart && <button onClick={e=>{e.stopPropagation();onClickStart()}} className="text-xs bg-red-500 text-white px-1.5 py-0.5 rounded hover:bg-red-600">▶</button>}
+          {onClickPending && <button onClick={e=>{e.stopPropagation();onClickPending()}} title="대기 상태로 되돌리기" className="text-[10px] bg-orange-100 text-orange-700 px-1 py-0.5 rounded hover:bg-orange-200 font-semibold">⏸대기로</button>}
+          {onClickPlace && <button onClick={e=>{e.stopPropagation();onClickPlace()}} title="코트·순서 지정" className="text-stone-300 hover:text-blue-500 px-0.5">📍</button>}
           {!isTeam && (
             <button onClick={e=>{e.stopPropagation();onClickScore()}}
               className={`px-1 py-0.5 rounded text-[10px] transition-colors ${done?'text-amber-500 hover:text-amber-700':'text-stone-300 hover:text-blue-500'}`}>
