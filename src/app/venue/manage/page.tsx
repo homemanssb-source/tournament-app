@@ -9,6 +9,7 @@ import VenueTieScoreSheet from '@/components/VenueTieScoreSheet'
 import { useRefreshOnWake } from '@/hooks/useRefreshOnWake'
 import { planLiveMove } from '@/lib/court-move'
 import { normSearch, hitSearch, HIT_CLASS } from '@/lib/name-search'
+import PlaceMatchSheet, { type PlaceQueueItem } from '@/components/PlaceMatchSheet'
 
 // ──────────────────────────────────────────────────────────
 // 현장관리 (경기장 PIN): 코트·대진표 조회 + 시작 + 점수입력 (끝난 경기 정정 불가, 단체전 복식 포함 — 031)
@@ -84,6 +85,10 @@ export default function VenueManagePage() {
   const [allVenueCourtNames, setAllVenueCourtNames] = useState<string[]>([])
   const [assigning, setAssigning] = useState(false)
   const [assignMsg, setAssignMsg] = useState('')
+  // 코트·순서 지정 창 (개인전 경기, 마스터 PIN)
+  const [placeItem, setPlaceItem] = useState<VenueMatch | null>(null)
+  const [placeBusy, setPlaceBusy] = useState(false)
+  const [placeErr, setPlaceErr]   = useState('')
   const [plan, setPlan]           = useState<VenuePlan | null>(null)
   const [preferHome, setPreferHome] = useState(true)   // 본선: 그 부서 예선 코트 우선
   const [filterRound, setFilterRound] = useState<string>('ALL')
@@ -498,6 +503,49 @@ export default function VenueManagePage() {
     if (prevCourt && prevCourt !== courtName) targets.add(prevCourt)
     for (const c of targets) notifyCourt(c, 'court_changed')
     await loadData()
+  }
+
+  // ── 코트·순서 지정: '몇 번 코트, 어느 경기 앞'에 넣기 (뒤 경기는 서버에서 한 칸씩 밀림)
+  function placeQueueOf(court: string): PlaceQueueItem[] {
+    return dateFilteredMatches
+      .filter(x => x.court === court && !x.is_team_tie && x.status !== 'FINISHED' && x.id !== placeItem?.id)
+      .sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
+      .map(x => ({
+        id: x.id, status: x.status, court_order: x.court_order,
+        label: `${x.division_name || ''} ${x.group_label ? x.group_label : roundLabelKR(x.round)} · ${x.team_a_name || 'TBD'} vs ${x.team_b_name || 'TBD'}`,
+      }))
+  }
+  async function handlePlace(court: string, beforeId: string | null, setPending: boolean) {
+    if (!placeItem) return
+    setPlaceBusy(true); setPlaceErr('')
+    try {
+      const { data, error } = await supabase.rpc('rpc_venue_admin_place_match', {
+        p_token: session.token, p_match_id: placeItem.id, p_court: court,
+        p_before_match_id: beforeId, p_set_pending: setPending,
+      })
+      if (error) { setPlaceErr(error.message); return }
+      if (data && (data as any).success === false) { setPlaceErr((data as any).error || '저장 실패'); return }
+      const prevCourt = placeItem.court
+      setPlaceItem(null)
+      setAssignMsg(`✅ ${court}에 넣었습니다${(data as any)?.set_pending ? ' (대기 상태로 바꿈)' : ''}`)
+      setTimeout(() => setAssignMsg(''), 4000)
+      const targets = new Set<string>([court]); if (prevCourt && prevCourt !== court) targets.add(prevCourt)
+      for (const c of targets) notifyCourt(c, 'court_changed')
+      await loadData()
+    } finally { setPlaceBusy(false) }
+  }
+  // 잘못 켜진 '진행 중' → 대기 (자리는 그대로)
+  async function handleSetPending(item: VenueMatch) {
+    setPlaceBusy(true); setPlaceErr('')
+    try {
+      const { data, error } = await supabase.rpc('rpc_venue_admin_set_match_pending', { p_token: session.token, p_match_id: item.id })
+      const err = error?.message || (data && (data as any).success === false ? ((data as any).error || '실패') : '')
+      if (err) { if (placeItem) setPlaceErr(err); else setAssignMsg('❌ ' + err); return }
+      setPlaceItem(null)
+      setAssignMsg('✅ 대기 상태로 되돌렸습니다')
+      setTimeout(() => setAssignMsg(''), 3000)
+      await loadData()
+    } finally { setPlaceBusy(false) }
   }
 
   // ── 자동 배정: ① 미리보기(계획)만 만들고 → ② 확인 후 [이대로 저장] ─────────────
@@ -916,6 +964,8 @@ export default function VenueManagePage() {
                     .sort((a, b) => (a.court_order || 0) - (b.court_order || 0))
 
                   const inProgressMatch = courtMatches.find(m => m.status === 'IN_PROGRESS')
+                  // 한 코트에 '진행 중'이 여러 개면 나머지도 보여 줌 (예전엔 첫 번째만 보여 나머지가 화면에서 사라졌음)
+                  const extraLive       = courtMatches.filter(m => m.status === 'IN_PROGRESS' && m !== inProgressMatch)
                   const pendingMatches  = courtMatches.filter(m => m.status === 'PENDING')
                   const finishedMatches = courtMatches.filter(m => m.status === 'FINISHED')
                   const isLive          = !!inProgressMatch
@@ -976,8 +1026,30 @@ export default function VenueManagePage() {
                             onTieScore={() => setTieScore(inProgressMatch)}
                             courts={sessionCourts}
                             onAssign={isAdmin ? (c) => handleAssign(inProgressMatch, c) : undefined}
+                            onPlace={isAdmin && !inProgressMatch.is_team_tie ? () => { setPlaceErr(''); setPlaceItem(inProgressMatch) } : undefined}
+                            onSetPending={isAdmin && !inProgressMatch.is_team_tie && extraLive.length > 0 ? () => handleSetPending(inProgressMatch) : undefined}
                           />
                         )}
+
+                        {/* 같은 코트에 겹쳐 켜진 '진행 중' 경기들 */}
+                        {extraLive.map(m => (
+                          <CourtMatchCard
+                            key={m.id}
+                            m={m}
+                            badge="⚠ 진행중 겹침"
+                            badgeStyle="bg-red-50 border-red-300 border-dashed"
+                            hit={!!nameQ && isNameHit(m)}
+                            conflicts={courtConflicts.get(m.id)}
+                            canStart={false}
+                            onStart={() => {}}
+                            onScore={() => openScoreEdit(m)}
+                            onTieScore={() => setTieScore(m)}
+                            courts={sessionCourts}
+                            onAssign={isAdmin ? (c) => handleAssign(m, c) : undefined}
+                            onPlace={isAdmin && !m.is_team_tie ? () => { setPlaceErr(''); setPlaceItem(m) } : undefined}
+                            onSetPending={isAdmin && !m.is_team_tie ? () => handleSetPending(m) : undefined}
+                          />
+                        ))}
 
                         {/* 대기 경기들 */}
                         {pendingMatches.map(m => {
@@ -1007,6 +1079,7 @@ export default function VenueManagePage() {
                               onTieScore={() => setTieScore(m)}
                               courts={sessionCourts}
                               onAssign={isAdmin ? (c) => handleAssign(m, c) : undefined}
+                              onPlace={isAdmin && !m.is_team_tie ? () => { setPlaceErr(''); setPlaceItem(m) } : undefined}
                               onMoveUp={isAdmin && allIdx > 0 ? () => handleMoveOrder(m, 'up') : undefined}
                               onMoveDown={isAdmin && allIdx < courtMatches.length - 1 ? () => handleMoveOrder(m, 'down') : undefined}
                             />
@@ -1122,6 +1195,23 @@ export default function VenueManagePage() {
         )
       })()}
 
+      {/* ── 코트·순서 지정 창 */}
+      {placeItem && (
+        <PlaceMatchSheet
+          title={`${placeItem.division_name || ''} ${placeItem.group_label ? placeItem.group_label : roundLabelKR(placeItem.round)} · ${placeItem.team_a_name || 'TBD'} vs ${placeItem.team_b_name || 'TBD'}`}
+          status={placeItem.status}
+          currentCourt={placeItem.court}
+          courts={sessionCourts}
+          queueOf={placeQueueOf}
+          busy={placeBusy}
+          error={placeErr}
+          onPlace={handlePlace}
+          onUnassign={() => { const it = placeItem; setPlaceItem(null); handleAssign(it, null) }}
+          onSetPending={() => handleSetPending(placeItem)}
+          onClose={() => setPlaceItem(null)}
+        />
+      )}
+
       {/* ── 단체전 복식 점수 시트 */}
       {tieScore && (
         <VenueTieScoreSheet
@@ -1236,7 +1326,7 @@ export default function VenueManagePage() {
 }
 
 // ── 코트 경기 카드 (재배정 드롭다운 포함)
-function CourtMatchCard({ m, badge, badgeStyle, hit, conflicts, canStart, onStart, onScore, onTieScore, courts, onAssign, onMoveUp, onMoveDown }: {
+function CourtMatchCard({ m, badge, badgeStyle, hit, conflicts, canStart, onStart, onScore, onTieScore, courts, onAssign, onPlace, onSetPending, onMoveUp, onMoveDown }: {
   m: VenueMatch
   badge: string
   badgeStyle: string
@@ -1248,6 +1338,8 @@ function CourtMatchCard({ m, badge, badgeStyle, hit, conflicts, canStart, onStar
   onTieScore?: () => void   // 단체전 복식 점수 시트
   courts: string[]
   onAssign?: (court: string | null) => void   // 없으면 코트 이동 버튼 숨김 (경기장 PIN)
+  onPlace?: () => void        // 있으면 📍 이 '코트·순서 지정' 창을 엶 (개인전, 마스터 PIN)
+  onSetPending?: () => void   // 겹쳐 켜진 '진행 중'을 대기로
   onMoveUp?: () => void
   onMoveDown?: () => void
 }) {
@@ -1334,10 +1426,17 @@ function CourtMatchCard({ m, badge, badgeStyle, hit, conflicts, canStart, onStar
           {onMoveDown && (
             <button onClick={onMoveDown} className="text-stone-400 hover:text-stone-700 px-1 text-base leading-none" title="아래로">▼</button>
           )}
+          {onSetPending && (
+            <button onClick={onSetPending}
+              className="text-xs bg-orange-100 text-orange-700 hover:bg-orange-200 px-2 py-1 rounded-lg font-semibold"
+              title="대기 상태로 되돌리기">
+              ⏸ 대기로
+            </button>
+          )}
           {onAssign && (
-            <button onClick={() => setShowMove(!showMove)}
+            <button onClick={() => (onPlace ? onPlace() : setShowMove(!showMove))}
               className="text-xs text-stone-400 hover:text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg transition-all"
-              title="코트 이동/해제">
+              title="코트·순서 지정/해제">
               📍
             </button>
           )}

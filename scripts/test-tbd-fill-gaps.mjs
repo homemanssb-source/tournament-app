@@ -98,7 +98,8 @@ async function main() {
   fs = await finals();
   const t1 = fs.find(f => f.id === target.f.id);
   console.log(`   ${t1.match_num}: status=${t1.status}, ${lab1} 자리=${nm[t1[`team_${target.side}_id`]] ?? '(빈칸)'}, label=${t1[`qualifier_label_${target.side}`]}, src=${t1[`qualifier_src_${target.side}`]}`);
-  ok(t1.status === 'IN_PROGRESS', '조 마지막 경기 종료 → 같은 코트 본선 경기 자동 시작됨 (재현 조건)');
+  // 043 이후: 팀이 아직 안 정해진 본선 경기는 자동 시작하지 않는다 (예전엔 IN_PROGRESS 가 됐고, 그래도 채워져야 했음)
+  ok(t1.status === 'PENDING', '조 마지막 경기 종료 → 팀 미정이던 본선 경기는 자동 시작되지 않음 (043)');
   ok(nm[t1[`team_${target.side}_id`]] === 'A3', `자동 시작된 경기의 "${lab1}" 슬롯 = A3 (오입력 기준 1위)`);
   ok(teamAt(fs, lab2) === 'A1', `"${lab2}" 슬롯 = A1`);
   ok(t1[`qualifier_src_${target.side}`] === lab1, '출처(qualifier_src) 보존');

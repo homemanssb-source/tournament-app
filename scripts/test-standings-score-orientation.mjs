@@ -23,6 +23,13 @@ if (content.charCodeAt(0) === 0xFEFF) content = content.slice(1);
 content.split(/\r?\n/).forEach(l => { l = l.trim(); if (!l || l[0] === '#') return; const i = l.indexOf('='); if (i < 1) return; process.env[l.slice(0, i).trim()] = l.slice(i + 1).trim().replace(/^["']|["']$/g, ''); });
 const URL_ = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const sb = createClient(URL_, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+// 043 '2분 규칙'(같은 팀 앞 경기가 방금 끝났으면 선수 입력 거절)에 시뮬이 걸리지 않게, 그 팀들의 방금 끝난 경기를 10분 전으로 돌려놓음
+async function ageRecent(m) {
+  const ids = [m.team_a_id, m.team_b_id].filter(Boolean); if (!ids.length) return
+  await sb.from('matches').update({ ended_at: new Date(Date.now() - 10 * 60e3).toISOString() })
+    .eq('status', 'FINISHED').gt('ended_at', new Date(Date.now() - 3 * 60e3).toISOString())
+    .or(ids.map(i => `team_a_id.eq.${i},team_b_id.eq.${i}`).join(','))
+}
 const anon = createClient(URL_, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { auth: { persistSession: false } });
 
 let eventId = null;
@@ -84,6 +91,7 @@ async function main() {
     const token = login.data?.token;
     const mySide = m.team_a_id === team[winnerKey].id ? 'A' : 'B';
     const sent = mySide === 'A' ? `${winGames}:${loseGames}` : `${loseGames}:${winGames}`;
+    await ageRecent(m);
     const r = await anon.rpc('rpc_pin_submit_score', { p_token: token, p_match_id: m.id, p_score: sent });
     if (r.error) throw new Error(`점수 제출(${winnerKey}): ` + r.error.message);
     const { data: saved } = await sb.from('matches').select('score, winner_team_id').eq('id', m.id).single();
