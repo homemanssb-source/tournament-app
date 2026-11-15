@@ -53,7 +53,8 @@ function PlayerDetailSheet({ target, onClose, onPick }: {
   target: Target; onClose: () => void; onPick: (t: Target) => void
 }) {
   const nowYear = new Date().getFullYear()
-  const [year, setYear] = useState(nowYear)
+  // 0 = 현재 (앱A 현재 랭킹: 대회별 최근 회차 포인트만 합산 + 전체 이력), 연도 = 그 시즌 기록
+  const [year, setYear] = useState(0)
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
@@ -150,11 +151,11 @@ function PlayerDetailSheet({ target, onClose, onPick }: {
                 )}
                 <div className="mt-3 flex gap-3">
                   <div className="flex-1 bg-stone-50 rounded-lg px-4 py-3">
-                    <span className="text-xs text-stone-500">{data.season_year}시즌 총 포인트</span>
+                    <span className="text-xs text-stone-500">{data.season_year ? `${data.season_year}시즌 총 포인트` : '현재 포인트'}</span>
                     <p className="text-2xl font-bold text-[#2d5016]">{Number(data.total_points || 0).toLocaleString()}</p>
                   </div>
                   <div className="bg-stone-50 rounded-lg px-4 py-3 text-center min-w-[90px]">
-                    <span className="text-xs text-stone-500">현재 랭킹</span>
+                    <span className="text-xs text-stone-500">{data.season_year ? '시즌 순위' : '현재 랭킹'}</span>
                     {data.rank ? (
                       <p className="text-2xl font-bold text-stone-900">{data.rank}<span className="text-sm font-medium text-stone-500">위</span></p>
                     ) : (
@@ -169,6 +170,7 @@ function PlayerDetailSheet({ target, onClose, onPick }: {
                 <span className="text-sm font-medium text-stone-700">시즌:</span>
                 <select value={year} onChange={e => setYear(Number(e.target.value))}
                   className="text-sm border border-stone-200 rounded-lg px-3 py-1.5 bg-white">
+                  <option value={0}>현재 (전체 이력)</option>
                   {seasonOptions.map(y => <option key={y} value={y}>{y}년</option>)}
                 </select>
               </div>
@@ -189,11 +191,14 @@ function PlayerDetailSheet({ target, onClose, onPick }: {
 
               {tab === 'jta' ? (
                 history.length === 0 ? (
-                  <p className="text-sm text-stone-500 py-4 text-center">해당 시즌 대회 기록이 없습니다.</p>
+                  <p className="text-sm text-stone-500 py-4 text-center">{year ? '해당 시즌 대회 기록이 없습니다.' : '대회 기록이 없습니다.'}</p>
                 ) : (
                   <div className="space-y-2">
-                    {history.map((h, i) => (
-                      <div key={i} className="flex items-start justify-between py-2.5 px-3 bg-stone-50 rounded-lg">
+                    {history.map((h, i) => {
+                      // 현재 보기에서, 다음 회차로 대체돼 현재 포인트에 안 들어가는 대회
+                      const dropped = year === 0 && h.counted === false
+                      return (
+                      <div key={i} className={`flex items-start justify-between py-2.5 px-3 bg-stone-50 rounded-lg ${dropped ? 'opacity-50' : ''}`}>
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-stone-900">{h.tournament_name}</p>
                           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
@@ -203,10 +208,12 @@ function PlayerDetailSheet({ target, onClose, onPick }: {
                         </div>
                         <div className="text-right ml-2 shrink-0">
                           <p className="text-sm font-semibold text-stone-900">{h.rank}</p>
-                          <p className="text-xs text-[#2d5016] font-medium">+{h.points}</p>
+                          <p className={`text-xs font-medium ${dropped ? 'text-stone-400 line-through' : 'text-[#2d5016]'}`}>+{h.points}</p>
+                          {dropped && <p className="text-[11px] text-stone-400">다음 회차로 대체</p>}
                         </div>
                       </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )
               ) : external.length === 0 ? (

@@ -42,7 +42,8 @@ export async function GET(req: NextRequest) {
   const memberIdParam = (sp.get('member_id') || '').trim()
   const nowYear = new Date().getFullYear()
   const yearNum = Number(sp.get('year'))
-  const year = Number.isInteger(yearNum) && yearNum >= 2000 && yearNum <= nowYear + 1 ? yearNum : nowYear
+  // 0(또는 없음) = 현재 랭킹 (앱A: 대회별 최근 회차 포인트만 합산), 연도 = 그 시즌 기록
+  const year = Number.isInteger(yearNum) && yearNum >= 2000 && yearNum <= nowYear + 1 ? yearNum : 0
 
   if (!name && !memberIdParam) return json({ ok: false, error: '선수 이름이 없습니다.' }, 400)
   if (memberIdParam && !/^[A-Za-z0-9_-]{1,40}$/.test(memberIdParam)) return json({ ok: false, error: '잘못된 회원번호' }, 400)
@@ -113,7 +114,7 @@ export async function GET(req: NextRequest) {
     rank,
     history: (h.history || []).map((x: any) => ({
       tournament_name: x.tournament_name, date: x.date, division: x.division,
-      rank: x.rank, points: x.points, grade: x.grade,
+      rank: x.rank, points: x.points, grade: x.grade, counted: x.counted,
     })),
     external: ext.data || [],
   })

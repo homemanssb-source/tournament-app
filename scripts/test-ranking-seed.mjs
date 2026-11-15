@@ -1,9 +1,9 @@
 // 랭킹 시드 검증 (DB 쓰기 없음)
 //   1) 조 배치(028 지그재그)와 본선 자리(044) 규칙을 같은 계산으로 재현해 확인
-//   2) --live : 앱A 실제 결과로 대회별 최신 회차 포인트 계산 확인 (읽기 전용, 공개 키)
+//   2) --live : 앱A DB 함수(현재 포인트)를 같은 규칙의 별도 계산과 대조 (읽기 전용, 공개 키)
 // 실행: node --experimental-strip-types scripts/test-ranking-seed.mjs [--live]
 import { readFileSync } from 'fs'
-import { seriesKey, listEditions, rollingPoints, rankTeams } from '../src/lib/seed-ranking.ts'
+import { rankTeams } from '../src/lib/seed-ranking.ts'
 
 let pass = 0, fail = 0
 const ok = (c, m) => { if (c) pass++; else { fail++; console.log('  ✗ ' + m) } }
@@ -95,46 +95,65 @@ for (const ng of [16, 12, 8, 6, 4]) {
   ok(find(16, 1) === '15-2 16-1', '16조1위 상대: ' + find(16, 1))
 }
 
-console.log('3) 포인트 규칙')
+console.log('3) 순위 정렬')
 {
-  ok(seriesKey('제2회TF컵 동호인대회') === seriesKey('제3회 TF컵 동호인대회'), 'TF컵 회차 묶음')
-  ok(seriesKey('제 5회 제주시테니스협회장배 개인복식 테니스대회') === seriesKey('제6회 제주시테니스협회장배 개인복식 테니스대회'), '협회장배 묶음')
-  ok(seriesKey('제6회 제주시테니스협회장배 클럽대항전') !== seriesKey('제 5회 제주시테니스협회장배 개인복식 테니스대회'), '클럽대항전 ≠ 개인복식')
-  const rows = [
-    { member_id: 'a', tournament_name: '제2회TF컵 동호인대회', date: '2026-02-21', points: 100 },
-    { member_id: 'b', tournament_name: '제2회TF컵 동호인대회', date: '2026-02-21', points: 70 },
-    { member_id: 'a', tournament_name: '제1회 팀H.B컵', date: '2026-09-19', points: 50 },
-    { member_id: 'b', tournament_name: '제3회 TF컵 동호인대회', date: '2027-02-20', points: 30 },
-  ]
-  const pts = rollingPoints(rows, listEditions(rows))
-  ok(pts.get('a') === 50 && pts.get('b') === 30, '다음 회차가 들어오면 이전 회차 점수만 빠짐: ' + JSON.stringify([...pts]))
-  const before = rows.slice(0, 3), pb = rollingPoints(before, listEditions(before))
-  ok(pb.get('a') === 150 && pb.get('b') === 70, '다음 회차 전에는 해가 바뀌어도 유지: ' + JSON.stringify([...pb]))
   const t = (id, total) => ({ id, name: id, p1: { name: id, club: null, points: total, matched: true }, p2: null, total })
   ok(rankTeams([t('x', 10), t('y', 30), t('z', 20)]).map(v => v.id).join() === 'y,z,x', '합산 높은 순')
 }
 
+// 포인트 규칙은 앱A DB 함수에 있다. 여기서는 같은 규칙을 따로 계산해 DB 함수 결과와 대조한다.
+const seriesKey = name => {
+  const raw = (name || '').trim()
+  return raw.replace(/제\s*\d+\s*회/g, '').replace(/(19|20)\d{2}\s*년?(도)?/g, '').replace(/\s+/g, '').toLowerCase() || raw.replace(/\s+/g, '').toLowerCase()
+}
+function countedNames(rows) {
+  const last = new Map()
+  for (const r of rows) { const n = (r.tournament_name || '').trim(); if (!n) continue; if (!last.has(n) || (r.date || '') > (last.get(n) || '')) last.set(n, r.date || last.get(n) || null) }
+  const top = new Map()
+  for (const [n, d] of last) { const k = seriesKey(n), c = top.get(k); if (!c || (d || '') > (c.d || '') || ((d || '') === (c.d || '') && n > c.n)) top.set(k, { n, d }) }
+  return new Set([...top.values()].map(v => v.n))
+}
+{
+  ok(seriesKey('제2회TF컵 동호인대회') === seriesKey('제3회 TF컵 동호인대회'), 'TF컵 회차 묶음')
+  ok(seriesKey('제6회 제주시테니스협회장배 클럽대항전') !== seriesKey('제 5회 제주시테니스협회장배 개인복식 테니스대회'), '클럽대항전 ≠ 개인복식')
+  const rows = [
+    { tournament_name: '제2회TF컵 동호인대회', date: '2026-02-21' }, { tournament_name: '제1회 팀H.B컵', date: '2026-09-19' },
+    { tournament_name: '제3회 TF컵 동호인대회', date: '2027-02-20' },
+  ]
+  ok([...countedNames(rows)].sort().join('|') === '제1회 팀H.B컵|제3회 TF컵 동호인대회', '다음 회차가 들어오면 이전 회차만 빠짐')
+  ok(countedNames(rows.slice(0, 2)).size === 2, '다음 회차 전에는 유지')
+}
+
 if (process.argv.includes('--live')) {
-  console.log('4) 앱A 실제 데이터 (읽기 전용)')
+  console.log('4) 앱A DB 함수 대조 (읽기 전용)')
   const { createClient } = await import('@supabase/supabase-js')
   let c = readFileSync(new URL('../.env.local', import.meta.url), 'utf8'); if (c.charCodeAt(0) === 0xFEFF) c = c.slice(1)
   const env = {}
   c.split(/\r?\n/).forEach(l => { l = l.trim(); if (!l || l[0] === '#') return; const i = l.indexOf('='); if (i < 1) return; env[l.slice(0, i).trim()] = l.slice(i + 1).trim().replace(/^["']|["']$/g, '') })
   const a = createClient(env.APP_A_SUPABASE_URL, env.APP_A_ANON_KEY, { auth: { persistSession: false } })
-  const rows = []
-  for (let from = 0; ; from += 1000) {
-    const r = await a.from('tournament_results').select('member_id, tournament_name, date, points').order('id').range(from, from + 999)
-    if (r.error) { ok(false, '결과 조회: ' + r.error.message); break }
-    rows.push(...r.data); if (r.data.length < 1000) break
-  }
-  const ed = listEditions(rows), pts = rollingPoints(rows, ed)
-  for (const e of ed) console.log(`   ${e.counted ? '반영' : '제외'}  ${e.date}  ${e.tournament_name}${e.replaced_by ? '  → ' + e.replaced_by : ''}`)
-  const sum = [...pts.values()].reduce((x, y) => x + y, 0)
-  const raw = rows.filter(r => r.member_id).reduce((x, r) => x + (Number(r.points) || 0), 0)
-  console.log(`   결과 ${rows.length}행 · 포인트 있는 회원 ${[...pts.values()].filter(v => v > 0).length}명 · 유효 합계 ${sum} / 전체 ${raw}`)
-  ok(ed.every(e => e.counted) ? sum === raw : sum <= raw, `합계: ${sum} / ${raw}`)
-  const mp = await a.from('members_public').select('member_id, name, display_name, club, status').limit(1)
-  ok(!mp.error && mp.data?.length === 1, 'members_public 조회: ' + (mp.error?.message || ''))
+  const page = async q => { const out = []; for (let from = 0; ; from += 1000) { const r = await q().range(from, from + 999); if (r.error) throw new Error(r.error.message); out.push(...r.data); if (r.data.length < 1000) break } return out }
+  try {
+    const rows = await page(() => a.from('tournament_results').select('member_id, tournament_name, date, points').order('id'))
+    const names = countedNames(rows)
+    const mine = new Map()
+    for (const r of rows) if (r.member_id && names.has((r.tournament_name || '').trim())) mine.set(r.member_id, (mine.get(r.member_id) || 0) + (Number(r.points) || 0))
+    const eds = await page(() => a.rpc('ranking_current_tournaments'))
+    for (const e of eds) console.log(`   ${e.counted ? '반영' : '제외'}  ${e.last_date}  ${e.tournament_name}${e.replaced_by ? '  → ' + e.replaced_by : ''}`)
+    ok([...names].sort().join('|') === eds.filter(e => e.counted).map(e => e.tournament_name).sort().join('|'), '반영 대회 목록 일치')
+    const pts = await page(() => a.rpc('ranking_current_points'))
+    const db = new Map(pts.map(p => [p.member_id, Number(p.total_points)]))
+    let diff = 0
+    for (const id of new Set([...mine.keys(), ...db.keys()])) if ((mine.get(id) || 0) !== (db.get(id) || 0)) diff++
+    ok(diff === 0, `회원별 포인트 일치 (${db.size}명, 다른 회원 ${diff}명 — 수동 조정이 있으면 그만큼 다를 수 있음)`)
+    // 현재 랭킹(0) 과 올해 시즌 랭킹 — 올해 대회만 있는 동안은 같아야 한다
+    const mem = await page(() => a.from('members_public').select('division').not('division', 'is', null))
+    const div = [...new Set(mem.map(m => m.division).filter(Boolean))][0]
+    const [cur, season] = await Promise.all([0, new Date().getFullYear()].map(y => a.rpc('get_rankings', { p_division: div, p_season_year: y, p_limit: 2000, p_offset: 0 })))
+    ok(!cur.error && cur.data.length > 0 && cur.data.every(p => p.total_points === (db.get(p.member_id) || 0)), `get_rankings(0) = 현재 포인트 (${div} ${cur.data?.length}명)`, cur.error?.message)
+    console.log(`   ${div}: 현재 1위 ${cur.data?.[0]?.total_points}점 / ${new Date().getFullYear()}시즌 1위 ${season.data?.[0]?.total_points}점`)
+    const h = await a.rpc('get_member_history', { p_member_id: cur.data[0].member_id, p_season_year: 0 })
+    ok(!h.error && h.data?.ok && h.data.total_points === cur.data[0].total_points && h.data.history.every(x => typeof x.counted === 'boolean'), '회원 상세(0) 포인트·반영 표시')
+  } catch (e) { ok(false, '앱A 조회: ' + e.message) }
 }
 
 console.log(`\n결과: ${pass}/${pass + fail} 통과`)
