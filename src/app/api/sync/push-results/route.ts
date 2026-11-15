@@ -60,49 +60,50 @@ const RANK_PRIORITY: Record<string, number> = {
 };
 
 // ── 앱A에서 이름+클럽으로 회원 매칭 ──
+// 클럽 이름 비교용: 가져오기(pull-individual)의 shortenClub 과 같은 규칙 + 공백 제거
+//   앱B 팀에는 줄인 이름("아라")이, 앱A 회원에는 원래 이름("아라클럽")이 들어 있어 그대로 비교하면 항상 어긋남
+function clubKey(club: string | null | undefined): string {
+  if (!club) return '';
+  return club.replace(/테니스클럽$/, '').replace(/클럽$/, '').replace(/테니스$/, '').replace(/s+/g, '').trim();
+}
+
 async function findMemberByNameAndClub(
   appA: any,
   playerName: string,
   clubName: string | null,
+  entrantIds?: Set<string>,   // 이 대회 앱A 신청서에 있는 회원 ID (동명이인을 가장 확실하게 가림)
 ): Promise<{ member_id: string; name: string } | null> {
-  // 1차: 이름 + 클럽 매칭
+  // 같은 이름(name 또는 display_name)의 회원을 모두 가져옴
+  const { data: byName } = await appA
+    .from('members')
+    .select('member_id, name, display_name, club')
+    .or(`name.eq.${playerName},display_name.eq.${playerName}`)
+    .neq('status', '삭제');
+  const list: any[] = byName || [];
+  const pick = (m: any) => ({ member_id: m.member_id, name: m.display_name || m.name });
+
+  // 0차: 같은 이름 가운데 이 대회에 실제로 신청한 회원 (클럽까지 같은 동명이인도 가려짐)
+  if (entrantIds && entrantIds.size > 0) {
+    const inEvent = list.filter(m => entrantIds.has(m.member_id));
+    if (inEvent.length === 1) return pick(inEvent[0]);
+    if (inEvent.length > 1) {
+      // 동명이인이 둘 다 신청함 → 클럽으로 가림, 그래도 안 되면 실패로 알림
+      const key = clubKey(clubName);
+      const sameClub = inEvent.filter(m => clubKey(m.club) === key);
+      return sameClub.length === 1 ? pick(sameClub[0]) : null;
+    }
+  }
+
+  // 1차: 이름 + 클럽 (줄인 이름끼리 비교) — 동명이인을 클럽으로 가림
   if (clubName) {
-    const { data } = await appA
-      .from('members')
-      .select('member_id, name, display_name')
-      .eq('name', playerName)
-      .eq('club', clubName)
-      .neq('status', '삭제')
-      .limit(1);
-
-    if (data && data.length === 1) {
-      return { member_id: data[0].member_id, name: data[0].display_name || data[0].name };
-    }
-
-    // display_name으로도 시도
-    const { data: data2 } = await appA
-      .from('members')
-      .select('member_id, name, display_name')
-      .eq('display_name', playerName)
-      .eq('club', clubName)
-      .neq('status', '삭제')
-      .limit(1);
-
-    if (data2 && data2.length === 1) {
-      return { member_id: data2[0].member_id, name: data2[0].display_name || data2[0].name };
-    }
+    const key = clubKey(clubName);
+    const sameClub = list.filter(m => clubKey(m.club) === key);
+    if (sameClub.length === 1) return pick(sameClub[0]);
+    if (sameClub.length > 1) return null;   // 같은 클럽에 동명이인 → 잘못 넣지 않고 실패로 알림
   }
 
   // 2차: 이름만으로 매칭 (1명만 있을 때)
-  const { data: byName } = await appA
-    .from('members')
-    .select('member_id, name, display_name')
-    .or(`name.eq.${playerName},display_name.eq.${playerName}`)
-    .neq('status', '삭제');
-
-  if (byName && byName.length === 1) {
-    return { member_id: byName[0].member_id, name: byName[0].display_name || byName[0].name };
-  }
+  if (list.length === 1) return pick(list[0]);
 
   // 매칭 실패
   return null;
@@ -274,6 +275,20 @@ export async function POST(request: NextRequest) {
     const errors: string[] = [];
     const unmatchedPlayers: string[] = [];
 
+    // 이 대회 앱A 신청서의 회원 ID — 동명이인 구분용 (못 불러오면 이름·클럽만으로 매칭)
+    const entrantIds = new Set<string>();
+    try {
+      const { data: ents } = await appA
+        .from('event_entries')
+        .select('entry_status, cancelled_at, team:teams(member1_id, member2_id)')
+        .eq('event_id', app_a_event_id);
+      for (const e of (ents || []) as any[]) {
+        if (e.cancelled_at) continue;
+        if (e.team?.member1_id) entrantIds.add(e.team.member1_id);
+        if (e.team?.member2_id) entrantIds.add(e.team.member2_id);
+      }
+    } catch { /* 신청서를 못 읽어도 전송은 계속 */ }
+
     for (const [teamId, { rank, divisionName }] of teamBestRank) {
       const team = teamMap.get(teamId);
       if (!team) continue;
@@ -290,7 +305,7 @@ export async function POST(request: NextRequest) {
 
         try {
           // 앱A에서 회원 매칭
-          const member = await findMemberByNameAndClub(appA, player.name, player.club);
+          const member = await findMemberByNameAndClub(appA, player.name, player.club, entrantIds);
 
           if (!member) {
             unmatchedPlayers.push(`${player.name} (${player.club || '클럽없음'}) - ${divisionName} ${rank}`);
