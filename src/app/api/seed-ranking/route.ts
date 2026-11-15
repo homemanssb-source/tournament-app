@@ -1,7 +1,8 @@
 // ============================================================
 // 랭킹 시드 — 부서 팀들의 앱A 포인트 합산 순위 (읽기 전용, 운영자 전용)
 // POST { event_id, division_id }
-//   팀(선수 1~2명) → 앱A 회원 매칭 → 유효 포인트(대회별 최신 회차만) 합산 → 높은 순
+//   팀(선수 1~2명) → 앱A 회원 매칭 → 앱A 현재 포인트(ranking_current_points) 합산 → 높은 순
+//   포인트 규칙은 앱A DB 함수 한 곳에만 있다 (앱A 랭킹 화면과 항상 같은 숫자)
 // 아무것도 저장하지 않는다. 저장은 조편성 화면의 "시드 저장"이 한다.
 // ============================================================
 import { NextRequest, NextResponse } from 'next/server'
@@ -9,8 +10,8 @@ import { getServiceClient } from '@/lib/supabase'
 import { operatorFromRequest } from '@/lib/api-auth'
 import { getAppAClient } from '@/lib/app-a-server'
 import {
-  listEditions, rollingPoints, rankTeams,
-  type ResultRow, type RankedTeam, type RankedPlayer, type SeedRankingResult,
+  rankTeams,
+  type EditionInfo, type RankedTeam, type RankedPlayer, type SeedRankingResult,
 } from '@/lib/seed-ranking'
 
 export const dynamic = 'force-dynamic'
@@ -96,17 +97,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 3) 앱A 대회 결과 전체 (대회별 최신 회차 판정에 전체 목록이 필요)
-    const rows: ResultRow[] = []
+    // 3) 앱A 현재 포인트 — 앱A 랭킹 화면과 같은 DB 함수 (대회별 최신 회차만 합산 + 최근 1년 수동 조정)
+    const points = new Map<string, number>()
     for (let from = 0; ; from += 1000) {
-      const { data, error } = await appA.from('tournament_results')
-        .select('member_id, tournament_name, date, points').order('id').range(from, from + 999)
-      if (error) return fail('앱A 대회 결과 조회 실패: ' + error.message, 502)
-      rows.push(...((data || []) as ResultRow[]))
+      const { data, error } = await appA.rpc('ranking_current_points').range(from, from + 999)
+      if (error) return fail('앱A 포인트 조회 실패: ' + error.message, 502)
+      for (const r of (data || []) as any[]) points.set(r.member_id, Number(r.total_points) || 0)
       if (!data || data.length < 1000) break
     }
-    const editions = listEditions(rows)
-    const points = rollingPoints(rows, editions)
+    const { data: edData, error: edErr } = await appA.rpc('ranking_current_tournaments')
+    if (edErr) return fail('앱A 대회 목록 조회 실패: ' + edErr.message, 502)
+    const editions: EditionInfo[] = ((edData || []) as any[]).map(e => ({
+      tournament_name: e.tournament_name, date: e.last_date, series: e.series,
+      counted: !!e.counted, replaced_by: e.replaced_by || null,
+    }))
 
     // 4) 팀별 합산
     const unmatched: string[] = []
