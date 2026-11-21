@@ -814,7 +814,12 @@ export default function AdminPinManagePage() {
               // 코트마다 다음 대기 경기 하나 (진행 중 경기가 없는 코트 포함)
               const next: any[] = []
               const seen = new Set<string>()
-              for (const m of allMatches.filter(x => x.status === 'PENDING' && x.court && x.team_a_id && x.team_b_id)
+              // 이틀짜리 대회는 코트 순서가 날마다 1번부터 다시 시작 → 오늘 경기일 부서만 (오늘 경기가 없으면 가장 가까운 날)
+              const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+              const days = [...new Set(allMatches.map(x => x.match_date).filter(Boolean))].sort() as string[]
+              const dist = (d: string) => Math.abs(new Date(d).getTime() - new Date(today).getTime())
+              const day = days.includes(today) ? today : days.reduce((best, cur) => (dist(cur) < dist(best) ? cur : best), days[0] || '')
+              for (const m of allMatches.filter(x => x.status === 'PENDING' && x.court && x.team_a_id && x.team_b_id && (!day || !x.match_date || x.match_date === day))
                 .sort((a, b) => byCourtName(a, b) || (a.court_order ?? 0) - (b.court_order ?? 0))) {
                 if (seen.has(m.court)) continue
                 seen.add(m.court); next.push(m)
