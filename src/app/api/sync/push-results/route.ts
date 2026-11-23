@@ -240,10 +240,14 @@ export async function POST(request: NextRequest) {
       '8강': 'points_4', '16강': 'points_5', '32강': 'points_6', '참가': 'points_7',
     };
 
+    // 부서명은 띄어쓰기를 무시하고 비교한다 ('여자베테랑부' = '여자 베테랑부').
+    //   2026-11 협회장배: 글자 그대로 비교해서 여자베테랑부 32건이 전부 0점으로 들어갔다.
+    const divKey = (s: string | null | undefined) => (s || '').replace(/\s+/g, '');
+    const noRuleDivisions = new Set<string>();   // 포인트 규칙이 없는 부서 → 응답에 경고
     function calcPoints(division: string, rank: string): number {
       if (!pointRules) return 0;
-      const rule = pointRules.find((r: any) => r.division === division);
-      if (!rule) return 0;
+      const rule = pointRules.find((r: any) => divKey(r.division) === divKey(division));
+      if (!rule) { noRuleDivisions.add(division); return 0; }
       const col = RANK_MAP[rank];
       return col ? (rule[col] || 0) : 0;
     }
@@ -272,6 +276,7 @@ export async function POST(request: NextRequest) {
     // ── 8. 각 팀의 각 선수를 앱A에 결과 전송 ──
     let syncedCount = 0;
     let skippedCount = 0;
+    let updatedCount = 0;   // 0점으로 들어가 있던 행에 포인트를 채운 수
     const errors: string[] = [];
     const unmatchedPlayers: string[] = [];
 
@@ -315,7 +320,7 @@ export async function POST(request: NextRequest) {
           // 중복 체크
           const { data: dup } = await appA
             .from('tournament_results')
-            .select('id')
+            .select('id, points')
             .eq('member_id', member.member_id)
             .eq('tournament_name', tourName)
             .eq('division', divisionName)
@@ -323,7 +328,15 @@ export async function POST(request: NextRequest) {
             .limit(1);
 
           if (dup && dup.length > 0) {
-            skippedCount++;
+            // 이미 들어간 행이 0점인데 지금은 규칙이 있으면 포인트만 채운다 (규칙을 나중에 만들었거나 부서명이 안 맞았던 경우).
+            // 이미 포인트가 있는 행은 건드리지 않는다.
+            if (!(dup[0] as any).points && points > 0) {
+              const { error: updErr } = await appA.from('tournament_results').update({ points }).eq('id', (dup[0] as any).id);
+              if (updErr) errors.push(`${player.name}: ${updErr.message}`);
+              else updatedCount++;
+            } else {
+              skippedCount++;
+            }
             continue;
           }
 
@@ -350,6 +363,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const allWarnings = [
+      ...leagueWarnings,
+      ...[...noRuleDivisions].map(d => `'${d}' 부서는 협회 앱에 포인트 규칙이 없어 0점으로 들어갔습니다. 규칙을 만든 뒤 다시 전송하면 포인트가 채워집니다.`),
+    ];
+
     // ── 9. 동기화 로그 (앱B) ──
     await appB.from('sync_log').insert({
       event_id,
@@ -364,10 +382,11 @@ export async function POST(request: NextRequest) {
       success: true,
       synced: syncedCount,
       skipped: skippedCount,
+      updated: updatedCount,
       total: teamBestRank.size * 2,
       unmatched: unmatchedPlayers.length > 0 ? unmatchedPlayers : undefined,
       errors: errors.length > 0 ? errors : undefined,
-      warnings: leagueWarnings.length > 0 ? leagueWarnings : undefined,
+      warnings: allWarnings.length > 0 ? allWarnings : undefined,
     }, { headers: corsHeaders });
 
   } catch (err: any) {
