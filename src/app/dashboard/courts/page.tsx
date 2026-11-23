@@ -157,6 +157,14 @@ export default function CourtsPage() {
   const venuesRef  = useRef<Venue[]>([])
   const matchesRef = useRef<MatchSlim[]>([])
   const tiesRef    = useRef<TieWithClubs[]>([])
+  // 화면에 떠 있는 목록이 어느 대회 것인지 기억 — 대회를 바꾼 직후 늦게 도착한 이전 대회 응답은 버리고,
+  // 경기 목록과 코트 칸의 대회가 다르면 배정을 막는다 (2026-11-22: 다른 대회 경기가 이 대회 코트로 배정된 사고)
+  const eventIdRef      = useRef(eventId)
+  eventIdRef.current    = eventId
+  const venuesEventRef  = useRef('')
+  const matchesEventRef = useRef('')
+  const tiesEventRef    = useRef('')
+  const [eventName, setEventName] = useState('')
 
   const courtNames = React.useMemo(() => {
     if (selectedVenue === 'ALL') {
@@ -244,6 +252,20 @@ export default function CourtsPage() {
   const [dateFilter, setDateFilter]           = useState<string>('ALL')
   // 대회를 바꾸면 이전 대회의 필터·선택은 비움 (날짜는 새 대회 일정이 오면 다시 자동 선택됨)
   useEffect(() => { setDateFilter('ALL'); setSelectedVenue('ALL'); setAutoDiv(''); setViewFilter('ALL') }, [eventId])
+  // 대회를 바꾸면 이전 대회의 경기·코트 목록도 바로 비움 (새 대회 것이 도착할 때까지 섞여 보이지 않게)
+  useEffect(() => {
+    venuesEventRef.current = ''; matchesEventRef.current = ''; tiesEventRef.current = ''
+    setMatches([]); matchesRef.current = []
+    setTies([]); tiesRef.current = []
+    setAllFinalsMatches([]); setSeqMap({})
+    setVenues([]); venuesRef.current = []
+    setVenueStartTimes({}); setDivMatchDates({}); setStartTime('')
+    setCourtZones({}); setEventName('')
+    setPlan(null); setPlanMsg(''); setMsg('')
+    setEditMatch(null); setPlaceItem(null); setDragMatch(null)   // 이전 대회 경기를 붙잡고 있던 창·끌기도 닫음
+    courtOrderRef.current = {}
+    if (eventId) setLoading(true)
+  }, [eventId])
 
   const filteredCourtNames = courtNames
 
@@ -301,23 +323,30 @@ export default function CourtsPage() {
 
   async function loadVenues() {
     if (!eventId) return
-    const { data } = await supabase.from('venues').select('id, name, short_name, court_count, courts, pin_plain, start_time').eq('event_id', eventId).order('created_at')
+    const ev = eventId
+    const { data, error } = await supabase.from('venues').select('id, name, short_name, court_count, courts, pin_plain, start_time').eq('event_id', ev).order('created_at')
+    if (error) return                              // 못 불러왔으면 이전 화면 유지 (배정은 대회 확인에서 막힘)
     const list = (await withVenuePins((data || []) as any[])) as (Venue & { start_time?: string })[]   // PIN 은 venue_pins (025)
-    setVenues(list as Venue[])
+    if (ev !== eventIdRef.current) return          // 그 사이 대회가 바뀜 → 버림
+    setVenues(list as Venue[]); venuesRef.current = list as Venue[]; venuesEventRef.current = ev
     const vtMap: Record<string, string> = {}
     list.forEach(v => { if (v.start_time) vtMap[v.id] = v.start_time.slice(0,5) })
     setVenueStartTimes(vtMap)
   }
   async function loadCourtZones() {
     if (!eventId) return
+    const ev = eventId
     try {
-      const { data, error } = await supabase.from('events').select('court_zones').eq('id', eventId).single()
-      if (!error && data?.court_zones) setCourtZones(data.court_zones as CourtZones)
+      const { data, error } = await supabase.from('events').select('court_zones').eq('id', ev).single()
+      if (error || ev !== eventIdRef.current) return
+      setCourtZones((data?.court_zones || {}) as CourtZones)   // 구역 설정이 없는 대회면 이전 대회 것이 남지 않게 비움
     } catch {}
   }
 
   async function loadAutoFill() {
-    const { data, error } = await supabase.from('events').select('auto_fill_courts, auto_steal_courts').eq('id', eventId).single()
+    const ev = eventId
+    const { data, error } = await supabase.from('events').select('auto_fill_courts, auto_steal_courts').eq('id', ev).single()
+    if (ev !== eventIdRef.current) return
     setAutoFill(error || !data ? null : { fill: !!(data as any).auto_fill_courts, steal: !!(data as any).auto_steal_courts })
   }
   async function saveAutoFill(next: { fill: boolean; steal: boolean }) {
@@ -331,12 +360,16 @@ export default function CourtsPage() {
 
   async function loadEventSchedule() {
     if (!eventId) return
+    const cur = eventId
     try {
-      const { data: ev } = await supabase.from('events').select('start_time').eq('id', eventId).single()
-      if (ev?.start_time) setStartTime(ev.start_time.slice(0, 5))
+      const { data: ev } = await supabase.from('events').select('name, start_time').eq('id', cur).single()
+      if (cur !== eventIdRef.current) return
+      setEventName(ev?.name || '')
+      setStartTime(ev?.start_time ? ev.start_time.slice(0, 5) : '')
     } catch {}
     try {
-      const { data: divs } = await supabase.from('divisions').select('id, match_date').eq('event_id', eventId)
+      const { data: divs } = await supabase.from('divisions').select('id, match_date').eq('event_id', cur)
+      if (cur !== eventIdRef.current) return
       if (divs) {
         const map: Record<string, string> = {}
         divs.forEach(d => { if (d.match_date) map[d.id] = d.match_date })
@@ -347,6 +380,8 @@ export default function CourtsPage() {
 
   const loadAll = useCallback(async (showLoading = false) => {
     if (!eventId) return
+    const ev = eventId
+    const stale = () => ev !== eventIdRef.current   // 그 사이 대회가 바뀌었으면 이 응답은 버림
     if (showLoading) setLoading(true)
     try {
       const [matchRes, tieRes, grpRes, byeIds] = await Promise.all([
@@ -357,6 +392,8 @@ export default function CourtsPage() {
         supabase.from('groups').select('id, group_label').eq('event_id', eventId),
         fetchPendingByeIds(eventId),   // 본선 TBD 부전승 자리 — 코트 필요 없음
       ])
+      if (stale()) return
+      if (matchRes.error || tieRes.error) return   // 못 불러왔으면 빈 목록으로 덮지 않고 이전 화면 유지
       const _grpMap: Record<string,string> = {}
       for (const g of grpRes.data || []) { if (g.group_label) _grpMap[g.id] = g.group_label }
       const matchList = (matchRes.data || [])
@@ -370,15 +407,16 @@ export default function CourtsPage() {
           return (a.id || '').localeCompare(b.id || '')
         }) as MatchSlim[]
       const tieList = ((tieRes.data||[]) as any[]).map(t=>({...t,_group_label:t.group_id?(_grpMap[t.group_id]||null):null})) as TieWithClubs[]
-      setMatches(matchList); matchesRef.current = matchList
+      setMatches(matchList); matchesRef.current = matchList; matchesEventRef.current = ev
       // ✅ 조 내 순번(1번·2번…) — 코트판 팀명 앞에 표시 (없으면 생략)
       try {
         const { data: gmRows } = await supabase.from('group_members').select('team_id, seq').eq('event_id', eventId)
         const sm: Record<string, number> = {}
         for (const r of (gmRows || []) as any[]) if (r.seq != null) sm[r.team_id] = r.seq
-        setSeqMap(sm)
+        if (!stale()) setSeqMap(sm)
       } catch {}
-      setTies(tieList);      tiesRef.current    = tieList
+      if (stale()) return
+      setTies(tieList);      tiesRef.current    = tieList; tiesEventRef.current = ev
       syncCourtOrderRef(matchList, tieList)
 
       // TBD 후보용: matches 테이블 직접 조회 (뷰 NULL팀 누락 방지)
@@ -388,6 +426,7 @@ export default function CourtsPage() {
         .eq('event_id', eventId)
         .eq('stage', 'FINALS')
         .order('slot', { ascending: true, nullsFirst: true })
+      if (stale()) return
       // team_id → name 매핑 (이미 로드한 matchList에서 추출)
       const tNameMap: Record<string, string> = {}
       matchList.forEach(m => {
@@ -403,7 +442,7 @@ export default function CourtsPage() {
       })) as MatchSlim[]
       setAllFinalsMatches(finalsWithNames)
     } catch {}
-    finally { if (showLoading) setLoading(false) }
+    finally { if (showLoading && !stale()) setLoading(false) }
   }, [eventId])
 
   // ✅ 자동배정 완료 후 코트별 푸시 일괄 발송
@@ -421,11 +460,13 @@ export default function CourtsPage() {
 
   async function loadMatches() {
     if (!eventId) return
-    const [{ data }, byeIds] = await Promise.all([
+    const ev = eventId
+    const [{ data, error }, byeIds] = await Promise.all([
       supabase.from('v_matches_with_teams').select('*').eq('event_id', eventId)
         .order('court', { ascending:true, nullsFirst:false }).order('court_order', { ascending:true, nullsFirst:true }).order('id'),
       fetchPendingByeIds(eventId),
     ])
+    if (error || ev !== eventIdRef.current) return   // 실패했거나 그 사이 대회가 바뀜 → 이전 화면 유지
     const list = (data || [])
       .filter((m: any) => m.score !== 'BYE' && !byeIds.has(m.id))
       .sort((a: any, b: any) => {
@@ -436,19 +477,21 @@ export default function CourtsPage() {
         if (nm !== 0) return nm
         return (a.id || '').localeCompare(b.id || '')
       }) as MatchSlim[]
-    setMatches(list); matchesRef.current = list
+    setMatches(list); matchesRef.current = list; matchesEventRef.current = ev
     syncCourtOrderRef(list, tiesRef.current)
   }
   async function loadTies() {
     if (!eventId) return
+    const ev = eventId
     const [tieRes, grpRes] = await Promise.all([
       supabase.from('ties').select('*, club_a:clubs!ties_club_a_id_fkey(*), club_b:clubs!ties_club_b_id_fkey(*)').eq('event_id', eventId).order('tie_order', { ascending:true, nullsFirst:false }).order('id'),
       supabase.from('groups').select('id, group_label').eq('event_id', eventId),
     ])
+    if (tieRes.error || ev !== eventIdRef.current) return
     const grpMap: Record<string,string> = {}
     for (const g of grpRes.data || []) { if (g.group_label) grpMap[g.id] = g.group_label }
     const list = ((tieRes.data||[]) as any[]).map(t=>({...t,_group_label:t.group_id?(grpMap[t.group_id]||null):null})) as TieWithClubs[]
-    setTies(list); tiesRef.current = list
+    setTies(list); tiesRef.current = list; tiesEventRef.current = ev
     syncCourtOrderRef(matchesRef.current, list)
   }
 
@@ -750,6 +793,24 @@ export default function CourtsPage() {
     setPlanMsg(''); setMsg(''); setPlan(r)
   }
 
+  // ── 저장 전 확인: 화면의 경기 목록·코트 칸이 지금 고른 대회 것인지, 코트가 이 대회 경기장 코트인지.
+  //    아니면 문구를 돌려주고(저장 안 함) 목록을 다시 불러온다. 문제 없으면 null.
+  function eventMixError(court?: string | null): string | null {
+    const valid = venues.length === 0 ? courtNames : venues.flatMap(v => venueCourts(v))
+    const mixed = !eventId || venuesEventRef.current !== eventId || matchesEventRef.current !== eventId || tiesEventRef.current !== eventId
+    const badCourt = !!court && !valid.includes(court)
+    if (!mixed && !badCourt) return null
+    loadVenues(); loadAll(false)
+    return mixed
+      ? '화면이 다른 대회 정보와 섞여 있어 저장하지 않았습니다. 목록을 다시 불러왔으니 대회 이름을 확인한 뒤 다시 해 주세요.'
+      : `${court} 은(는) 이 대회 경기장의 코트가 아니라서 저장하지 않았습니다. 대회 이름을 확인해 주세요.`
+  }
+  function blockedByEventMix(court?: string | null): boolean {
+    const e = eventMixError(court)
+    if (e) setMsg('❌ ' + e)
+    return !!e
+  }
+
   function movePlanBundle(key: string, court: string) {
     setPlan(p => p ? { ...p, bundles: p.bundles.map(b => b.key === key ? { ...b, court, note: undefined } : b) } : p)
   }
@@ -757,6 +818,7 @@ export default function CourtsPage() {
   // ③ 미리보기 확정: 묶음 순서대로 각 코트 대기열 맨 뒤에 붙임
   async function applyPlan() {
     if (!plan) return
+    for (const c of new Set(plan.bundles.map(b => b.court))) if (blockedByEventMix(c)) { setPlan(null); return }
     setAssigning(true)
     try {
       const curM = new Map(matchesRef.current.map(m => [m.id, m]))
@@ -770,8 +832,8 @@ export default function CourtsPage() {
           if (already) { skipped++; continue }
           const nextOrder = (courtOrderRef.current[b.court] || 0) + 1
           const { error } = b.kind === 'tie'
-            ? await supabase.from('ties').update({ court_number:getGlobalCourtNumber(b.court, allCourtNames), court_order:nextOrder }).eq('id', it.id)
-            : await supabase.from('matches').update({ court:b.court, court_order:nextOrder }).eq('id', it.id)
+            ? await supabase.from('ties').update({ court_number:getGlobalCourtNumber(b.court, allCourtNames), court_order:nextOrder }).eq('id', it.id).eq('event_id', eventId)
+            : await supabase.from('matches').update({ court:b.court, court_order:nextOrder }).eq('id', it.id).eq('event_id', eventId)
           if (error) { failed++; continue }
           courtOrderRef.current[b.court] = nextOrder
           perCourt[b.court] = (perCourt[b.court] || 0) + 1
@@ -788,11 +850,12 @@ export default function CourtsPage() {
   }
 
   async function assignItemToCourt(itemId: string, court: string) {
+    if (blockedByEventMix(court)) return
     if (itemId.startsWith('tie_')) {
       // ✅ [FIX-②] 드래그 배정도 글로벌 court_number 사용
       const courtNum = getGlobalCourtNumber(court, allCourtNames)
       const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
-      await supabase.from('ties').update({ court_number:courtNum, court_order:nextOrder }).eq('id', itemId.replace('tie_',''))
+      await supabase.from('ties').update({ court_number:courtNum, court_order:nextOrder }).eq('id', itemId.replace('tie_','')).eq('event_id', eventId)
       sendCourtNotify(court, 'court_changed'); loadTies()
     } else {
       // 진행 중 경기 이동: 새 코트에 진행 중 경기가 있으면 막고, 없으면 그 코트 맨 앞(지금 경기)으로
@@ -808,20 +871,24 @@ export default function CourtsPage() {
         }
         if (live) {
           for (const s of live.shifts || []) await supabase.from('matches').update({ court_order: s.order }).eq('id', s.id)
-          await supabase.from('matches').update({ court, court_order: live.order }).eq('id', itemId)
+          const lu = await supabase.from('matches').update({ court, court_order: live.order }).eq('id', itemId).eq('event_id', eventId)
+          if (lu.error) { setMsg('❌ ' + lu.error.message); loadMatches(); return }
           courtOrderRef.current[court] = Math.max(courtOrderRef.current[court] || 0, live.order!, ...(live.shifts || []).map(s => s.order))
           sendCourtNotify(court, 'court_changed', itemId); loadMatches()
           return
         }
       }
       const nextOrder = (courtOrderRef.current[court] || 0) + 1; courtOrderRef.current[court] = nextOrder
-      await supabase.from('matches').update({ court, court_order:nextOrder }).eq('id', itemId)
+      const au = await supabase.from('matches').update({ court, court_order:nextOrder }).eq('id', itemId).eq('event_id', eventId)
+      if (au.error) { setMsg('❌ ' + au.error.message); loadMatches(); return }
       sendCourtNotify(court, 'court_changed', itemId); loadMatches()
     }
   }
   // ── 코트·순서 지정: 그 코트의 beforeId 경기 '앞'에 넣음 (null = 맨 뒤). 뒤 경기는 한 칸씩 밀림.
   //    setPending: 진행 중 경기를 대기로 바꿔서 옮김. 오류 문구를 돌려줌 (없으면 null).
   async function placeMatch(itemId: string, court: string, beforeId: string | null, setPending: boolean): Promise<string | null> {
+    const mix = eventMixError(court)
+    if (mix) return mix
     const cur = matchesRef.current.find(m => m.id === itemId)
     if (!cur) return '경기를 찾지 못했습니다.'
     if (cur.status === 'FINISHED') return '끝난 경기는 옮길 수 없습니다.'
@@ -846,7 +913,7 @@ export default function CourtsPage() {
     }
     const patch: Record<string, any> = { court, court_order: order }
     if (setPending && cur.status === 'IN_PROGRESS') { patch.status = 'PENDING'; patch.started_at = null }
-    const u = await supabase.from('matches').update(patch).eq('id', itemId)
+    const u = await supabase.from('matches').update(patch).eq('id', itemId).eq('event_id', eventId)
     if (u.error) return u.error.message
     courtOrderRef.current[court] = Math.max(courtOrderRef.current[court] || 0, order, ...rows.map(r => (r.court_order ?? 0) + 1))
     sendCourtNotify(court, 'court_changed', itemId)
@@ -875,17 +942,20 @@ export default function CourtsPage() {
   }
   // 잘못 켜진 '진행 중' → 대기 (자리는 그대로, 점수 없는 경기만)
   async function setMatchPending(itemId: string) {
+    if (blockedByEventMix()) return
     const u = await supabase.from('matches').update({ status: 'PENDING', started_at: null })
       .eq('id', itemId).eq('status', 'IN_PROGRESS').is('score', null).is('winner_team_id', null)
     if (u.error) { setMsg('❌ ' + u.error.message); return }
     setPlaceItem(null); setMsg('✅ 대기 상태로 되돌렸습니다'); loadMatches()
   }
   async function unassignItem(itemId: string) {
+    if (blockedByEventMix()) return
     if (itemId.startsWith('tie_')) { await supabase.from('ties').update({ court_number:null, court_order:null }).eq('id', itemId.replace('tie_','')); loadTies() }
     else { await supabase.from('matches').update({ court:null, court_order:null }).eq('id', itemId); loadMatches() }
   }
   async function moveMatchOrder(itemId: string, direction: 'up' | 'down') {
     // 개인전(matches) + 단체전(ties) 모두 지원
+    if (blockedByEventMix()) return
     const allList = [...matches, ...tiesToMatchSlim(ties)]
     const m = allList.find(mm => mm.id === itemId)
     if (!m || !m.court || !m.court_order) return
@@ -912,6 +982,7 @@ export default function CourtsPage() {
   }
 
   async function clearDivisionAssignments(divId: string) {
+    if (blockedByEventMix()) return
     const _divName = divId === 'TEAM' ? '단체전' : (divisions.find(d=>d.id===divId)?.name||'')
     if (divId === 'TEAM' || teamDivIds.has(divId)) {
       if (!confirm(`[${_divName}] 코트 배정을 모두 초기화하시겠습니까?`)) return
@@ -932,6 +1003,7 @@ export default function CourtsPage() {
     courtOrderRef.current = updated; setMsg(`✅ [${divName}] 초기화 완료`); loadMatches()
   }
   async function clearAllAssignments() {
+    if (blockedByEventMix()) return
     if (!confirm('전체 코트 배정을 초기화하시겠습니까?')) return
     await supabase.from('matches').update({ court:null, court_order:null }).eq('event_id', eventId)
     for (const t of ties.filter(t => t.court_number))
@@ -979,11 +1051,12 @@ export default function CourtsPage() {
 
   async function startMatch(matchId: string) {
     if (matchId.startsWith('tie_')) return
+    if (blockedByEventMix()) return
     // 같은 선수가 다른 코트에서 경기 중이면 확인 (여러 부서 출전 — 예: 학생 단식+복식)
     const target = matchesRef.current.find(m => m.id === matchId)
     const busy = target ? busyElsewhere(target, matchesRef.current) : []
     if (busy.length > 0 && !confirm(`⚠️ 다른 코트에서 경기 중인 선수가 있습니다.\n\n${describeConflicts(busy)}\n\n그래도 이 경기를 시작할까요?`)) return
-    await supabase.from('matches').update({ status:'IN_PROGRESS' }).eq('id', matchId); loadMatches()
+    await supabase.from('matches').update({ status:'IN_PROGRESS' }).eq('id', matchId).eq('event_id', eventId); loadMatches()
   }
 
   function handleDragOver(e: React.DragEvent) { e.preventDefault() }
@@ -1143,7 +1216,10 @@ export default function CourtsPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <h1 className="text-2xl font-bold">코트 배정</h1>
+        <div>
+          <h1 className="text-2xl font-bold">코트 배정</h1>
+          {eventName && <p className="mt-1 inline-block px-2.5 py-1 rounded-lg bg-tennis-50 text-tennis-800 text-sm font-bold">🏆 {eventName}</p>}
+        </div>
         {startTime && <span className="text-xs text-stone-500">⏰ {startTime} 자동시작</span>}
       </div>
 
